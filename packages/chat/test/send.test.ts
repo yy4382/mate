@@ -1,5 +1,6 @@
+import { FakeClock } from "@mate/testkit";
 import { describe, expect, it } from "vitest";
-import { newAppWithTwo, rid } from "./support.ts";
+import { newApp, newAppWithTwo, rid } from "./support.ts";
 
 describe("3.2 sending and freshness", () => {
   it("send succeeds when there are no new messages from others since the last read", () => {
@@ -173,6 +174,38 @@ describe("3.2 sending and freshness", () => {
       },
     );
     expect(sent.status).toBe("sent");
+    app.close();
+  });
+
+  it("a message is stamped with the time on the app's clock", () => {
+    const clock = new FakeClock(Date.UTC(2026, 4, 1, 12, 0, 0));
+    const app = newApp({ clock });
+    const alice = app.ensureAccount({ externalId: "alice", displayName: "Alice", handle: "alice" });
+    const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
+    const timeline = { conversation: channel.conversationId };
+    app.send(alice, timeline, { requestId: "s1", body: "first" });
+    clock.advance(90_000);
+    app.send(alice, timeline, { requestId: "s2", body: "ninety seconds later" });
+    expect(app.readHistory(alice, timeline).map((entry) => entry.at)).toEqual([
+      Date.UTC(2026, 4, 1, 12, 1, 30),
+      Date.UTC(2026, 4, 1, 12, 0, 0),
+    ]);
+    app.close();
+  });
+
+  it("an account-bound chat reads and sends as that account", () => {
+    const { app, alice, bob } = newAppWithTwo();
+    const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
+    const timeline = { conversation: channel.conversationId };
+    const asBob = app.forAccount(bob);
+    asBob.join({ requestId: rid(), conversationId: channel.conversationId });
+    app.send(alice, timeline, { requestId: "s1", body: "hello bob" });
+    expect(asBob.readUnread(timeline, { requestId: "r1" }).unread, "Bob's unread").toBe(1);
+    expect(asBob.send(timeline, { requestId: "s2", body: "hi alice" }).status).toBe("sent");
+    expect(
+      app.inboxEvents(alice).map((event) => event.author),
+      "Alice is notified of a message Bob wrote",
+    ).toEqual([bob]);
     app.close();
   });
 });

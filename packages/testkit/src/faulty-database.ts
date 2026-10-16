@@ -14,7 +14,7 @@ type Mode =
  *
  * `freeze()` makes every later write hang forever, which is what a crashed process looks like to its storage: nothing
  * after that point is ever committed. A test then opens the same file again with a fresh runtime, exactly as a restart
- * would. `failNextTransactions(n)` makes the next `n` transactions reject instead.
+ * would. `failNextWrites(n)` makes the next `n` writes (`exec`, `run`, `transaction`) reject instead.
  */
 export class FaultyDatabase implements SqliteDatabase {
   #mode: Mode = { kind: "normal" };
@@ -32,7 +32,7 @@ export class FaultyDatabase implements SqliteDatabase {
     this.#mode = { kind: "frozen" };
   }
 
-  failNextTransactions(count: number): void {
+  failNextWrites(count: number): void {
     this.#mode = { kind: "failing", remaining: count };
   }
 

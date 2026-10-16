@@ -25,7 +25,14 @@ export const ConversationView = z.object({
 });
 export type ConversationView = z.output<typeof ConversationView>;
 
-const SELECT_CONVERSATION = "SELECT id, kind, name, archived FROM conversations";
+const SELECT_CONVERSATION = "SELECT c.id, c.kind, c.name, c.archived FROM conversations c";
+
+/**
+ * Restricts `c` to the conversations account `?` may read. The rule itself lives in the `readable_conversations`
+ * view, which every visibility test in the chat app selects from.
+ */
+export const READABLE_BY =
+  "JOIN readable_conversations r ON r.conversation_id = c.id AND r.account_id = ?";
 
 const Exists = z.object({ found: SqlBoolean });
 
@@ -40,11 +47,6 @@ export function isMember(db: ChatDatabase, account: number, conversationId: numb
   );
 }
 
-/** Public channels are readable without joining; private channels and DMs only by members. The owner reads all. */
-export function canRead(db: ChatDatabase, actor: Actor, conversation: Conversation): boolean {
-  return actor.owner || conversation.kind === "public" || isMember(db, actor.id, conversation.id);
-}
-
 /**
  * The conversation, if `actor` may read it. A conversation the actor may not read is reported exactly like one that
  * does not exist.
@@ -56,15 +58,16 @@ export function readableConversation(
 ): Conversation {
   const conversation = db.get(
     ConversationRow,
-    `${SELECT_CONVERSATION} WHERE id = ?`,
+    `${SELECT_CONVERSATION} ${READABLE_BY} WHERE c.id = ?`,
+    actor.id,
     conversationId,
   );
-  if (conversation === undefined || !canRead(db, actor, conversation))
+  if (conversation === undefined)
     throw new ChatError("not-found", `conversation ${conversationId} not found`);
   return conversation;
 }
 
-/** Posting, task actions and attachments need membership in a conversation that is not archived. */
+/** Acting in a conversation (posting, task actions, attachments, inviting) needs membership, and it not archived. */
 export function requireWritable(db: ChatDatabase, actor: Actor, conversation: Conversation): void {
   if (!isMember(db, actor.id, conversation.id))
     throw new ChatError(
@@ -79,10 +82,7 @@ export function requireWritable(db: ChatDatabase, actor: Actor, conversation: Co
 export function listConversations(db: ChatDatabase, actor: Actor): ConversationView[] {
   const readable = db.all(
     ConversationRow,
-    `${SELECT_CONVERSATION} c WHERE ? OR c.kind = 'public'
-       OR EXISTS (SELECT 1 FROM memberships m WHERE m.conversation_id = c.id AND m.account_id = ?)
-     ORDER BY c.id`,
-    actor.owner ? 1 : 0,
+    `${SELECT_CONVERSATION} ${READABLE_BY} ORDER BY c.id`,
     actor.id,
   );
   return views(db, actor, readable);
@@ -127,7 +127,7 @@ function views(db: ChatDatabase, actor: Actor, conversations: Conversation[]): C
 export function conversationById(db: ChatDatabase, conversationId: number): Conversation {
   const conversation = db.get(
     ConversationRow,
-    `${SELECT_CONVERSATION} WHERE id = ?`,
+    `${SELECT_CONVERSATION} WHERE c.id = ?`,
     conversationId,
   );
   if (conversation === undefined) throw new Error(`conversation ${conversationId} vanished`);

@@ -1,18 +1,25 @@
 import { describe, expect, it } from "vitest";
+import { testChat } from "./test-chat.ts";
 import { testAgent, text } from "./support.ts";
 
 describe("agent loop", () => {
   it("answers an input through the model and posts its final text nowhere", async () => {
     const agent = await testAgent();
+    const chat = testChat();
     agent.provider.step("answer", (request) => {
       expect(request.userTexts()).toContain("hello there");
-      request.text("hi");
+      request.text("hi owner");
     });
-    const { runtime } = await agent.open();
+    const { runtime } = await agent.open({ chat: chat.port });
 
     const input = await runtime.submit("hello there", { requestId: "m1" });
 
     expect(await input.settled()).toBe("done");
+    expect(
+      chat.chat.search(chat.owner, "hi owner"),
+      "the final text is in no conversation the owner can read, which is every one",
+    ).toEqual([]);
+    expect(chat.chat.unreadSummary(chat.owner).total, "and notified nobody").toBe(0);
     expect(agent.workspace.calls).toEqual([]);
     agent.provider.assertComplete();
   });

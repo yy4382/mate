@@ -1,6 +1,6 @@
 import type { ChatApp, UnreadSummary } from "@mate/chat";
 import type { Clock } from "@mate/clock";
-import type { AgentRuntime } from "@mate/runtime";
+import { CHAT_READ_UNREAD, type AgentRuntime, type ChatTimeline } from "@mate/runtime";
 
 /** What the connector needs of a runtime: its inbox and its position in the chat inbox events. */
 export type NoticeTarget = Pick<AgentRuntime, "cursor" | "advanceCursor" | "submit">;
@@ -97,6 +97,7 @@ export async function connectInbox(options: InboxConnectorOptions): Promise<Inbo
 /**
  * The notice text. It says how much is unread at least and where, never what: the counts may be stale by the time the
  * model reads them, and reading is the model's choice. Each line carries the timeline exactly as the chat tools take it.
+ * That a notice is only a hint is the runtime's to say, in the chat tools' prompt, not each notice's.
  */
 export function renderNotice(summary: UnreadSummary, now: number): string {
   const at = new Date(now)
@@ -105,7 +106,9 @@ export function renderNotice(summary: UnreadSummary, now: number): string {
     .replace(/\.\d+Z$/, " UTC");
   const lines = summary.timelines.map((timeline) => {
     const place = timeline.kind === "dm" ? `私信 @${timeline.label}` : `#${timeline.label}`;
-    const where = `${place}${timeline.inThread ? "/讨论串" : ""} ${JSON.stringify(timeline.timeline)}`;
+    // Typed as the chat tools' argument, so the line stays something the model can pass to the read tool as is.
+    const argument: ChatTimeline = timeline.timeline;
+    const where = `${place}${timeline.inThread ? "/讨论串" : ""} ${JSON.stringify(argument)}`;
     const mention = timeline.mentioned ? " · @了你" : "";
     return `${where} 至少 ${timeline.unread} 条 · 最新发送者 @${timeline.latestSender}${mention}`;
   });
@@ -113,6 +116,6 @@ export function renderNotice(summary: UnreadSummary, now: number): string {
     `截至 ${at}，至少有 ${summary.total} 条未读（其中 ${summary.mentions} 条 @ 了你），` +
       `分布在 ${summary.timelines.length} 处，之后可能还有更多：`,
     ...lines,
-    "通知只是提示，可能已过时；需要时用 chat_read_unread 读取，每行花括号里就是它要的 timeline。什么时候读由你决定。",
+    `每行花括号里就是 ${CHAT_READ_UNREAD} 要的 timeline。`,
   ].join("\n");
 }

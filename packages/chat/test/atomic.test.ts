@@ -1,9 +1,37 @@
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { temporaryDirectory } from "@mate/testkit";
 import { describe, expect, it } from "vitest";
-import { newAppWithTwo, refusalReason, rid } from "./support.ts";
+import { openAppAt, refusalReason, rid } from "./support.ts";
+
+/**
+ * A chat app whose storage rejects the write of one request's receipt. The receipt is the last row a send writes,
+ * after the message, its thread, its inbox events, its task and its task entry, so a failure there is the latest
+ * failure a send can meet. The fault is injected from a second connection to the same file, as a failing disk would
+ * be: the chat app's own code is untouched.
+ */
+function appFailingAtReceipt(requestId: string) {
+  const file = join(temporaryDirectory(), "chat.sqlite");
+  const app = openAppAt(file);
+  const storage = new DatabaseSync(file);
+  storage.exec(
+    `CREATE TRIGGER fail_receipt BEFORE INSERT ON receipts WHEN NEW.request_id = '${requestId}'
+     BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END`,
+  );
+  return {
+    app,
+    heal: () => storage.exec("DROP TRIGGER fail_receipt"),
+    close: () => {
+      storage.close();
+      app.close();
+    },
+  };
+}
 
 describe("3.5 atomic commit", () => {
-  it("a send whose task title the schema rejects writes no message and leaves no task entry", () => {
-    const { app, alice } = newAppWithTwo();
+  it("a send whose task title the schema rejects is refused before anything is written", () => {
+    const app = openAppAt(join(temporaryDirectory(), "chat.sqlite"));
+    const alice = app.ensureAccount({ externalId: "alice", displayName: "Alice", handle: "alice" });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
     const reason = refusalReason(() =>
       app.send(
@@ -17,52 +45,59 @@ describe("3.5 atomic commit", () => {
     app.close();
   });
 
-  it("a message that fails after its row was written leaves neither the message nor its task behind", () => {
-    const { app, alice, bob } = newAppWithTwo();
+  it("a send mentioning an account that does not exist is refused before anything is written", () => {
+    const app = openAppAt(join(temporaryDirectory(), "chat.sqlite"));
+    const alice = app.ensureAccount({ externalId: "alice", displayName: "Alice", handle: "alice" });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
-    app.join(bob, { requestId: rid(), conversationId: channel.conversationId });
-    const eventsBefore = app.inboxEvents(bob).length;
-    // The unknown account is only discovered while writing mentions, after the message row and its
-    // task exist, so this is a genuine mid-transaction failure rather than a boundary rejection.
     const reason = refusalReason(() =>
       app.send(
         alice,
         { conversation: channel.conversationId },
-        {
-          requestId: "s1",
-          body: "ghost",
-          mentions: [999_999],
-          createTask: { title: "Will not survive" },
-        },
+        { requestId: "s1", body: "ghost", mentions: [999_999] },
       ),
     );
     expect(reason).toBe("unknown-account");
     expect(app.readHistory(alice, { conversation: channel.conversationId })).toEqual([]);
-    expect(app.inboxEvents(bob).length).toBe(eventsBefore);
     app.close();
   });
 
-  it("a failed transaction leaves the timeline usable for the next write", () => {
-    const { app, alice, bob } = newAppWithTwo();
+  it("a send that fails after its message, inbox events and task were written leaves none of them, and no signal", () => {
+    const { app, heal, close } = appFailingAtReceipt("doomed");
+    const alice = app.ensureAccount({ externalId: "alice", displayName: "Alice", handle: "alice" });
+    const bob = app.ensureAccount({ externalId: "bob", displayName: "Bob", handle: "bob" });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
+    const timeline = { conversation: channel.conversationId };
     app.join(bob, { requestId: rid(), conversationId: channel.conversationId });
-    refusalReason(() =>
-      app.send(
-        alice,
-        { conversation: channel.conversationId },
-        { requestId: "s1", body: "doomed", mentions: [999_999] },
-      ),
-    );
-    // The rolled-back attempt must not have consumed a sequence number or left a partial row.
-    const sent = app.send(
-      alice,
-      { conversation: channel.conversationId },
-      { requestId: "s2", body: "fine" },
-    );
-    expect(sent.status).toBe("sent");
-    if (sent.status !== "sent") throw new Error("expected sent");
-    expect(sent.seq).toBe(1);
-    expect(app.readHistory(alice, { conversation: channel.conversationId })).toHaveLength(1);
-    app.close();
+    const signals: (readonly number[])[] = [];
+    app.watchInbox((accounts) => signals.push(accounts));
+
+    expect(() =>
+      app.send(alice, timeline, {
+        requestId: "doomed",
+        body: "will not survive",
+        mentions: [bob],
+        createTask: { title: "Will not survive" },
+      }),
+    ).toThrow("injected storage failure");
+
+    expect.soft(app.readHistory(alice, timeline), "no message and no task entry").toEqual([]);
+    expect.soft(app.inboxEvents(bob), "no inbox event").toEqual([]);
+    expect.soft(app.unreadSummary(bob).total, "nothing unread").toBe(0);
+    // The attempt would have created the store's first task.
+    expect
+      .soft(
+        refusalReason(() =>
+          app.changeTask(bob, { requestId: rid(), taskId: 1, change: { kind: "claim" } }),
+        ),
+        "no task",
+      )
+      .toBe("not-found");
+    expect.soft(signals, "no inbox signal").toEqual([]);
+
+    // The rolled-back attempt consumed no sequence number: the next message is the timeline's first.
+    heal();
+    const retried = app.send(alice, timeline, { requestId: "doomed", body: "will not survive" });
+    expect(retried).toMatchObject({ status: "sent", seq: 1 });
+    close();
   });
 });

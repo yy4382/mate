@@ -1,8 +1,8 @@
-import { createAgentStore, readAgentState } from "@mate/runtime";
+import { AgentRuntime, createAgentStore, readAgentState, setAgentPaused } from "@mate/runtime";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { AgentCreationFailed } from "../src/index.ts";
 import { environment, notices, settings, settle, text } from "./support.ts";
 
@@ -249,32 +249,111 @@ describe("pausing and resuming", () => {
     env.provider.assertComplete();
   });
 
-  it("ends concurrent pause, resume, pause as if run in order, never with two runtimes open", async () => {
+  it("ends concurrent resume, pause, resume as if run in order, never with two runtimes alive", async () => {
     const env = await environment();
     const manager = await env.open();
     const agentId = await manager.create({ displayName: "Richard", handle: "richard", settings });
-    const opensWhileOpen: string[] = [];
-    env.workspaces.onOpen = (id) => {
-      if (manager.runtime(id) !== undefined) opensWhileOpen.push(id);
-    };
+    await manager.pause(agentId);
+    // A runtime is alive from the moment it asks for its workspace until its close has finished.
+    let alive = 0;
+    let mostAlive = 0;
+    env.workspaces.onOpen = () => (mostAlive = Math.max(mostAlive, ++alive));
+    const close = AgentRuntime.prototype.close;
+    const closing = vi.spyOn(AgentRuntime.prototype, "close").mockImplementation(async function (
+      this: AgentRuntime,
+    ) {
+      await close.call(this);
+      alive -= 1;
+    });
+    onTestFinished(() => closing.mockRestore());
     const order: string[] = [];
 
     await Promise.all([
-      manager.pause(agentId).then(() => order.push("pause")),
       manager.resume(agentId).then(() => order.push("resume")),
-      manager.pause(agentId).then(() => order.push("pause again")),
+      manager.pause(agentId).then(() => order.push("pause")),
+      manager.resume(agentId).then(() => order.push("resume again")),
     ]);
 
+    expect(mostAlive, "never two runtimes alive at once").toBe(1);
     expect(order, "each call finished in the order it arrived").toEqual([
-      "pause",
       "resume",
-      "pause again",
+      "pause",
+      "resume again",
     ]);
-    expect(opensWhileOpen, "a runtime was never opened while another was open").toEqual([]);
-    expect(manager.runtime(agentId), "paused at the end").toBeUndefined();
+    expect(alive, "one alive at the end").toBe(1);
+    expect(manager.list(), "open at the end").toEqual([{ agentId, open: true }]);
+    await manager.close();
     expect(await readAgentState(join(env.directory, `${agentId}.sqlite`))).toEqual({
-      paused: true,
+      paused: false,
     });
+  });
+
+  it("resuming an open Agent changes nothing, and it keeps working", async () => {
+    const env = await environment();
+    const manager = await env.open();
+    const { agentId, account } = await env.hire(manager);
+
+    await manager.resume(agentId);
+    await manager.resume(agentId);
+
+    const answered = Promise.withResolvers<void>();
+    env.provider.step("notice", (request) => {
+      expect(notices(request.userTexts()), "the Agent is notified").toHaveLength(1);
+      request.text("seen");
+      answered.resolve();
+    });
+    env.post("Still there, @richard?", { mentions: [account] });
+    await answered.promise;
+    await manager.runtime(agentId)?.idle();
+    expect(env.reports, "nothing failed").toEqual([]);
+    expect(manager.list()).toEqual([{ agentId, open: true }]);
+    env.provider.assertComplete();
+  });
+
+  it("reports a runtime whose storage failed, lists it closed, and opens it again on resume", async () => {
+    const env = await environment();
+    const manager = await env.open();
+    const { agentId, account } = await env.hire(manager);
+    const file = join(env.directory, `${agentId}.sqlite`);
+    // Something other than the runtime writes to its file, so the runtime's next commit fails.
+    await setAgentPaused(file, false);
+    env.post("One.", { mentions: [account] });
+    await vi.waitFor(() => expect(env.reports, "the failure is reported").not.toEqual([]));
+
+    await vi.waitFor(() =>
+      expect(manager.list(), "a dead runtime is not open").toEqual([{ agentId, open: false }]),
+    );
+    expect(manager.runtime(agentId)).toBeUndefined();
+
+    env.provider.step("reopened", (request) => {
+      expect(notices(request.userTexts()), "the notice reaches the reopened runtime").toHaveLength(
+        1,
+      );
+      request.text("seen");
+    });
+    await manager.resume(agentId);
+    await env.provider.received(1);
+    await manager.runtime(agentId)?.idle();
+    expect(manager.list()).toEqual([{ agentId, open: true }]);
+    env.provider.assertComplete();
+  });
+});
+
+describe("a bad Agent ID", () => {
+  it("rejects every lifecycle call instead of throwing", async () => {
+    const env = await environment();
+    const manager = await env.open();
+    const calls = {
+      create: () => manager.create({ agentId: "../x", displayName: "X", handle: "x", settings }),
+      pause: () => manager.pause("../x"),
+      resume: () => manager.resume("../x"),
+      delete: () => manager.delete("../x"),
+    };
+    for (const [name, call] of Object.entries(calls)) {
+      let returned: Promise<unknown> | undefined;
+      expect(() => (returned = call()), `${name} does not throw`).not.toThrow();
+      await expect(returned, `${name} rejects`).rejects.toThrow(/not an Agent ID/);
+    }
   });
 });
 

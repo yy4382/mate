@@ -105,12 +105,11 @@ export function reminders(clock: Clock, closing: AbortSignal) {
           }, BACKGROUND_CONTEXT);
         }
         const next = pending.filter((item) => item.at > clock.now()).map((item) => item.at);
-        const signal = AbortSignal.any([closing, wake.signal]);
-        await (next.length === 0
-          ? new Promise<void>((resolve) =>
-              signal.addEventListener("abort", () => resolve(), { once: true }),
-            )
-          : clock.sleep(Math.min(...next) - clock.now(), signal));
+        // A reschedule since this pass began has aborted `wake` already, and then the sleep returns at once.
+        await clock.sleep(
+          next.length === 0 ? undefined : Math.min(...next) - clock.now(),
+          AbortSignal.any([closing, wake.signal]),
+        );
       } catch (error) {
         // The runtime closed or its storage failed while this pass was working. Either way, this loop is done.
         if (closing.aborted) return;

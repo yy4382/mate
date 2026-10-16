@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatPort } from "../src/index.ts";
-import { testChat } from "./chat-port.ts";
+import { testChat } from "./test-chat.ts";
 import { testAgent } from "./support.ts";
 
 const send = (conversation: number, body: string) => ({

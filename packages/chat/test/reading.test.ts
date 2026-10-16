@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newAppWithTwo, rid } from "./support.ts";
+import { newAppWithTwo, refusalReason, rid } from "./support.ts";
 
 describe("3.3 reading", () => {
   it("readUnread returns entries after the read position and advances it", () => {
@@ -57,6 +57,40 @@ describe("3.3 reading", () => {
     app.search(bob, "findme");
     const summary = app.unreadSummary(bob);
     expect(summary.total).toBe(1); // still unread
+    app.close();
+  });
+
+  it("readHistory returns the newest `limit` entries at or before `before`, newest first", () => {
+    const { app, alice } = newAppWithTwo();
+    const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
+    const timeline = { conversation: channel.conversationId };
+    for (const n of [1, 2, 3, 4, 5])
+      app.send(alice, timeline, { requestId: `s${n}`, body: `m${n}` });
+    const seqs = (query: { before?: number; limit?: number }) =>
+      app.readHistory(alice, timeline, query).map((entry) => entry.seq);
+    expect(seqs({ limit: 2 })).toEqual([5, 4]);
+    expect(seqs({ before: 3, limit: 2 })).toEqual([3, 2]);
+    app.close();
+  });
+
+  it("a malformed timeline, history query or search keyword is refused as invalid input", () => {
+    const { app, alice } = newAppWithTwo();
+    const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
+    const timeline = { conversation: channel.conversationId };
+    app.send(alice, timeline, { requestId: "s1", body: "anything" });
+    expect(
+      refusalReason(() => app.readUnread(alice, { conversation: 0 }, { requestId: "r1" })),
+    ).toBe("invalid-input");
+    expect(
+      refusalReason(() => app.send(alice, { thread: -1 }, { requestId: "s2", body: "x" })),
+    ).toBe("invalid-input");
+    expect(refusalReason(() => app.readHistory(alice, timeline, { limit: 10_000 }))).toBe(
+      "invalid-input",
+    );
+    expect(
+      refusalReason(() => app.search(alice, "")),
+      "an empty keyword would match every message",
+    ).toBe("invalid-input");
     app.close();
   });
 

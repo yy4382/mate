@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { ChatError } from "./chat-error.ts";
 import { idList, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
 
@@ -74,14 +73,21 @@ const AttachmentRow = z.object({
 });
 const MentionRow = z.object({ entry_id: Id, account_id: Id });
 
-/** Load the entries `condition` selects (a SQL predicate over `e`, the entries table), ordered by `order`. */
+/**
+ * Load the entries `where` selects (a SQL predicate over `e`, the entries table), ordered by `order`, at most `limit`
+ * of them.
+ */
 export function loadEntries(
   db: ChatDatabase,
-  condition: string,
-  order: string,
+  select: { where: string; order: string; limit?: number },
   ...params: (number | string)[]
 ): Entry[] {
-  const rows = db.all(EntryRow, `${SELECT_ENTRY} WHERE ${condition} ORDER BY ${order}`, ...params);
+  const rows = db.all(
+    EntryRow,
+    `${SELECT_ENTRY} WHERE ${select.where} ORDER BY ${select.order} LIMIT ?`,
+    ...params,
+    select.limit ?? -1,
+  );
   const ids = idList(rows.map((row) => row.id));
   const attachments = Map.groupBy(
     db.all(
@@ -171,7 +177,7 @@ export function appendEntry(
           timelineId,
           seq,
           entry.author,
-          Date.now(),
+          db.now(),
           entry.body,
         )
       : db.get(
@@ -181,7 +187,7 @@ export function appendEntry(
           timelineId,
           seq,
           entry.author,
-          Date.now(),
+          db.now(),
           entry.taskId,
           entry.change,
           entry.owner,
@@ -198,11 +204,8 @@ export function appendEntry(
         attachment.storageKey,
       ),
     );
-    for (const account of entry.mentions) {
-      if (db.get(Appended, "SELECT id FROM accounts WHERE id = ?", account) === undefined)
-        throw new ChatError("unknown-account", `mentioned account ${account} does not exist`);
+    for (const account of entry.mentions)
       db.run("INSERT INTO mentions (entry_id, account_id) VALUES (?, ?)", appended.id, account);
-    }
   }
   return { entryId: appended.id, seq };
 }

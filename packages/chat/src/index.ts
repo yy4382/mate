@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { systemClock, type Clock } from "@mate/clock";
 import { z } from "zod";
 import {
   accountByExternalId,
@@ -32,7 +33,15 @@ import {
   type UnreadSummary,
 } from "./inbox.ts";
 import { idempotent } from "./receipts.ts";
-import { readHistory, search, send, SendRequest, SendResult } from "./send.ts";
+import {
+  HistoryQuery,
+  readHistory,
+  search,
+  SearchQuery,
+  send,
+  SendRequest,
+  SendResult,
+} from "./send.ts";
 import {
   changeTask,
   createTask,
@@ -80,8 +89,28 @@ export class ChatApp {
   readonly #db: ChatDatabase;
   readonly #inboxListeners = new Set<InboxListener>();
 
-  constructor(file: string) {
-    this.#db = new ChatDatabase(file);
+  /** Open (or create) the chat database at `file`. Every timestamp the app writes comes from `clock`. */
+  constructor(file: string, options: { clock?: Clock } = {}) {
+    this.#db = new ChatDatabase(file, options.clock ?? systemClock);
+  }
+
+  /**
+   * The account-bound operations, for a caller that always acts as `account` (an Agent's chat tools). Each is the
+   * method of the same name with `account` filled in.
+   */
+  forAccount(account: number): AccountChat {
+    return {
+      readUnread: (timeline, request) => this.readUnread(account, timeline, request),
+      readHistory: (timeline, query) => this.readHistory(account, timeline, query),
+      search: (query) => this.search(account, query),
+      send: (timeline, request) => this.send(account, timeline, request),
+      join: (request) => this.join(account, request),
+      leave: (request) => this.leave(account, request),
+      openDm: (request) => this.openDm(account, request),
+      listConversations: () => this.listConversations(account),
+      createTask: (request) => this.createTask(account, request),
+      changeTask: (request) => this.changeTask(account, request),
+    };
   }
 
   /**
@@ -227,30 +256,34 @@ export class ChatApp {
    */
   readUnread(
     account: number,
-    timeline: TimelineRef,
+    timelineRef: z.input<typeof TimelineRef>,
     request: z.input<typeof ReadRequest>,
   ): z.output<typeof ReadPage> {
     const actor = requireActor(this.#db, account);
+    const timeline = parseInput(TimelineRef, timelineRef);
     const { requestId, budget } = parseInput(ReadRequest, request);
     return this.#once(account, requestId, { timeline, budget }, ReadPage, () =>
       readForward(this.#db, actor, resolveTimeline(this.#db, actor, timeline), budget),
     );
   }
 
-  /** History at or before `before`, newest first. Never moves the read position. */
+  /** The newest `limit` entries at or before seq `before`, newest first. Never moves the read position. */
   readHistory(
     account: number,
-    timeline: TimelineRef,
-    params?: { before?: number; limit?: number },
+    timelineRef: z.input<typeof TimelineRef>,
+    query?: z.input<typeof HistoryQuery>,
   ): Entry[] {
     const actor = requireActor(this.#db, account);
-    return this.#db.transaction("read", () => readHistory(this.#db, actor, timeline, params ?? {}));
+    const timeline = parseInput(TimelineRef, timelineRef);
+    const history = parseInput(HistoryQuery, query ?? {});
+    return this.#db.transaction("read", () => readHistory(this.#db, actor, timeline, history));
   }
 
-  /** Keyword search over every timeline the account can read. Never moves a read position. */
+  /** The newest messages containing `query`, over every timeline the account can read. Never moves a read position. */
   search(account: number, query: string): Entry[] {
     const actor = requireActor(this.#db, account);
-    return this.#db.transaction("read", () => search(this.#db, actor, query));
+    const keyword = parseInput(SearchQuery, query);
+    return this.#db.transaction("read", () => search(this.#db, actor, keyword));
   }
 
   // ── Writing ─────────────────────────────────────────────────────────────────
@@ -261,10 +294,11 @@ export class ChatApp {
    */
   send(
     account: number,
-    timeline: TimelineRef,
+    timelineRef: z.input<typeof TimelineRef>,
     request: z.input<typeof SendRequest>,
   ): z.output<typeof SendResult> {
     const actor = requireActor(this.#db, account);
+    const timeline = parseInput(TimelineRef, timelineRef);
     const parsed = parseInput(SendRequest, request);
     const { requestId, ...rest } = parsed;
     return this.#once(account, requestId, { timeline, ...rest }, SendResult, () =>
@@ -331,7 +365,22 @@ export class ChatApp {
   }
 }
 
-/** Open (or create) the chat database at `file`. */
-export function openChatApp(file: string): ChatApp {
-  return new ChatApp(file);
-}
+/** The `ChatApp` methods an account-bound caller uses. */
+type AccountMethod =
+  | "readUnread"
+  | "readHistory"
+  | "search"
+  | "send"
+  | "join"
+  | "leave"
+  | "openDm"
+  | "listConversations"
+  | "createTask"
+  | "changeTask";
+
+/** The chat app as one account sees it: each method is `ChatApp`'s, without the leading `account`. */
+export type AccountChat = {
+  readonly [K in AccountMethod]: (
+    ...args: Parameters<ChatApp[K]> extends [number, ...infer Rest] ? Rest : never
+  ) => ReturnType<ChatApp[K]>;
+};

@@ -1,13 +1,7 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ChatApp, type TimelineRef } from "@mate/chat";
-import type {
-  AgentSettings,
-  ModelResolver,
-  WorkspacePort,
-  WorkspaceToolRequest,
-  WorkspaceToolResult,
-} from "@mate/runtime";
-import { FakeClock, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
+import type { AgentSettings, ModelResolver, WorkspacePort } from "@mate/runtime";
+import { FakeClock, FakeWorkspace, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
 import { join } from "node:path";
 import { onTestFinished } from "vitest";
 import {
@@ -17,50 +11,9 @@ import {
   type WorkspaceHost,
 } from "../src/index.ts";
 
+export { FakeWorkspace, toolText as text } from "@mate/testkit";
+
 export const settings: AgentSettings = { model: { provider: "openai", modelId: "gpt-4.1" } };
-
-type PendingCall = {
-  readonly request: WorkspaceToolRequest;
-  readonly signal: AbortSignal;
-  resolve(result: WorkspaceToolResult): void;
-};
-
-/** One Agent's workspace on a stand-in node: records each forwarded call and lets the test answer it. */
-export class FakeWorkspace implements WorkspacePort {
-  readonly calls: WorkspaceToolRequest[] = [];
-  readonly #pending: PendingCall[] = [];
-  readonly #arrivals: (() => void)[] = [];
-  #autoAnswer: ((request: WorkspaceToolRequest) => WorkspaceToolResult) | undefined;
-
-  answerAll(answer: (request: WorkspaceToolRequest) => WorkspaceToolResult): void {
-    this.#autoAnswer = answer;
-  }
-
-  run(
-    request: WorkspaceToolRequest,
-    _output: (chunk: string) => void,
-    signal: AbortSignal,
-  ): Promise<WorkspaceToolResult> {
-    this.calls.push(request);
-    for (const arrived of this.#arrivals.splice(0)) arrived();
-    if (this.#autoAnswer !== undefined) return Promise.resolve(this.#autoAnswer(request));
-    const { promise, resolve } = Promise.withResolvers<WorkspaceToolResult>();
-    this.#pending.push({ request, signal, resolve });
-    return promise;
-  }
-
-  async nextCall(): Promise<PendingCall> {
-    while (this.#pending.length === 0)
-      await new Promise<void>((resolve) => this.#arrivals.push(resolve));
-    const call = this.#pending.shift();
-    if (call === undefined) throw new Error("no pending workspace call");
-    return call;
-  }
-}
-
-export function text(value: string): WorkspaceToolResult {
-  return { content: [{ type: "text", text: value }], isError: false };
-}
 
 /** Stands in for the node: workspaces are prepared on request, and each Agent has one fake workspace. */
 export class FakeWorkspaces implements WorkspaceHost {

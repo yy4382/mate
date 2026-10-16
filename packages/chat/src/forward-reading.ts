@@ -49,8 +49,7 @@ export function readForward(
     timeline: timeline.ref,
     entries: loadEntries(
       db,
-      "e.timeline_id = ? AND e.seq >= ?",
-      "e.seq",
+      { where: "e.timeline_id = ? AND e.seq >= ?", order: "e.seq" },
       timeline.id,
       firstReturned,
     ),

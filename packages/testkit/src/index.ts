@@ -12,3 +12,4 @@ export { FakeClock } from "./fake-clock.ts";
 export { temporaryDirectory } from "./temporary-directory.ts";
 export { FakeNode, type FakeNodeOptions } from "./fake-node.ts";
 export { FakeGateway, type FakeGatewayOptions } from "./fake-gateway.ts";
+export { FakeWorkspace, toolText, type PendingWorkspaceCall } from "./fake-workspace.ts";

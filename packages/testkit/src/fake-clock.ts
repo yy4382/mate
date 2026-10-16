@@ -1,6 +1,6 @@
 import type { Clock } from "@mate/clock";
 
-type Sleeper = { readonly at: number; readonly resolve: () => void };
+type Sleeper = { readonly at: number; readonly wake: () => void };
 
 /** A clock that only moves when the test says so. */
 export class FakeClock implements Clock {
@@ -15,27 +15,23 @@ export class FakeClock implements Clock {
     return this.#now;
   }
 
-  sleep(ms: number, signal: AbortSignal): Promise<void> {
+  sleep(ms: number | undefined, signal: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
       if (signal.aborted) return resolve();
-      const sleeper = { at: this.#now + Math.max(0, ms), resolve };
+      const wake = () => {
+        this.#sleepers = this.#sleepers.filter((item) => item !== sleeper);
+        signal.removeEventListener("abort", wake);
+        resolve();
+      };
+      const sleeper = { at: ms === undefined ? Infinity : this.#now + Math.max(0, ms), wake };
       this.#sleepers.push(sleeper);
-      signal.addEventListener(
-        "abort",
-        () => {
-          this.#sleepers = this.#sleepers.filter((item) => item !== sleeper);
-          resolve();
-        },
-        { once: true },
-      );
+      signal.addEventListener("abort", wake, { once: true });
     });
   }
 
   /** Move time forward and wake every sleeper that is now due. */
   advance(ms: number): void {
     this.#now += ms;
-    const due = this.#sleepers.filter((sleeper) => sleeper.at <= this.#now);
-    this.#sleepers = this.#sleepers.filter((sleeper) => sleeper.at > this.#now);
-    for (const sleeper of due) sleeper.resolve();
+    for (const sleeper of this.#sleepers.filter((each) => each.at <= this.#now)) sleeper.wake();
   }
 }

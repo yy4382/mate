@@ -48,6 +48,9 @@ importers:
 
   packages/chat:
     dependencies:
+      '@mate/clock':
+        specifier: workspace:*
+        version: link:../clock
       zod:
         specifier: 4.6.5
         version: 4.6.5

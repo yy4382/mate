@@ -2,7 +2,7 @@
  * The chat database schema. A store is created at this version and never migrated: a file stamped with any other
  * `user_version` is refused (see ADR-0002, first-release compatibility reset).
  */
-export const CHAT_SCHEMA_VERSION = 1;
+export const CHAT_SCHEMA_VERSION = 2;
 
 export const CHAT_DDL = `
 CREATE TABLE accounts (
@@ -108,4 +108,27 @@ CREATE TABLE receipts (
   result TEXT NOT NULL,
   PRIMARY KEY (account_id, request_id)
 ) STRICT, WITHOUT ROWID;
+
+-- Who may read a conversation: the owner reads every one, anyone reads a public channel, members read the rest.
+-- Every visibility test selects from this view, so the rule has one definition.
+CREATE VIEW readable_conversations (account_id, conversation_id) AS
+  SELECT a.id, c.id FROM accounts a CROSS JOIN conversations c
+  WHERE a.role = 'owner' OR c.kind = 'public'
+    OR EXISTS (SELECT 1 FROM memberships m WHERE m.conversation_id = c.id AND m.account_id = a.id);
+
+-- The timelines an account follows: the top level of every conversation it is a member of, and every thread it can
+-- read whose root it wrote, in which it replied, or in which it was mentioned. A new message notifies the followers
+-- of its timeline, and the unread summary lists the followed timelines, so the two cannot disagree.
+CREATE VIEW followed_timelines (account_id, timeline_id) AS
+  SELECT m.account_id, t.id FROM timelines t
+  JOIN memberships m ON m.conversation_id = t.conversation_id
+  WHERE t.root_entry_id IS NULL
+  UNION
+  SELECT p.account_id, p.timeline_id FROM (
+    SELECT t.id AS timeline_id, r.author_id AS account_id FROM timelines t JOIN entries r ON r.id = t.root_entry_id
+    UNION SELECT e.timeline_id, e.author_id FROM entries e WHERE e.kind = 'message'
+    UNION SELECT e.timeline_id, mn.account_id FROM entries e JOIN mentions mn ON mn.entry_id = e.id
+  ) p
+  JOIN timelines t ON t.id = p.timeline_id AND t.root_entry_id IS NOT NULL
+  JOIN readable_conversations rc ON rc.account_id = p.account_id AND rc.conversation_id = t.conversation_id;
 `;

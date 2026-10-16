@@ -1,5 +1,5 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { createAgentStore, openAgentRuntime } from "@mate/runtime";
+import { CHAT_READ_UNREAD, createAgentStore, openAgentRuntime } from "@mate/runtime";
 import { FaultyDatabase } from "@mate/testkit";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
@@ -146,7 +146,7 @@ describe("connector", () => {
         `#general {"conversation":${env.general}} 至少 1 条 · 最新发送者 @owner · @了你`,
         `#general/讨论串 {"thread":${root.messageId}} 至少 2 条 · 最新发送者 @owner · @了你`,
         `私信 @owner {"conversation":${dm}} 至少 1 条 · 最新发送者 @owner`,
-        "通知只是提示，可能已过时；需要时用 chat_read_unread 读取，每行花括号里就是它要的 timeline。什么时候读由你决定。",
+        `每行花括号里就是 ${CHAT_READ_UNREAD} 要的 timeline。`,
       ].join("\n"),
     );
   });
@@ -318,15 +318,23 @@ describe("connector with a real runtime", () => {
     const account = agentAccount(env);
     const agent = await realRuntime(env);
     const first = await agent.open();
-    env.provider.step("busy", (request) => void request.call([recall]));
-    await first.runtime.submit("recall", { requestId: "m1" });
-    await agent.workspace.nextCall();
-    // The process dies once the notice is admitted and before the position is stored.
+    env.provider
+      .step("notice", (request) => {
+        expect(notices(request.userTexts()), "the model was handed the notice").toHaveLength(1);
+        request.call([recall]);
+      })
+      .step("after restart", (request) => {
+        expect(notices(request.userTexts()), "the notice, once").toHaveLength(1);
+        request.text("noted");
+      });
+    // The Agent is idle, so the notice goes straight to the model. The process dies once the model is working on it,
+    // before the position is stored.
     const dies = Promise.withResolvers<void>();
     const dying: NoticeTarget = {
       cursor: (name) => first.runtime.cursor(name),
       submit: (content, options) => first.runtime.submit(content, options),
-      advanceCursor: () => {
+      advanceCursor: async () => {
+        await agent.workspace.nextCall();
         first.freeze();
         dies.resolve();
         return new Promise<void>(() => {});
@@ -343,10 +351,6 @@ describe("connector with a real runtime", () => {
     await dies.promise;
     void dead.stop();
 
-    env.provider.step("after restart", (request) => {
-      expect(notices(request.userTexts()), "the notice, once").toHaveLength(1);
-      request.text("noted");
-    });
     const second = await agent.open();
     const rerun = await agent.workspace.nextCall();
     await connect(env, account, second.runtime);

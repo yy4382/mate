@@ -1,4 +1,4 @@
-import { Type, type AssistantMessage } from "@earendil-works/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
 import {
   AssistantEntry,
   LiveDoc,
@@ -11,7 +11,6 @@ import {
   type ConversationId,
   type EntryId,
   type Extension,
-  type TaskId,
 } from "@earendil-works/pi-durable";
 
 type Assistant = {
@@ -21,16 +20,13 @@ type Assistant = {
 };
 
 /** The primary conversation's assistants, by name. */
-const AssistantsDoc = defineDoc<{
-  assistants: Record<string, Assistant>;
-  reporters: Record<string, TaskId>;
-}>({
+const AssistantsDoc = defineDoc<{ assistants: Record<string, Assistant> }>({
   kind: "mate.assistants",
   version: 1,
   scope: "conversation",
   history: "latest",
   fork: "initial",
-  initial: () => ({ assistants: {}, reporters: {} }),
+  initial: () => ({ assistants: {} }),
 });
 
 /** In an assistant's own conversation: its name, so its prompt can say who it is. */
@@ -140,7 +136,7 @@ const Reporter = defineTask<ReporterInput, ReporterState, null>({
     runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context),
 });
 
-function textOf(message: AssistantMessage | undefined | unknown): string {
+function textOf(message: unknown): string {
   if (
     typeof message !== "object" ||
     message === null ||
@@ -193,7 +189,6 @@ export function assistants(primaryOnly: () => readonly Extension[]) {
       const { action, name, message, followUp } = args;
       const state = (await api.snapshot(AssistantsDoc, api.conversationId, context)) ?? {
         assistants: {},
-        reporters: {},
       };
       if (action === "status") {
         const names = name === undefined ? Object.keys(state.assistants) : [name];
@@ -234,7 +229,7 @@ export function assistants(primaryOnly: () => readonly Extension[]) {
         }
         const conversationId = current.assistants[name]?.conversationId;
         if (conversationId === undefined) return `No assistant named ${name}.`;
-        current.reporters[String(api.taskId)] = await tx.createTask(
+        await tx.createTask(
           Reporter,
           { name, conversationId, message, followUp: action === "send" && followUp === true },
           background,

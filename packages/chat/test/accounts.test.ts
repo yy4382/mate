@@ -32,9 +32,11 @@ describe("3.1 accounts and conversations", () => {
     const page = app.readUnread(bob, { conversation: channel.conversationId }, { requestId: "r1" });
     expect(page).toBeDefined();
     // bob cannot send
-    expect(() =>
-      app.send(bob, { conversation: channel.conversationId }, { requestId: "s1", body: "hi" }),
-    ).toThrow(ChatError);
+    expect(
+      refusalReason(() =>
+        app.send(bob, { conversation: channel.conversationId }, { requestId: "s1", body: "hi" }),
+      ),
+    ).toBe("not-member");
     app.close();
   });
 

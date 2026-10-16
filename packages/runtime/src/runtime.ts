@@ -96,9 +96,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     remindersExtension,
     ...(options.chat === undefined ? [] : [chatExtension(options.chat)]),
   ];
-  if (options.workspace !== undefined) {
-    registry.install(workspaceExtension(options.workspace, lifetime.signal));
-  }
+  registry.install(workspaceExtension(options.workspace, lifetime.signal));
   for (const extension of primaryOnlyExtensions) registry.install(extension);
   registry.install(assistantsIdentity);
   const harness = await Harness.open(
@@ -207,9 +205,13 @@ export class AgentRuntime {
   /** Change the model settings of every conversation of this Agent, effective from each one's next request. */
   async configure(settings: AgentSettings): Promise<void> {
     await this.#root.commit(async (tx) => {
-      const page = await tx.scanConversations({}, 1000);
-      for (const conversation of page.items)
-        await configure(tx, conversation.id, agentChange(settings));
+      let cursor: Cursor | undefined;
+      do {
+        const page = await tx.scanConversations({}, 100, cursor);
+        for (const conversation of page.items)
+          await configure(tx, conversation.id, agentChange(settings));
+        cursor = page.next;
+      } while (cursor !== undefined);
     }, BACKGROUND_CONTEXT);
   }
 

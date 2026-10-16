@@ -95,7 +95,7 @@ describe("closing", () => {
       cancelled = request.hang();
     });
     const first = await agent.open();
-    const input = await first.runtime.submit("think hard", { requestId: "m1" });
+    await first.runtime.submit("think hard", { requestId: "m1" });
     await agent.provider.received(1);
 
     await first.runtime.close();
@@ -109,7 +109,6 @@ describe("closing", () => {
     await second.runtime.idle();
     expect(agent.provider.requests).toHaveLength(2);
     agent.provider.assertComplete();
-    void input;
   });
 
   it("aborts an in-flight workspace call", async () => {
@@ -131,7 +130,7 @@ describe("closing", () => {
     const agent = await testAgent();
     const fatal = Promise.withResolvers<unknown>();
     const first = await agent.open({ onFatal: fatal.resolve });
-    first.database().failNextTransactions(1);
+    first.database().failNextWrites(1);
 
     await expect(first.runtime.submit("hello", { requestId: "m1" })).rejects.toThrow();
     await expect(fatal.promise).resolves.toBeInstanceOf(Error);

@@ -60,6 +60,13 @@ Mate 内置的类 Slack 聊天系统。它不知道 runtime 和模型的存在�
 **收件事件**（inbox event）
 有人发了一条该通知某个账号的消息时，聊天 app 为这个账号写下的一条记录，和消息在同一个事务里提交。事件 ID 全局递增。任务条目不产生收件事件。
 
+**关注**（follow）
+账号关注的时间线：它是成员的会话的顶层，以及它能读、并且是根消息作者、回复过或被 @ 过的讨论串。新消息只通知关注这条时间线的人；未读摘要列的也正是关注的时间线。
+避免：订阅、participant（只说了一半）。
+
+**账号视角**（AccountChat）
+`ChatApp.forAccount(account)` 返回的对象：一组绑定到这个账号的读写方法，参数与 `ChatApp` 相同、去掉 account。它在结构上满足 runtime 的聊天端口。
+
 **未读摘要**（unread summary）
 某个账号当前各条时间线的未读数量，以及其中有没有 @ 自己的消息。每条时间线还带上会话类型、显示名（频道名；私信为对方的 handle）、是否讨论串和最新一条未读的发送者，足够直接渲染一条通知。
 
@@ -106,7 +113,7 @@ Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入
 node 工具调用进行中连接断开时，返回给模型的结果：命令可能执行了，也可能没有，不会重试。
 
 **聊天端口**（ChatPort）
-runtime 自己定义的、绑定到 Agent 账号的聊天操作接口，聊天工具只通过它调用聊天 app。Agent Manager 把 `ChatApp` 绑定到账号来实现它。runtime 不 import 聊天 app。
+runtime 自己定义的、绑定到 Agent 账号的聊天操作接口，聊天工具只通过它调用聊天 app。Agent Manager 用 `ChatApp.forAccount` 得到的账号视角实现它。runtime 不 import 聊天 app。
 
 **游标**（cursor）
 runtime 存在自己 Durable 存储里的一个命名位置，只进不退，比如连接器在收件事件里处理到的事件 ID（`chat-inbox`）。
@@ -129,7 +136,8 @@ Agent 给自己设定的定时输入，保存在它自己的存储文件里，�
 唯一能打开和关闭 runtime 的模块。一个 Agent 存在，当且仅当它的存储文件存在。
 
 **暂停**（pause）
-关闭一个 Agent 的 runtime，并在它的存储文件里记下"已暂停"。恢复就是清除这个记录，重新打开 runtime。
+关闭一个 Agent 的 runtime，并在它的存储文件里记下"已暂停"。恢复就是清除这个记录，重新打开 runtime。Agent 只有打开和关闭两种状态；"已暂停"只是关闭的 Agent 留在文件里的记录，让它重启后仍然关闭，只在 Agent 关闭时读写。runtime 因存储出错死掉时，Agent 变为关闭，但没有这条记录。
+避免：把"已暂停"当成和打开的 runtime 并存的标记。
 
 **连接器**（connector）
 把一个 Agent 账号的收件事件变成它 runtime 收件箱里一条通知的组件。

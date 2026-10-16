@@ -26,7 +26,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 
 1. **每个事实只有一个主人。** runtime 的状态只存在该 Agent 的 Durable 存储里，聊天的状态只存在聊天 app 的数据库里，两边不互相镜像，也就不需要跨库对账。
 2. **跨边界只靠幂等 ID。** 一次跨模块调用如果可能被重复，就带一个稳定的 ID（事件 ID、工具调用 ID、客户端生成的请求 ID）。接收方按这个 ID 去重：同一个 ID 只生效一次，重复调用返回第一次的结果。
-3. **状态用结构表示，不用标记表示。** "这个 Agent 存在"等于"它的文件存在"；"这个 Agent 暂停了"等于"它的 runtime 已关闭"。没有一个需要和现实保持一致的布尔字段。
+3. **状态用结构表示，不用标记表示。** "这个 Agent 存在"等于"它的文件存在"。一个 Agent 要么打开（有 runtime），要么关闭，没有第三种状态。"已暂停"只是关闭的 Agent 在自己文件里留的一条记录，让它重启后仍然关闭；这条记录只在 Agent 关闭时读写，所以不存在一个和已打开的 runtime 并存、需要保持一致的标记。
 4. **每类事情只有一个入口。** runtime 接收外界输入只有一种方式：提交到 Durable 收件箱。消息、提醒、助手汇报都走这一条路。
 
 第 9 节逐条列出旧问题，以及新结构为什么让它们不可能出现。
@@ -88,19 +88,22 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 **谁会被通知：**
 
 - 频道的顶层消息：通知该频道的所有成员，作者本人除外。
-- 讨论串回复：只通知参与过这个讨论串的人，以及在回复里被 @ 的人。
+- 讨论串回复：只通知**关注**这个讨论串、并且还能读这个会话的人。关注者是根消息的作者、回复过的人，以及在这个讨论串里被 @ 过的人（包括这条回复 @ 的人）。
 - 私信：通知对方。
 - 所有者能读所有会话，但和别的账号一样，只在上面这些情况下收到通知：没加入的频道里的顶层消息不通知所有者。
 - 首个版本不做静音。
+- "谁关注哪条时间线"只有一个定义（`chat.sqlite` 里的 `followed_timelines` 视图）：会话顶层由成员关注，讨论串由上面的关注者关注。收件事件发给关注者，未读摘要列的也正是关注的时间线，两者不会不一致。"谁能读哪个会话"同样只有一个定义（`readable_conversations` 视图），所有可见性判断都从它查。
 
 **对外接口：** 所有操作都以某个账号的身份调用。人（经过 Web 外壳）和 Agent（经过聊天工具）用的是同一套接口。
 
 ```ts
 interface ChatApp {
+  // 打开：new ChatApp(file, { clock? })。写入的时间戳都来自这个时钟，缺省为系统时钟
   // 读：只能从已读位置往后读。读到的消息算作看过，已读位置随之推进。
   readUnread(account, timeline, { requestId, budget }): ReadResult
   // 回看：读已读位置之前的历史，或按关键词搜索。不影响已读位置。
-  readHistory(account, timeline, { before?, around?, limit })
+  // readHistory 返回序号 ≤ before（缺省为最新）的最新 limit 条（≤ 200，默认 50），新的在前；search 返回最新的 50 条命中
+  readHistory(account, timeline, { before?, limit? })
   search(account, query)
   // 写
   send(account, timeline, { requestId, body, attachments?, mentions? }): SendResult
@@ -122,6 +125,9 @@ interface ChatApp {
   ensureAccount({ externalId, displayName, handle }): AccountId
   findAccount(externalId): AccountId | undefined // 只读；停用的账号也能找到。Manager 打开 Agent 时用它找账号，不另存账号 ID
   deactivateAccount(account, { requestId })
+  // 绑定到一个账号的读写方法（readUnread、readHistory、search、send、join、leave、openDm、listConversations、
+  // createTask、changeTask），参数与上面相同、去掉 account。结构上满足 runtime 的聊天端口，Agent Manager 用它
+  forAccount(account): AccountChat
 }
 ```
 
@@ -142,7 +148,7 @@ interface ChatApp {
    - Agent 的聊天工具总是开启，并且不把这个选项暴露给模型；
    - 网页客户端关闭它，因为所有者一直实时看着屏幕。网页把消息显示出来时，就推进所有者的已读位置。
 3. **每个写操作和每次 `readUnread` 都带 `requestId`，按 (账号, requestId) 幂等。** 聊天 app 把第一次的结果存成回执。同一个 ID 再来一次，原样返回那份结果，包括 `readUnread` 返回的那一页消息。这样崩溃后重做工具调用，既不会重复发消息，也不会因为已读位置已经推进而丢掉一页。Agent 的 `requestId` 是 Durable 的工具调用 ID；所有者在网页上的操作由浏览器生成 ID。
-4. **一条消息相关的一切在一个事务里提交：** 消息本身、收件事件、推送队列、随消息创建的任务、实时事件。任何一步失败都整体回滚。
+4. **一条消息相关的一切在一个事务里提交：** 消息本身、收件事件、推送队列、随消息创建的任务、实时事件。任何一步失败都整体回滚。会被拒绝的请求（参数非法、@ 了不存在的账号、没有权限）在写入开始之前就被拒绝，写入过程中不再有拒绝分支。
 5. **消息不能编辑，也不能删除。**
 6. **可见与可操作分开判断。** 公开频道不加入也能读；发言、建任务、上传附件都必须是成员。私有频道和私信只有成员能读。拥有任务不额外授予任何权限。
 7. **任务挂在消息上**，一条消息可以有零到多个任务。创建和认领是两个动作，创建任务不会自动指派给任何人。
@@ -181,18 +187,22 @@ interface ChatApp {
 **对外接口（给 Agent Manager 和连接器用）：**
 
 ```ts
+createAgentStore(file, settings) // 新建 Agent 文件；返回时 Agent 就存在了
+// 打开 Harness 并调用 resume()。存储出错时调用一次 onFatal，之后这个 runtime 就死了，要从文件重新打开
+openAgentRuntime({ file, apiKey, workspace, chat?, resolveModel?, clock?, onFatal? }): AgentRuntime
 interface AgentRuntime {
-  static open(file, config, env): AgentRuntime // 打开 Harness 并调用 resume()
   // 透传给主对话。带 replaces 时，先撤回收件箱里 requestId 以它开头、且不是这次 requestId 的未交付输入
   submit(input, { requestId, whenBusy, replaces? }): Submission
   withdraw(requestId) // 撤回尚未交给模型的提交
   cursor(name) / advanceCursor(name, value) // 环境在某个来源里的位置，只进不退；连接器用 "chat-inbox"
-  configure(change) // 模型、thinking 级别、说明文字；从下一次请求起生效
-  view() / watchEvents() // 给管理界面观察
+  configure(settings) // 模型、thinking 级别、说明文字；从下一次请求起生效
+  idle() // 没有进行中、也没有排队的工作时返回
   usage()
   close() // 中止所有进行中的工作，然后关闭 Harness
+  // 给管理界面观察的 view() / watchEvents() 还没有实现，属于 M6
 }
-// 在没有打开 runtime 的 Agent 文件上读写"已暂停"，给 Agent Manager 用
+CHAT_READ_UNREAD // 读未读的聊天工具名；连接器在通知里引用它，不另写一份
+// 在没有打开 runtime 的 Agent 文件上读写"已暂停"，只给 Agent Manager 处于关闭状态的 Agent 用
 readAgentState(file): { paused }
 setAgentPaused(file, paused)
 ```
@@ -219,8 +229,9 @@ setAgentPaused(file, paused)
    #general {"conversation":1} 至少 4 条 · 最新发送者 @richard · @了你
    #general/讨论串 {"thread":42} 至少 2 条 · 最新发送者 @lin
    私信 @owner {"conversation":5} 至少 1 条 · 最新发送者 @owner
-   通知只是提示，可能已过时；需要时用 chat_read_unread 读取，每行花括号里就是它要的 timeline。什么时候读由你决定。
+   每行花括号里就是 chat_read_unread 要的 timeline。
    ```
+   工具名取自 runtime 导出的 `CHAT_READ_UNREAD`。"通知只是提示、可能已过时、什么时候读由你决定"由 runtime 的聊天系统提示说一次，通知里不重复。
    如果这些事件对应的消息都已经读过（摘要为空），不提交通知，只推进事件位置。
 3. 提交时 `requestId = notice:<最新事件 ID>`，`whenBusy = "steer"`，`replaces = "notice:"`：Agent 正在运行时，通知插在当前这轮工具调用之后；收件箱里还没交给模型的旧通知先被撤回。哪些通知还没交付由 Durable 的提交记录决定，连接器不另记，所以崩溃后重来也最多只有一条未交付的通知。撤回时如果那条恰好已经交给了模型，就照常提交新的。
 4. 把事件位置推进到最新事件 ID（`advanceCursor("chat-inbox", …)`）。
@@ -243,10 +254,11 @@ openAgentManager({ directory, chat, workspaces, apiKey, resolveModel?, clock?, r
 // report(error, agentId)：打不开的 Agent、出错的连接器、存储失败的 runtime 都报告到这里，不让进程崩溃
 interface AgentManager {
   list(): { agentId, open }[] // 就是目录里的 <agentId>.sqlite
-  create({ agentId?, displayName, handle, settings }): AgentId // 失败时抛 AgentCreationFailed，带上 agentId
+  // 以下操作都返回 Promise；ID 不合法时 reject，不同步抛出
+  create({ agentId?, displayName, handle, settings }): AgentId // 失败时 reject AgentCreationFailed，带上 agentId
   delete(id) // 关闭 runtime，停用聊天账号，删除文件
-  pause(id) // 关闭 runtime，在 Agent 文件里记下"已暂停"
-  resume(id) // 清除"已暂停"，打开 runtime
+  pause(id) // 打开的先关闭；然后在 Agent 文件里记下"已暂停"
+  resume(id) // 已打开的什么都不做；关闭的清除"已暂停"，再打开 runtime
   runtime(id): AgentRuntime | undefined // 已打开时返回
   close() // 关闭所有 runtime
 }
@@ -257,15 +269,17 @@ interface AgentManager {
 1. **一个 Agent 存在，当且仅当 `data/agents/<id>.sqlite` 存在。** 启动时扫描目录，打开所有没有被暂停的 Agent。没有另外一张"Agent 列表"。
 2. **同一个 Agent 的生命周期操作串行执行**，每个 Agent 一条队列。所以同一个 Agent 最多只有一个已打开的 runtime，这由结构保证，不需要检查。
 3. **暂停就是立刻关闭。** 进行中的模型请求被中止，node 上的工具调用被停止。恢复时 Durable 从停下的地方接着跑。不存在"还在跑但已经没资格跑"的状态。
+   Manager 对每个 Agent 只记一个状态：打开（runtime 加连接器）或关闭。"已暂停"记录只能从关闭状态读写：它在文件上另开一个 Durable 会话，和打开的 runtime 并存就会弄坏 runtime 的存储。所以对打开的 Agent 调 `resume` 什么都不做，对关闭的 Agent 调 `pause` 只写记录。
 4. **创建的顺序：**
    1. 生成 Agent ID；
    2. 调用 `chat.ensureAccount({ externalId: agentId })`，这个调用可以安全重复；
    3. 让 node 创建工作目录；
    4. 在临时文件里初始化 Durable 存储，再改名为正式文件。
 
-   中途失败了，重做一遍即可。改名是最后一步，所以 Agent 要么完整存在，要么不存在。`create` 失败时抛出的 `AgentCreationFailed` 带着这次的 Agent ID，调用方把它作为 `agentId` 传回 `create` 重做：每一步都可以重复（账号以 `externalId` 幂等、工作区准备幂等、文件已存在就跳过），所以得到的还是同一个 Agent、一个账号、一个文件。不带 `agentId` 重做会生成新 ID，而旧 ID 的账号仍占着 handle，所以重做必须带上它。目录里只有名字正好是 `<UUID>.sqlite` 的文件才算 Agent，临时文件（`.creating`）和 SQLite 的附属文件都不算。
+   中途失败了，重做一遍即可。改名是最后一步，所以 Agent 要么完整存在，要么不存在。`create` 失败时 reject 的 `AgentCreationFailed` 带着这次的 Agent ID，调用方把它作为 `agentId` 传回 `create` 重做：每一步都可以重复（账号以 `externalId` 幂等、工作区准备幂等、文件已存在就跳过），所以得到的还是同一个 Agent、一个账号、一个文件。不带 `agentId` 重做会生成新 ID，而旧 ID 的账号仍占着 handle，所以重做必须带上它。目录里只有名字正好是 `<UUID>.sqlite` 的文件才算 Agent，临时文件（`.creating`）和 SQLite 的附属文件都不算。
 5. **打开一个 Agent：** 读它的"已暂停"，暂停了就不打开；用 `chat.findAccount(agentId)` 找到它的账号，把 `ChatApp` 绑定到这个账号作为聊天端口；打开 runtime，再挂上连接器。
 6. **删除的顺序：** 关闭 runtime，停用聊天账号，最后删除文件。删除中途失败，Agent 仍然存在，重做一遍即可。
+7. **runtime 死了，Agent 就关闭。** runtime 的存储出错（`onFatal`）时，Manager 报告错误，并在这个 Agent 的队列里停掉连接器、关闭 runtime，`list()` 随即显示它已关闭。Manager 不自动重开：同样的故障多半会让重开再次失败。它没有被记为暂停，所以调 `resume` 或下次启动 Manager 时会重新打开，Durable 从文件里已提交的地方接着跑。
 
 ### 4.5 Node 网关与 Node
 

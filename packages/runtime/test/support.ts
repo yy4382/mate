@@ -1,5 +1,5 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { FakeClock, FaultyDatabase, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
+import { FakeWorkspace, FaultyDatabase, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
 import { join } from "node:path";
 import { onTestFinished } from "vitest";
 import {
@@ -9,58 +9,11 @@ import {
   type AgentSettings,
   type ChatPort,
   type Clock,
-  type WorkspacePort,
-  type WorkspaceToolRequest,
-  type WorkspaceToolResult,
 } from "../src/index.ts";
 
-export { FakeClock } from "@mate/testkit";
+export { FakeClock, FakeWorkspace, toolText as text } from "@mate/testkit";
 
 export const defaultSettings: AgentSettings = { model: { provider: "openai", modelId: "gpt-4.1" } };
-
-type PendingCall = {
-  readonly request: WorkspaceToolRequest;
-  readonly signal: AbortSignal;
-  resolve(result: WorkspaceToolResult): void;
-};
-
-/** Stands in for the node gateway: records every forwarded call and lets the test answer it. */
-export class FakeWorkspace implements WorkspacePort {
-  readonly calls: WorkspaceToolRequest[] = [];
-  readonly #pending: PendingCall[] = [];
-  readonly #arrivals: (() => void)[] = [];
-  #autoAnswer: ((request: WorkspaceToolRequest) => WorkspaceToolResult) | undefined;
-
-  answerAll(answer: (request: WorkspaceToolRequest) => WorkspaceToolResult): void {
-    this.#autoAnswer = answer;
-  }
-
-  run(
-    request: WorkspaceToolRequest,
-    _output: (chunk: string) => void,
-    signal: AbortSignal,
-  ): Promise<WorkspaceToolResult> {
-    this.calls.push(request);
-    for (const arrived of this.#arrivals.splice(0)) arrived();
-    if (this.#autoAnswer !== undefined) return Promise.resolve(this.#autoAnswer(request));
-    const { promise, resolve } = Promise.withResolvers<WorkspaceToolResult>();
-    this.#pending.push({ request, signal, resolve });
-    return promise;
-  }
-
-  /** Wait until a call is in flight and return it, unanswered. */
-  async nextCall(): Promise<PendingCall> {
-    while (this.#pending.length === 0)
-      await new Promise<void>((resolve) => this.#arrivals.push(resolve));
-    const call = this.#pending.shift();
-    if (call === undefined) throw new Error("no pending workspace call");
-    return call;
-  }
-}
-
-export function text(value: string, isError = false): WorkspaceToolResult {
-  return { content: [{ type: "text", text: value }], isError };
-}
 
 export type TestAgent = {
   readonly file: string;

@@ -1,8 +1,7 @@
 import { z } from "zod";
-import type { Actor } from "./accounts.ts";
-import { ChatError } from "./chat-error.ts";
-import { requireWritable, type Conversation } from "./conversations.ts";
-import type { ChatDatabase } from "./database.ts";
+import { targetAccount, type Actor } from "./accounts.ts";
+import { READABLE_BY, requireWritable, type Conversation } from "./conversations.ts";
+import { idList, type ChatDatabase } from "./database.ts";
 import { Attachment, loadEntries, appendEntry } from "./entries.ts";
 import { FreshnessOptions, ReadPage, freshWrite } from "./forward-reading.ts";
 import { Id, RequestId } from "./identifiers.ts";
@@ -68,7 +67,7 @@ export function sendMessage(
   });
   // Top-level messages create their own thread timeline so replies can be addressed to { thread: messageId }.
   if (timeline.rootEntryId === null) createTimeline(db, timeline.conversation.id, entryId);
-  notifyMessage(db, { entryId, author: actor.id, timeline, mentions: request.mentions });
+  notifyMessage(db, { entryId, author: actor.id, timelineId: timeline.id });
   const newTask =
     request.createTask !== undefined
       ? insertTask(db, actor, { entryId, timelineId: timeline.id }, request.createTask.title)
@@ -91,53 +90,64 @@ export function send(
   request: z.output<typeof SendRequest>,
 ): SendResult {
   const timeline = resolveTimeline(db, actor, ref);
+  // Every mentioned account must exist before anything is written, so the write itself has no refusal left in it.
+  for (const mentioned of request.mentions) targetAccount(db, mentioned);
   const outcome = freshWrite(db, actor, timeline, request, () =>
     sendMessage(db, actor, timeline, request),
   );
   return "held" in outcome ? { status: "held", page: outcome.held } : outcome.written;
 }
 
-/** History: entries at or before `beforeSeq`, newest first, up to `limit`. Does not move the read position. */
+/** A page of history: entries at or before seq `before` (from the newest if absent), newest first. */
+export const HistoryQuery = z.object({
+  before: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().max(200).default(50),
+});
+
+/** History: the newest `limit` entries at or before `before`, newest first. Does not move the read position. */
 export function readHistory(
   db: ChatDatabase,
   actor: Actor,
   ref: TimelineRef,
-  { before = Number.MAX_SAFE_INTEGER, limit = 50 }: { before?: number; limit?: number },
+  { before, limit }: z.output<typeof HistoryQuery>,
 ): Entry[] {
   const timeline = resolveTimeline(db, actor, ref);
   return loadEntries(
     db,
-    "e.timeline_id = ? AND e.seq <= ?",
-    "e.seq DESC",
+    { where: "e.timeline_id = ? AND e.seq <= ?", order: "e.seq DESC", limit },
     timeline.id,
-    before,
-  ).slice(0, limit);
+    before ?? Number.MAX_SAFE_INTEGER,
+  );
 }
 
-const SearchHit = z.object({ entry_id: Id, timeline_id: Id });
+/** A keyword, matched literally against message bodies. */
+export const SearchQuery = z.string().min(1).max(1000);
+
+/** At most this many hits come back: the newest ones. */
+const SEARCH_LIMIT = 50;
+
+const SearchHit = z.object({ entry_id: Id });
 
 /** A LIKE pattern that matches `query` literally, so `%` and `_` are ordinary characters. */
 const likeContains = (query: string): string => `%${query.replace(/[\\%_]/g, "\\$&")}%`;
 
-/** Keyword search: messages whose body contains `query` literally, in any timeline `actor` can read. */
+/** Keyword search: the newest messages whose body contains `query` literally, in any timeline `actor` can read. */
 export function search(db: ChatDatabase, actor: Actor, query: string): Entry[] {
   const hits = db.all(
     SearchHit,
-    `SELECT e.id AS entry_id, e.timeline_id FROM entries e
+    `SELECT e.id AS entry_id FROM entries e
      JOIN timelines t ON t.id = e.timeline_id
      JOIN conversations c ON c.id = t.conversation_id
+     ${READABLE_BY}
      WHERE e.kind = 'message' AND e.body LIKE ? ESCAPE '\\'
-       AND (? = 1 OR c.kind = 'public'
-         OR EXISTS (SELECT 1 FROM memberships m WHERE m.conversation_id = c.id AND m.account_id = ?))
-     ORDER BY e.id`,
-    likeContains(query),
-    actor.owner ? 1 : 0,
+     ORDER BY e.id DESC LIMIT ?`,
     actor.id,
+    likeContains(query),
+    SEARCH_LIMIT,
   );
   return loadEntries(
     db,
-    `e.id IN (SELECT value FROM json_each(?))`,
-    "e.seq",
-    JSON.stringify(hits.map((hit) => hit.entry_id)),
+    { where: "e.id IN (SELECT value FROM json_each(?))", order: "e.id" },
+    idList(hits.map((hit) => hit.entry_id)),
   );
 }

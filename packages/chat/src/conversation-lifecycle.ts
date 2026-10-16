@@ -6,6 +6,7 @@ import {
   conversationView,
   isMember,
   readableConversation,
+  requireWritable,
   type Conversation,
   type ConversationView,
 } from "./conversations.ts";
@@ -33,7 +34,7 @@ function createConversation(
     values.name,
     values.dmPair?.[0] ?? null,
     values.dmPair?.[1] ?? null,
-    Date.now(),
+    db.now(),
   );
   if (created === undefined) throw new Error("conversation insert returned no row");
   createTimeline(db, created.id, null);
@@ -121,13 +122,7 @@ export function invite(
   invitee: number,
 ): ConversationView {
   const channel = readableChannel(db, actor, conversationId);
-  if (!isMember(db, actor.id, channel.id))
-    throw new ChatError(
-      "not-member",
-      `account ${actor.id} is not a member of conversation ${channel.id}`,
-    );
-  if (channel.archived)
-    throw new ChatError("archived", `conversation ${conversationId} is archived`);
+  requireWritable(db, actor, channel);
   const target = targetAccount(db, invitee);
   if (!target.active) throw new ChatError("invalid-target", `account ${invitee} is deactivated`);
   if (!isMember(db, target.id, channel.id)) {

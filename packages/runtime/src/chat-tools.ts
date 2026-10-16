@@ -81,9 +81,12 @@ const HELD =
   "If someone wrote in the timeline after you last read it, nothing is done: the result has status held, carries " +
   "the entries you missed, and moves your read position past them. Then resend as it was or revised; both are fine.";
 
+/** The tool that reads a timeline forward, which inputs about unread chat point the model to. */
+export const CHAT_READ_UNREAD = "chat_read_unread";
+
 const tools: readonly ((port: ChatPort) => ToolRegistration)[] = [
   chatTool({
-    name: "chat_read_unread",
+    name: CHAT_READ_UNREAD,
     description:
       "Read a timeline forward from your read position and move the position to its end. When the unread entries " +
       "exceed the budget you get the newest that fit, and the result names the skipped range and the mentions in it.",
@@ -234,7 +237,7 @@ export function chatExtension(port: ChatPort) {
         () =>
           "You talk with people only through the chat tools. Your plain text output goes nowhere: nobody reads it. " +
           "To say anything to anyone, call chat_send. Inputs that report unread chat are only hints and may be out " +
-          "of date; read with chat_read_unread when you decide to.",
+          `of date; read with ${CHAT_READ_UNREAD} when you decide to.`,
       ),
     ],
   });

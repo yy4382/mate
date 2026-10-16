@@ -1,6 +1,6 @@
 import type { ScriptedRequest } from "@mate/testkit";
 import { describe, expect, it } from "vitest";
-import { testChat } from "./chat-port.ts";
+import { testChat } from "./test-chat.ts";
 import { testAgent } from "./support.ts";
 
 const spawn = (name: string, message: string) => ({

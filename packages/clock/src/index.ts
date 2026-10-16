@@ -4,8 +4,11 @@
  */
 export type Clock = {
   now(): number;
-  /** Resolve after `ms`, or as soon as `signal` aborts. Never rejects. */
-  sleep(ms: number, signal: AbortSignal): Promise<void>;
+  /**
+   * Resolve after `ms`, or as soon as `signal` aborts; at once if it already has. Without `ms`, resolve only when
+   * `signal` aborts. Never rejects.
+   */
+  sleep(ms: number | undefined, signal: AbortSignal): Promise<void>;
 };
 
 export const systemClock: Clock = {
@@ -13,7 +16,7 @@ export const systemClock: Clock = {
   sleep: (ms, signal) =>
     new Promise((resolve) => {
       if (signal.aborted) return resolve();
-      const timer = setTimeout(done, Math.max(0, ms));
+      const timer = ms === undefined ? undefined : setTimeout(done, Math.max(0, ms));
       signal.addEventListener("abort", done, { once: true });
       function done() {
         clearTimeout(timer);

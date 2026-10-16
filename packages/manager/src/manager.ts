@@ -13,7 +13,6 @@ import {
   type WorkspacePort,
 } from "@mate/runtime";
 import { AgentFiles } from "./agent-files.ts";
-import { chatPort } from "./chat-port.ts";
 import { connectInbox, type InboxConnector } from "./connector.ts";
 
 /** Where Agents' workspaces live. Preparing is idempotent: it creates the workspace once, later calls do nothing. */
@@ -56,7 +55,24 @@ export class AgentCreationFailed extends Error {
   }
 }
 
-type OpenAgent = { readonly runtime: AgentRuntime; readonly inbox: InboxConnector };
+/**
+ * What the manager knows of an Agent: open, with its runtime and connector, or closed. An Agent missing from the map is
+ * closed. Only a closed Agent carries its paused record, the one fact the manager keeps in the Agent's file so a paused
+ * Agent stays closed across restarts; the record opens its own Durable session on the file, so writing it while a
+ * runtime is open on that file would corrupt the runtime's storage. Reaching the record through `Closed` makes that
+ * impossible.
+ */
+type AgentState = Open | Closed;
+type Open = {
+  readonly kind: "open";
+  readonly runtime: AgentRuntime;
+  readonly inbox: InboxConnector;
+};
+type Closed = {
+  readonly kind: "closed";
+  readonly paused: () => Promise<boolean>;
+  readonly setPaused: (paused: boolean) => Promise<void>;
+};
 
 /** Open every Agent in the directory that is not paused. An Agent that fails to open is reported and skipped. */
 export function openAgentManager(options: AgentManagerOptions): Promise<AgentManager> {
@@ -66,13 +82,14 @@ export function openAgentManager(options: AgentManagerOptions): Promise<AgentMan
 /**
  * The only place runtimes are opened and closed. Every lifecycle operation on an Agent runs in that Agent's queue, one
  * after another, so an Agent never has two runtimes open. Its connector is attached when its runtime opens and
- * stopped before it closes.
+ * stopped before it closes. A runtime whose storage fails is closed and reported; the Agent stays closed, not paused,
+ * until it is resumed or the manager next opens.
  */
 export class AgentManager {
   readonly #files: AgentFiles;
   readonly #options: AgentManagerOptions;
   readonly #clock: Clock;
-  readonly #running = new Map<string, OpenAgent>();
+  readonly #open = new Map<string, Open>();
   /** The tail of each Agent's queue of lifecycle operations. It never rejects. */
   readonly #queues = new Map<string, Promise<void>>();
   #closed = false;
@@ -86,25 +103,25 @@ export class AgentManager {
   static async open(options: AgentManagerOptions): Promise<AgentManager> {
     const manager = new AgentManager(options);
     await Promise.all(
-      manager.#files
-        .agentIds()
-        .map((agentId) =>
-          manager
-            .#serial(agentId, () => manager.#start(agentId))
-            .catch((error: unknown) => manager.#report(error, agentId)),
-        ),
+      manager.#files.agentIds().map((agentId) =>
+        manager
+          .#lifecycle(agentId, async (state) => {
+            if (state.kind === "closed") await manager.#start(agentId, state);
+          })
+          .catch((error: unknown) => manager.#report(error, agentId)),
+      ),
     );
     return manager;
   }
 
   /** Every Agent, open or not. */
   list(): AgentSummary[] {
-    return this.#files.agentIds().map((agentId) => ({ agentId, open: this.#running.has(agentId) }));
+    return this.#files.agentIds().map((agentId) => ({ agentId, open: this.#open.has(agentId) }));
   }
 
   /** The Agent's runtime while it is open. */
   runtime(agentId: string): AgentRuntime | undefined {
-    return this.#running.get(agentId)?.runtime;
+    return this.#open.get(agentId)?.runtime;
   }
 
   /**
@@ -115,8 +132,8 @@ export class AgentManager {
    */
   create(spec: AgentSpec): Promise<string> {
     const agentId = spec.agentId ?? randomUUID();
-    const file = this.#files.file(agentId);
-    return this.#lifecycle(agentId, async () => {
+    return this.#lifecycle(agentId, async (state, file) => {
+      if (state.kind === "open") return agentId;
       try {
         const { chat, workspaces } = this.#options;
         chat.ensureAccount({
@@ -126,7 +143,7 @@ export class AgentManager {
         });
         await workspaces.prepare(agentId);
         if (!existsSync(file)) await createAgentStore(file, spec.settings);
-        await this.#start(agentId);
+        await this.#start(agentId, state);
       } catch (error) {
         throw new AgentCreationFailed(agentId, error);
       }
@@ -136,27 +153,25 @@ export class AgentManager {
 
   /** Close the Agent's runtime, aborting its model requests and tool calls, and record it as paused. */
   pause(agentId: string): Promise<void> {
-    const file = this.#files.file(agentId);
-    return this.#lifecycle(agentId, async () => {
-      await this.#stop(agentId);
-      await setAgentPaused(file, true);
+    return this.#lifecycle(agentId, async (state) => {
+      const closed = state.kind === "open" ? await this.#stop(agentId, state) : state;
+      await closed.setPaused(true);
     });
   }
 
-  /** Clear the pause and open the runtime; Durable continues where it stopped. */
+  /** Clear the pause and open the runtime; Durable continues where it stopped. An open Agent stays as it is. */
   resume(agentId: string): Promise<void> {
-    const file = this.#files.file(agentId);
-    return this.#lifecycle(agentId, async () => {
-      await setAgentPaused(file, false);
-      await this.#start(agentId);
+    return this.#lifecycle(agentId, async (state) => {
+      if (state.kind === "open") return;
+      await state.setPaused(false);
+      await this.#start(agentId, state);
     });
   }
 
   /** Close the Agent, deactivate its chat account, and remove its file. Its messages stay readable. */
   delete(agentId: string): Promise<void> {
-    this.#files.file(agentId);
-    return this.#lifecycle(agentId, async () => {
-      await this.#stop(agentId);
+    return this.#lifecycle(agentId, async (state) => {
+      if (state.kind === "open") await this.#stop(agentId, state);
       const { chat } = this.#options;
       const account = chat.findAccount(agentId);
       // Deactivate before removing, so a delete that dies in between leaves an Agent to delete again.
@@ -169,15 +184,25 @@ export class AgentManager {
   /** Close every runtime. The manager accepts no further operations. */
   async close(): Promise<void> {
     this.#closed = true;
-    const agentIds = new Set([...this.#running.keys(), ...this.#queues.keys()]);
+    const agentIds = new Set([...this.#open.keys(), ...this.#queues.keys()]);
     await Promise.all(
-      [...agentIds].map((agentId) => this.#serial(agentId, () => this.#stop(agentId))),
+      [...agentIds].map((agentId) =>
+        this.#serial(agentId, async () => {
+          const state = this.#open.get(agentId);
+          if (state !== undefined) await this.#stop(agentId, state);
+        }),
+      ),
     );
   }
 
-  #lifecycle<T>(agentId: string, work: () => Promise<T>): Promise<T> {
-    if (this.#closed) return Promise.reject(new Error("the Agent Manager is closed"));
-    return this.#serial(agentId, work);
+  /** Run `work` in the Agent's queue with the Agent's state as it is when its turn comes. Rejects on a bad ID. */
+  async #lifecycle<T>(
+    agentId: string,
+    work: (state: AgentState, file: string) => Promise<T>,
+  ): Promise<T> {
+    if (this.#closed) throw new Error("the Agent Manager is closed");
+    const file = this.#files.file(agentId);
+    return this.#serial(agentId, () => work(this.#open.get(agentId) ?? closed(file), file));
   }
 
   /** Run `work` after every operation already queued for the Agent has finished, whether it failed or not. */
@@ -194,41 +219,56 @@ export class AgentManager {
     return result;
   }
 
-  /** Open the Agent unless it is open or paused. Runs in the Agent's queue. */
-  async #start(agentId: string): Promise<void> {
-    if (this.#running.has(agentId)) return;
+  /** Open the closed Agent unless it is paused. Runs in the Agent's queue. */
+  async #start(agentId: string, state: Closed): Promise<void> {
+    if (await state.paused()) return;
     const file = this.#files.file(agentId);
-    if ((await readAgentState(file)).paused) return;
     const { chat, workspaces, apiKey, resolveModel } = this.#options;
     // The chat app holds the account; the Agent ID is its external identity, so there is no second record of it.
     const account = chat.findAccount(agentId);
     if (account === undefined) throw new Error(`Agent ${agentId} has no chat account`);
     const report = (error: unknown) => this.#report(error, agentId);
+    let opened: Open | undefined;
     const runtime = await openAgentRuntime({
       file,
       apiKey,
       workspace: workspaces.port(agentId),
-      chat: chatPort(chat, account),
+      chat: chat.forAccount(account),
       clock: this.#clock,
-      onFatal: report,
+      onFatal: (error) => {
+        report(error);
+        // A dead runtime does nothing more; close it in its turn so the Agent is closed, not falsely open.
+        void this.#serial(agentId, async () => {
+          if (opened !== undefined && this.#open.get(agentId) === opened)
+            await this.#stop(agentId, opened);
+        });
+      },
       ...(resolveModel === undefined ? {} : { resolveModel }),
     });
     const inbox = await connectInbox({ chat, account, runtime, clock: this.#clock, report });
-    this.#running.set(agentId, { runtime, inbox });
+    opened = { kind: "open", runtime, inbox };
+    this.#open.set(agentId, opened);
   }
 
   /** Stop the connector, then close the runtime. Runs in the Agent's queue. */
-  async #stop(agentId: string): Promise<void> {
-    const opened = this.#running.get(agentId);
-    if (opened === undefined) return;
-    this.#running.delete(agentId);
-    await opened.inbox.stop();
-    await opened.runtime.close();
+  async #stop(agentId: string, state: Open): Promise<Closed> {
+    this.#open.delete(agentId);
+    await state.inbox.stop();
+    await state.runtime.close();
+    return closed(this.#files.file(agentId));
   }
 
   #report(error: unknown, agentId: string): void {
     (this.#options.report ?? defaultReport)(error, agentId);
   }
+}
+
+function closed(file: string): Closed {
+  return {
+    kind: "closed",
+    paused: async () => (await readAgentState(file)).paused,
+    setPaused: (paused) => setAgentPaused(file, paused),
+  };
 }
 
 function defaultReport(error: unknown, agentId: string): void {

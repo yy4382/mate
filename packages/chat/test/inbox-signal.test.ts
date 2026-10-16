@@ -25,18 +25,15 @@ describe("3.6 inbox signal", () => {
     const seen: { accounts: readonly number[]; bobEvents: number; bobUnread: number }[] = [];
     app.watchInbox((accounts) => {
       seen.push({
-        accounts,
+        accounts: [...accounts].sort(),
         bobEvents: app.inboxEvents(bob).length,
         bobUnread: app.readUnread(bob, timeline, { requestId: "inside" }).unread,
       });
     });
     app.send(alice, timeline, { requestId: "s1", body: "hello" });
-    expect(seen, "one signal for one committed send").toHaveLength(1);
-    expect([...seen[0]!.accounts].sort(), "every member except the author").toEqual(
-      [bob, charlie].sort(),
-    );
-    expect(seen[0]!.bobEvents, "the inbox event is visible inside the listener").toBe(1);
-    expect(seen[0]!.bobUnread, "the message is readable inside the listener").toBe(1);
+    // One signal for one committed send, naming every member except the author, sent once the inbox event and the
+    // message are readable.
+    expect(seen).toEqual([{ accounts: [bob, charlie].sort(), bobEvents: 1, bobUnread: 1 }]);
     app.close();
   });
 
@@ -73,20 +70,6 @@ describe("3.6 inbox signal", () => {
     const repeat = app.send(alice, timeline, { requestId: "s1", body: "once" });
     expect(repeat.status).toBe("sent");
     expect(seen, "the repeat appends nothing, so nothing is signalled").toEqual([]);
-    app.close();
-  });
-
-  it("a send that rolls back mid-transaction does not signal", () => {
-    const { app, alice, bob, timeline } = channelWithThree();
-    const seen: (readonly number[])[] = [];
-    app.watchInbox((accounts) => seen.push(accounts));
-    // The unknown mention is discovered after the message and its inbox events were written.
-    const reason = refusalReason(() =>
-      app.send(alice, timeline, { requestId: "s1", body: "ghost", mentions: [999_999] }),
-    );
-    expect(reason).toBe("unknown-account");
-    expect(app.inboxEvents(bob), "the rollback removed the events").toEqual([]);
-    expect(seen, "a rolled-back write is never signalled").toEqual([]);
     app.close();
   });
 

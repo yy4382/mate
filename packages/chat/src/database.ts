@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
+import type { Clock } from "@mate/clock";
 import { z } from "zod";
 import { CHAT_DDL, CHAT_SCHEMA_VERSION } from "./chat-ddl.ts";
 
@@ -25,8 +26,10 @@ const TableCount = z.object({ tables: z.number() });
 export class ChatDatabase {
   readonly #db: DatabaseSync;
   readonly #statements = new Map<string, StatementSync>();
+  readonly #clock: Clock;
 
-  constructor(file: string) {
+  constructor(file: string, clock: Clock) {
+    this.#clock = clock;
     mkdirSync(dirname(file), { recursive: true });
     this.#db = new DatabaseSync(file);
     try {
@@ -38,6 +41,11 @@ export class ChatDatabase {
       this.#db.close();
       throw error;
     }
+  }
+
+  /** The time to stamp on a row written now. */
+  now(): number {
+    return this.#clock.now();
   }
 
   #ensureSchema(file: string): void {

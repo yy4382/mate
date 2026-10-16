@@ -100,8 +100,10 @@ function untilAborted(
   signal: AbortSignal,
 ): Promise<WorkspaceToolResult> {
   if (signal.aborted) return Promise.resolve(stopped);
-  return new Promise((resolve, reject) => {
-    signal.addEventListener("abort", () => resolve(stopped), { once: true });
-    result.then(resolve, reject);
-  });
+  const abort = Promise.withResolvers<WorkspaceToolResult>();
+  const onAbort = () => abort.resolve(stopped);
+  signal.addEventListener("abort", onAbort, { once: true });
+  return Promise.race([result, abort.promise]).finally(() =>
+    signal.removeEventListener("abort", onAbort),
+  );
 }

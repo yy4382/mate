@@ -1,13 +1,14 @@
 import { join } from "node:path";
 import { temporaryDirectory } from "@mate/testkit";
-import { ChatError, openChatApp, type ChatApp } from "../src/index.ts";
+import type { Clock } from "@mate/clock";
+import { ChatApp, ChatError } from "../src/index.ts";
 
 /** A fresh requestId for setup calls whose idempotency a test does not exercise. */
 let counter = 0;
 export const rid = () => `setup-${++counter}`;
 
-export function newApp(): ChatApp {
-  return openChatApp(join(temporaryDirectory(), "chat.sqlite"));
+export function newApp(options: { clock?: Clock } = {}): ChatApp {
+  return new ChatApp(join(temporaryDirectory(), "chat.sqlite"), options);
 }
 
 /**
@@ -15,7 +16,7 @@ export function newApp(): ChatApp {
  * reopening is how the tests stand in for a process restart.
  */
 export function openAppAt(file: string): ChatApp {
-  return openChatApp(file);
+  return new ChatApp(file);
 }
 
 /** The reason a refused call reports, or a marker string when it unexpectedly succeeded. */

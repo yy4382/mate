@@ -76,6 +76,63 @@ describe("3.6 inbox events and unread summary", () => {
     app.close();
   });
 
+  it("an account mentioned in a thread is notified of every later reply, and its summary counts exactly those", () => {
+    const { app, alice, bob } = newAppWithTwo();
+    const charlie = app.ensureAccount({
+      externalId: "charlie",
+      displayName: "Charlie",
+      handle: "charlie",
+    });
+    const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
+    app.join(bob, { requestId: rid(), conversationId: channel.conversationId });
+    const root = app.send(
+      alice,
+      { conversation: channel.conversationId },
+      { requestId: "s1", body: "root" },
+    );
+    if (root.status !== "sent") throw new Error("expected sent");
+    const thread = { thread: root.messageId };
+    // Charlie never joined the public channel; a mention alone makes him follow the thread.
+    app.send(bob, thread, { requestId: "t1", body: "ping", mentions: [charlie] });
+    app.send(bob, thread, { requestId: "t2", body: "and a follow-up", freshness: false });
+    expect(
+      app.inboxEvents(charlie).map((event) => event.timeline),
+      "both replies notify the mentioned account",
+    ).toEqual([thread, thread]);
+    expect(
+      app.unreadSummary(charlie).timelines.map(({ timeline, unread }) => ({ timeline, unread })),
+      "the summary lists the thread with the two replies he was notified of",
+    ).toEqual([{ timeline: thread, unread: 2 }]);
+    app.close();
+  });
+
+  it("a participant who left a private channel is neither notified of its threads nor shown them", () => {
+    const { app, alice, bob } = newAppWithTwo();
+    const channel = app.createChannel(alice, {
+      requestId: rid(),
+      name: "p",
+      visibility: "private",
+    });
+    app.invite(alice, { requestId: rid(), conversationId: channel.conversationId, invitee: bob });
+    const root = app.send(
+      alice,
+      { conversation: channel.conversationId },
+      { requestId: "s1", body: "root" },
+    );
+    if (root.status !== "sent") throw new Error("expected sent");
+    const thread = { thread: root.messageId };
+    app.send(bob, thread, { requestId: "t1", body: "bob took part" });
+    app.leave(bob, { requestId: rid(), conversationId: channel.conversationId });
+    const bobEvents = app.inboxEvents(bob).length;
+    app.send(alice, thread, { requestId: "t2", body: "after bob left", freshness: false });
+    expect(app.inboxEvents(bob), "no event once he can no longer read it").toHaveLength(bobEvents);
+    expect(
+      app.unreadSummary(bob).timelines.map((entry) => entry.timeline),
+      "the thread is not in his summary either",
+    ).not.toContainEqual(thread);
+    app.close();
+  });
+
   it("task entries do not produce inbox events", () => {
     const { app, alice, bob } = newAppWithTwo();
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
@@ -107,9 +164,9 @@ describe("3.6 inbox events and unread summary", () => {
     }
     const all = app.inboxEvents(bob);
     expect(all.length).toBe(5);
-    const afterFirst = app.inboxEvents(bob, { after: all[0]!.eventId });
-    expect(afterFirst.length).toBe(4);
-    expect(afterFirst[0]!.eventId).toBe(all[1]!.eventId);
+    const [first] = all;
+    if (first === undefined) throw new Error("expected events");
+    expect(app.inboxEvents(bob, { after: first.eventId })).toEqual(all.slice(1));
     app.close();
   });
 
