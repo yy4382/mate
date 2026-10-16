@@ -5,6 +5,8 @@ import { z } from "zod";
 const requestBodySchema = z.looseObject({
   model: z.string(),
   input: z.array(z.unknown()),
+  instructions: z.string().optional(),
+  tools: z.array(z.looseObject({ type: z.string(), name: z.string().optional() })).optional(),
   prompt_cache_key: z.string().optional(),
 });
 
@@ -24,67 +26,42 @@ const messageItemSchema = z.looseObject({
 
 export type ScriptedToolCall = { readonly name: string; readonly arguments: unknown };
 
-type Outcome =
-  | { readonly kind: "pending" }
-  | { readonly kind: "responded" }
-  | { readonly kind: "cancelled" }
-  | { readonly kind: "failed"; readonly reason: string };
+type RequestBody = z.output<typeof requestBodySchema>;
 
-/** One HTTP request the model client made, handed to the step that answers it. */
-export class ScriptedRequest {
-  #outcome: Outcome = { kind: "pending" };
-  #expectsCancellation = false;
-  readonly #cancelled = Promise.withResolvers<void>();
-  readonly #response: ServerResponse;
-  readonly #onFailure: (reason: string) => void;
-  readonly step: string;
-  readonly body: z.output<typeof requestBodySchema>;
+/** What a request asked of the model: readers over its body, with no way to answer it. */
+export class ScriptedRequestBody {
+  readonly body: RequestBody;
 
-  constructor(
-    step: string,
-    body: z.output<typeof requestBodySchema>,
-    response: ServerResponse,
-    onFailure: (reason: string) => void,
-  ) {
-    this.step = step;
+  constructor(body: RequestBody) {
     this.body = body;
-    this.#response = response;
-    this.#onFailure = onFailure;
-    response.once("close", () => {
-      if (this.#outcome.kind !== "pending") return;
-      if (this.#expectsCancellation) {
-        this.#outcome = { kind: "cancelled" };
-        this.#cancelled.resolve();
-        return;
-      }
-      this.#fail("client closed the request before the step answered it");
-    });
-  }
-
-  get outcome(): Outcome["kind"] {
-    return this.#outcome.kind;
   }
 
   /** The text of every user-role message in the request, oldest first. */
   userTexts(): string[] {
-    return this.body.input.flatMap((item) => {
-      const parsed = messageItemSchema.safeParse(item);
-      if (!parsed.success || parsed.data.role !== "user") return [];
-      const { content } = parsed.data;
-      return typeof content === "string"
-        ? [content]
-        : content.flatMap((part) => (part.text === undefined ? [] : [part.text]));
-    });
+    return this.#messageTexts((role) => role === "user");
+  }
+
+  /**
+   * The system text the model sees, in order: `instructions` if present, then every system- or developer-role input
+   * item. Durable puts an Agent's prompt sections in input items, not in `instructions`.
+   */
+  systemTexts(): string[] {
+    return [
+      ...(this.body.instructions === undefined ? [] : [this.body.instructions]),
+      ...this.#messageTexts((role) => role === "system" || role === "developer"),
+    ];
+  }
+
+  /** The names of the tools this request offered, in order. */
+  toolNames(): string[] {
+    return (this.body.tools ?? []).flatMap((tool) => (tool.name === undefined ? [] : [tool.name]));
   }
 
   /** The output the client sent back for the tool call with `callId`, or undefined. */
   toolOutput(callId: string): string | undefined {
     for (const item of this.body.input) {
       const parsed = functionCallOutputSchema.safeParse(item);
-      if (parsed.success && parsed.data.call_id === callId) {
-        const { output } = parsed.data;
-        return typeof output === "string" ? output : JSON.stringify(output);
-      }
+      if (parsed.success && parsed.data.call_id === callId) return outputText(parsed.data.output);
     }
     return undefined;
   }
@@ -93,14 +70,64 @@ export class ScriptedRequest {
   toolOutputs(): string[] {
     return this.body.input.flatMap((item) => {
       const parsed = functionCallOutputSchema.safeParse(item);
-      if (!parsed.success) return [];
-      const { output } = parsed.data;
-      return [typeof output === "string" ? output : JSON.stringify(output)];
+      return parsed.success ? [outputText(parsed.data.output)] : [];
+    });
+  }
+
+  #messageTexts(role: (role: string) => boolean): string[] {
+    return this.body.input.flatMap((item) => {
+      const parsed = messageItemSchema.safeParse(item);
+      if (!parsed.success || !role(parsed.data.role)) return [];
+      const { content } = parsed.data;
+      return typeof content === "string"
+        ? [content]
+        : content.flatMap((part) => (part.text === undefined ? [] : [part.text]));
+    });
+  }
+}
+
+/** One HTTP request the model client made, handed to the step that answers it. */
+export class ScriptedRequest extends ScriptedRequestBody {
+  #answered = false;
+  #expectsCancellation = false;
+  readonly #cancelled = Promise.withResolvers<void>();
+  readonly #response: ServerResponse;
+  /** The lane whose step answers this request. */
+  readonly lane: string;
+  readonly step: string;
+
+  constructor(
+    lane: string,
+    step: string,
+    body: RequestBody,
+    response: ServerResponse,
+    onFailure: (reason: string) => void,
+  ) {
+    super(body);
+    this.lane = lane;
+    this.step = step;
+    this.#response = response;
+    response.once("close", () => {
+      if (this.#answered) return;
+      this.#answered = true;
+      if (this.#expectsCancellation) this.#cancelled.resolve();
+      else
+        onFailure(
+          `lane ${lane}, step ${step}: client closed the request before the step answered it`,
+        );
     });
   }
 
   text(text: string, options: { inputTokens?: number } = {}): void {
-    this.#complete([messageItem(this.step, text)], options.inputTokens);
+    const content = [{ type: "output_text", text, annotations: [] }];
+    const item = {
+      type: "message",
+      id: `msg_${this.step}`,
+      role: "assistant",
+      status: "completed",
+      content,
+    };
+    this.#complete([item], options.inputTokens);
   }
 
   /** Answer with tool calls; each call ID is `<step>:<index>` so tests can find its output later. */
@@ -145,14 +172,8 @@ export class ScriptedRequest {
     return this.#cancelled.promise;
   }
 
-  /** Declare that the client will cancel this request, and wait for it. */
-  cancelled(): Promise<void> {
-    this.#expectsCancellation = true;
-    return this.#cancelled.promise;
-  }
-
   status(code: number, message = "scripted failure"): void {
-    this.#outcome = { kind: "responded" };
+    this.#answered = true;
     this.#response.writeHead(code, { "content-type": "application/json" });
     this.#response.end(
       JSON.stringify({ error: { message, type: "server_error", code: String(code) } }),
@@ -160,8 +181,8 @@ export class ScriptedRequest {
   }
 
   #complete(output: readonly unknown[], inputTokens = 50): void {
-    if (this.#outcome.kind !== "pending") throw new Error(`step ${this.step} already answered`);
-    this.#outcome = { kind: "responded" };
+    if (this.#answered) throw new Error(`step ${this.step} already answered`);
+    this.#answered = true;
     this.#response.writeHead(200, { "content-type": "text/event-stream" });
     output.forEach((item, index) =>
       this.#write({ type: "response.output_item.done", output_index: index, item }),
@@ -187,27 +208,94 @@ export class ScriptedRequest {
   #write(event: unknown): void {
     this.#response.write(`data: ${JSON.stringify(event)}\n\n`);
   }
-
-  #fail(reason: string): void {
-    this.#outcome = { kind: "failed", reason };
-    this.#onFailure(`step ${this.step}: ${reason}`);
-  }
 }
 
 export type ScriptedStep = (request: ScriptedRequest) => void | Promise<void>;
 
-/**
- * A local model provider speaking the OpenAI Responses protocol over real HTTP and SSE. Tests queue named steps; each
- * incoming request takes the next step in order. Anything unplanned is recorded and fails `assertComplete()`.
- */
-export class ScriptedProvider {
+/** Decides, from its first request, whether a conversation belongs to a lane. */
+export type ScriptedClaim = (request: ScriptedRequestBody) => boolean;
+
+/** Requests in arrival order, with a way to wait for the count to reach a number. */
+class RequestLog {
   readonly requests: ScriptedRequest[] = [];
-  readonly #steps: { name: string; run: ScriptedStep }[] = [];
-  readonly #failures: string[] = [];
   readonly #waiters: { count: number; resolve: () => void }[] = [];
+
+  /** Resolve once `count` requests have arrived. */
+  received(count: number): Promise<void> {
+    if (this.requests.length >= count) return Promise.resolve();
+    const waiter = Promise.withResolvers<void>();
+    this.#waiters.push({ count, resolve: waiter.resolve });
+    return waiter.promise;
+  }
+
+  protected record(request: ScriptedRequest): void {
+    this.requests.push(request);
+    for (const waiter of this.#waiters.filter((item) => item.count <= this.requests.length))
+      waiter.resolve();
+  }
+}
+
+/**
+ * The script for one conversation of the Agent: its steps, answered in order, and the requests it received. A lane is
+ * bound to a conversation by the request's `prompt_cache_key`, which Durable keeps stable per conversation.
+ */
+export class ScriptedLane extends RequestLog {
+  readonly name: string;
+  readonly #claim: ScriptedClaim | undefined;
+  readonly #steps: { name: string; run: ScriptedStep }[] = [];
+
+  constructor(name: string, claim?: ScriptedClaim) {
+    super();
+    this.name = name;
+    this.#claim = claim;
+  }
+
+  step(name: string, run: ScriptedStep): this {
+    this.#steps.push({ name, run });
+    return this;
+  }
+
+  claims(request: ScriptedRequestBody): boolean {
+    return this.#claim?.(request) ?? true;
+  }
+
+  /** Take the next step, and the request it answers onto this lane's log. */
+  take(
+    answer: (step: string) => ScriptedRequest,
+  ): { request: ScriptedRequest; run: ScriptedStep } | undefined {
+    const next = this.#steps.shift();
+    if (next === undefined) return undefined;
+    const request = answer(next.name);
+    this.record(request);
+    return { request, run: next.run };
+  }
+
+  unusedSteps(): string[] {
+    return this.#steps.map((step) => step.name);
+  }
+}
+
+/**
+ * A local model provider speaking the OpenAI Responses protocol over real HTTP and SSE.
+ *
+ * Each conversation of the Agent (the primary conversation, each work assistant) has its own lane of named steps, so
+ * concurrent conversations cannot steal each other's steps. `step()` scripts the default lane, which takes the first
+ * conversation no declared lane claims; `lane(name, claim)` declares another, which takes the first conversation whose
+ * first request `claim` accepts. Anything unplanned (an unclaimed conversation, a request without a conversation key,
+ * a request after its lane's script ran out, an undeclared cancel) is recorded and fails `assertComplete()`, naming
+ * the lane and step.
+ */
+export class ScriptedProvider extends RequestLog {
+  readonly #default = new ScriptedLane("default");
+  readonly #lanes: ScriptedLane[] = [];
+  /** Each conversation's lane, by `prompt_cache_key`. */
+  readonly #bound = new Map<string, ScriptedLane>();
+  readonly #failures: string[] = [];
   readonly #server = createServer((request, response) => void this.#handle(request, response));
 
-  private constructor() {}
+  private constructor() {
+    super();
+  }
 
   static async start(): Promise<ScriptedProvider> {
     const provider = new ScriptedProvider();
@@ -223,23 +311,25 @@ export class ScriptedProvider {
     return `http://127.0.0.1:${port}/v1`;
   }
 
+  /** Add a step to the default lane. */
   step(name: string, run: ScriptedStep): this {
-    this.#steps.push({ name, run });
+    this.#default.step(name, run);
     return this;
   }
 
-  /** Resolve once `count` requests have arrived in total. */
-  received(count: number): Promise<void> {
-    if (this.requests.length >= count) return Promise.resolve();
-    const waiter = Promise.withResolvers<void>();
-    this.#waiters.push({ count, resolve: waiter.resolve });
-    return waiter.promise;
+  /** Declare a lane for the first conversation whose first request `claim` accepts. Lanes are tried in order. */
+  lane(name: string, claim: ScriptedClaim): ScriptedLane {
+    const lane = new ScriptedLane(name, claim);
+    this.#lanes.push(lane);
+    return lane;
   }
 
   assertComplete(): void {
     const problems = [
       ...this.#failures,
-      ...this.#steps.map((step) => `step ${step.name} was never requested`),
+      ...[this.#default, ...this.#lanes].flatMap((lane) =>
+        lane.unusedSteps().map((step) => `lane ${lane.name}, step ${step}: never requested`),
+      ),
     ];
     if (problems.length > 0) throw new Error(`Scripted provider:\n- ${problems.join("\n- ")}`);
   }
@@ -253,39 +343,55 @@ export class ScriptedProvider {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const parsed = requestBodySchema.safeParse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-    const next = this.#steps.shift();
-    if (!parsed.success || next === undefined) {
-      this.#failures.push(
-        next === undefined
-          ? "a request arrived after the script was exhausted"
-          : "a request body was not a Responses request",
-      );
-      response.writeHead(500).end();
+    const next = parsed.success
+      ? this.#plan(parsed.data, response)
+      : "a request body was not a Responses request";
+    if (typeof next === "string") {
+      this.#failures.push(next);
+      unscripted(response);
       return;
     }
-    const scripted = new ScriptedRequest(next.name, parsed.data, response, (reason) =>
-      this.#failures.push(reason),
-    );
-    this.requests.push(scripted);
-    for (const waiter of this.#waiters.filter((item) => item.count <= this.requests.length))
-      waiter.resolve();
+    this.record(next.request);
     try {
-      await next.run(scripted);
+      await next.run(next.request);
     } catch (error) {
-      this.#failures.push(
-        `step ${next.name} threw: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      if (!response.headersSent) response.writeHead(500).end();
+      const message = error instanceof Error ? error.message : String(error);
+      this.#failures.push(`lane ${next.request.lane}, step ${next.request.step}: threw ${message}`);
+      if (!response.headersSent) unscripted(response);
     }
+  }
+
+  /** Find the lane that owns the request's conversation and take its next step, or say why there is none. */
+  #plan(body: RequestBody, response: ServerResponse) {
+    const key = body.prompt_cache_key;
+    if (key === undefined) return "a request carried no prompt_cache_key, so no lane can own it";
+    const request = new ScriptedRequestBody(body);
+    const taken = new Set(this.#bound.values());
+    const lane =
+      this.#bound.get(key) ??
+      [...this.#lanes, this.#default].find((each) => !taken.has(each) && each.claims(request));
+    if (lane === undefined)
+      return `a request from an unclaimed conversation (first user text ${JSON.stringify(request.userTexts()[0])})`;
+    this.#bound.set(key, lane);
+    const failed = (reason: string) => this.#failures.push(reason);
+    return (
+      lane.take((step) => new ScriptedRequest(lane.name, step, body, response, failed)) ??
+      `lane ${lane.name}: a request arrived after its script ran out`
+    );
   }
 }
 
-function messageItem(step: string, text: string) {
-  return {
-    type: "message",
-    id: `msg_${step}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
+function outputText(output: unknown): string {
+  return typeof output === "string" ? output : JSON.stringify(output);
+}
+
+/**
+ * Answer a request the script did not plan for. A 4xx is not retried, so the failure ends the run at once and shows
+ * up in `assertComplete()`, instead of a retry storm that turns into a timeout.
+ */
+function unscripted(response: ServerResponse): void {
+  response.writeHead(400, { "content-type": "application/json" });
+  response.end(
+    JSON.stringify({ error: { message: "unscripted request", type: "invalid_request_error" } }),
+  );
 }

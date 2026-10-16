@@ -29,9 +29,6 @@ importers:
       '@mate/node-protocol':
         specifier: workspace:*
         version: link:../../packages/node-protocol
-      '@mate/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
       ws:
         specifier: 8.22.0
         version: 8.22.0
@@ -59,14 +56,16 @@ importers:
         specifier: workspace:*
         version: link:../testkit
 
+  packages/clock: {}
+
   packages/gateway:
     dependencies:
+      '@mate/clock':
+        specifier: workspace:*
+        version: link:../clock
       '@mate/node-protocol':
         specifier: workspace:*
         version: link:../node-protocol
-      '@mate/runtime':
-        specifier: workspace:*
-        version: link:../runtime
       ws:
         specifier: 8.22.0
         version: 8.22.0
@@ -98,6 +97,9 @@ importers:
       '@earendil-works/pi-durable':
         specifier: 1.1.0
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
+      '@mate/clock':
+        specifier: workspace:*
+        version: link:../clock
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -111,6 +113,9 @@ importers:
       '@earendil-works/pi-durable':
         specifier: 1.1.0
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
+      '@mate/clock':
+        specifier: workspace:*
+        version: link:../clock
       '@mate/node-protocol':
         specifier: workspace:*
         version: link:../node-protocol

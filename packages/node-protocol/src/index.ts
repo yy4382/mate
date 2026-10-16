@@ -1,0 +1,153 @@
+import { z } from "zod";
+
+// ── Shared primitives ────────────────────────────────────────────────────────
+
+const requestId = z.string().min(1).max(128);
+const nodeId = z.string().uuid();
+const agentId = z.string().min(1).max(128);
+
+// ── Tool calls ───────────────────────────────────────────────────────────────
+
+/** The workspace tools a node runs. Each is Durable's own tool of that name, executed on the node's filesystem. */
+export const ToolNameSchema = z.enum(["bash", "read", "write", "edit"]);
+export type ToolName = z.infer<typeof ToolNameSchema>;
+
+/** What a tool call ends in, as the gateway hands it to its caller. */
+export const ToolResultSchema = z.object({
+  content: z.array(z.object({ type: z.literal("text"), text: z.string() })).min(1),
+  isError: z.boolean(),
+});
+export type ToolResult = z.infer<typeof ToolResultSchema>;
+
+// ── Node → Gateway (node sends these) ────────────────────────────────────────
+
+export const NodeAuthenticateSchema = z.object({
+  type: z.literal("node.authenticate"),
+  requestId,
+  nodeId,
+  /** base64url-encoded Ed25519 signature of the challenge nonce. */
+  signature: z.string().min(1),
+});
+
+export const NodePairSchema = z.object({
+  type: z.literal("node.pair"),
+  requestId,
+  nodeId,
+  /** SPKI PEM-encoded Ed25519 public key. */
+  publicKey: z.string().min(1),
+  /** base64url-encoded Ed25519 signature of the challenge nonce. */
+  signature: z.string().min(1),
+  pairingToken: z.string().min(1),
+});
+
+export const NodePingSchema = z.object({
+  type: z.literal("node.ping"),
+  requestId,
+});
+
+export const NodeToolOutputSchema = z.object({
+  type: z.literal("node.tool.output"),
+  requestId,
+  /** Streaming text chunk; may be empty to signal progress. */
+  chunk: z.string(),
+});
+
+export const NodeToolResultSchema = ToolResultSchema.extend({
+  type: z.literal("node.tool.result"),
+  requestId,
+});
+
+export const NodeRequestSchema = z.discriminatedUnion("type", [
+  NodeAuthenticateSchema,
+  NodePairSchema,
+  NodePingSchema,
+  NodeToolOutputSchema,
+  NodeToolResultSchema,
+]);
+
+export type NodeRequest = z.infer<typeof NodeRequestSchema>;
+export type NodeAuthenticate = z.infer<typeof NodeAuthenticateSchema>;
+export type NodePair = z.infer<typeof NodePairSchema>;
+export type NodePing = z.infer<typeof NodePingSchema>;
+export type NodeToolOutput = z.infer<typeof NodeToolOutputSchema>;
+export type NodeToolResult = z.infer<typeof NodeToolResultSchema>;
+
+// ── Gateway → Node (gateway sends these) ─────────────────────────────────────
+
+export const GatewayChallengeSchema = z.object({
+  type: z.literal("gateway.challenge"),
+  /** base64url-encoded 32-byte random nonce; the node signs this. */
+  nonce: z.string().min(1),
+});
+
+export const GatewayAuthenticatedSchema = z.object({
+  type: z.literal("gateway.authenticated"),
+  requestId,
+  nodeId,
+});
+
+export const GatewayPairedSchema = z.object({
+  type: z.literal("gateway.paired"),
+  requestId,
+  nodeId,
+});
+
+export const GatewayErrorSchema = z.object({
+  type: z.literal("gateway.error"),
+  requestId: requestId.optional(),
+  code: z.enum([
+    "unknown_identity",
+    "pairing_rejected",
+    "invalid_identity",
+    "malformed_request",
+    "not_authenticated",
+  ]),
+  message: z.string(),
+});
+
+export const GatewayPongSchema = z.object({
+  type: z.literal("gateway.pong"),
+  requestId,
+});
+
+export const GatewayRunToolSchema = z.object({
+  type: z.literal("gateway.run.tool"),
+  /** Correlation ID for tool output and result frames. */
+  requestId,
+  agentId,
+  tool: ToolNameSchema,
+  arguments: z.record(z.string(), z.unknown()),
+});
+
+export const GatewayStopAgentSchema = z.object({
+  type: z.literal("gateway.stop.agent"),
+  requestId,
+  agentId,
+});
+
+export const GatewayPrepareWorkspaceSchema = z.object({
+  type: z.literal("gateway.prepare.workspace"),
+  requestId,
+  agentId,
+});
+
+export const GatewayMessageSchema = z.discriminatedUnion("type", [
+  GatewayChallengeSchema,
+  GatewayAuthenticatedSchema,
+  GatewayPairedSchema,
+  GatewayErrorSchema,
+  GatewayPongSchema,
+  GatewayRunToolSchema,
+  GatewayStopAgentSchema,
+  GatewayPrepareWorkspaceSchema,
+]);
+
+export type GatewayMessage = z.infer<typeof GatewayMessageSchema>;
+export type GatewayChallenge = z.infer<typeof GatewayChallengeSchema>;
+export type GatewayAuthenticated = z.infer<typeof GatewayAuthenticatedSchema>;
+export type GatewayPaired = z.infer<typeof GatewayPairedSchema>;
+export type GatewayError = z.infer<typeof GatewayErrorSchema>;
+export type GatewayPong = z.infer<typeof GatewayPongSchema>;
+export type GatewayRunTool = z.infer<typeof GatewayRunToolSchema>;
+export type GatewayStopAgent = z.infer<typeof GatewayStopAgentSchema>;
+export type GatewayPrepareWorkspace = z.infer<typeof GatewayPrepareWorkspaceSchema>;

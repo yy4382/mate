@@ -142,3 +142,21 @@ Agent 在 node 上的工作目录。Agent 在里面自由组织记忆、文件�
 
 **MEMORY.md**
 工作区里的一个文件，是 Agent 恢复时读的第一个入口。它只是一个约定，Mate 从不检查它。
+
+## 共用基础
+
+**时钟**（clock）
+`@mate/clock` 里的 `Clock`：读当前时间（`now`），以及睡到某个时长或某个 `AbortSignal` 中止为止（`sleep`）。所有需要时间或定时器的模块都通过它，而不是直接调用 `Date.now` 或 `setTimeout`；一个定时器就是一次带自己 signal 的 `sleep`，中止 signal 就是取消它。测试里换成**可控时钟**（`FakeClock`），由测试推进时间。
+避免：timer handle、setTimeout 包装。
+
+**工具结果**（ToolResult）
+`@mate/node-protocol` 里一次 node 工具调用的结局：纯文本内容加 `isError`。网关把它交给调用方；runtime 有自己的 `WorkspaceToolResult`，两者结构兼容，由 Agent Manager 在两边之间适配。
+
+## 测试工具
+
+**脚本化提供商**（ScriptedProvider）
+`@mate/testkit` 里扮演模型提供商的本地 HTTP 服务，按真实协议返回 SSE。测试写好命名步骤，每个请求取走下一个步骤；脚本外的请求以不可重试的错误结束，并在 `assertComplete()` 里报出。
+
+**lane**（ScriptedLane）
+脚本化提供商里一个会话自己的步骤队列。请求按 `prompt_cache_key` 归到 lane：会话的第一个请求由声明了认领条件的 lane 认领，没人认领时归默认 lane。这样主对话和工作助手并发请求时，谁先到不影响脚本。
+避免：用全局步骤顺序区分会话。

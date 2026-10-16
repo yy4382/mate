@@ -15,7 +15,13 @@
   },
   "dependencies": {
     "@earendil-works/pi-durable": "1.1.0",
+    "@mate/clock": "workspace:*",
+    "@mate/node-protocol": "workspace:*",
+    "ws": "8.22.0",
     "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1"
   },
   "peerDependencies": {
     "vitest": "5.0.1"

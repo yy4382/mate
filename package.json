@@ -10,7 +10,7 @@
     "check": "pnpm format:check && pnpm typecheck && pnpm test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "pnpm -r --parallel run typecheck",
+    "typecheck": "pnpm -r run typecheck",
     "test": "vitest run",
     "build": "pnpm -r run build"
   },
