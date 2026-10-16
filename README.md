@@ -21,7 +21,7 @@ Mate 不创建系统用户，也不提升权限。Agent 自己在命令里写了
 
 ## 现状
 
-项目正在从头重写，进度见 [重写计划](docs/rewrite/PLAN.md)。聊天 app、Agent runtime、连接器和 Agent Manager 已经完成，node 链路正在收尾；控制面进程、网页和安装包还没有，所以暂时不能部署。
+项目正在从头重写，进度见 [重写计划](docs/rewrite/PLAN.md)。聊天 app、Agent runtime、连接器、Agent Manager 和 node 链路（M1–M4）已经完成；控制面进程、网页和安装包还没有，所以暂时不能部署。
 
 - [架构](docs/rewrite/ARCHITECTURE.md)：模块划分、接口，以及设计为什么这样做。
 - [模块边界测试](docs/rewrite/MODULE_TESTS.md)：每个模块要验证哪些行为。
