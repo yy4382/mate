@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { deactivateAccount, ensureAccount, requireActor, EnsureAccountInput } from "./accounts.ts";
+import {
+  accountByExternalId,
+  deactivateAccount,
+  ensureAccount,
+  requireActor,
+  EnsureAccountInput,
+} from "./accounts.ts";
 import { ChatError, parseInput } from "./chat-error.ts";
 import {
   archiveChannel,
@@ -138,6 +144,14 @@ export class ChatApp {
    */
   ensureAccount(input: z.input<typeof EnsureAccountInput>): number {
     return this.#write(() => ensureAccount(this.#db, EnsureAccountInput.parse(input)));
+  }
+
+  /**
+   * The account `ensureAccount` created for `externalId`, active or deactivated, or undefined if there is none. Lets a
+   * caller that keeps only the external identity find the account without restating its names.
+   */
+  findAccount(externalId: string): number | undefined {
+    return this.#db.transaction("read", () => accountByExternalId(this.#db, externalId));
   }
 
   /** Deactivation is permanent. The account's messages stay readable. */

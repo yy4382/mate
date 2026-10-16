@@ -65,6 +65,11 @@ export function ensureAccount(
   return created.id;
 }
 
+/** The account created for `externalId`, active or not, if there is one. */
+export function accountByExternalId(db: ChatDatabase, externalId: string): number | undefined {
+  return db.get(AccountRow, `${SELECT_ACCOUNT} WHERE external_id = ?`, externalId)?.id;
+}
+
 /** Deactivation is permanent: the account can no longer act and is no longer notified. Its history stays. */
 export function deactivateAccount(db: ChatDatabase, account: number): void {
   if (accountById(db, account) === undefined)

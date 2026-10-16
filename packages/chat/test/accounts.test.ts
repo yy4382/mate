@@ -11,6 +11,16 @@ describe("3.1 accounts and conversations", () => {
     app.close();
   });
 
+  it("findAccount returns the account ensureAccount created for an externalId, even after deactivation", () => {
+    const app = newApp();
+    expect(app.findAccount("ext-1"), "no account before ensureAccount").toBeUndefined();
+    const id = app.ensureAccount({ externalId: "ext-1", displayName: "Alice", handle: "alice" });
+    expect(app.findAccount("ext-1")).toBe(id);
+    app.deactivateAccount(id, { requestId: rid() });
+    expect(app.findAccount("ext-1"), "a deactivated account is still found").toBe(id);
+    app.close();
+  });
+
   it("a public channel can be read without joining but cannot be written to by a non-member", () => {
     const { app, alice, bob } = newAppWithTwo();
     const channel = app.createChannel(alice, {
