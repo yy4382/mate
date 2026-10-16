@@ -22,17 +22,23 @@ export type TestAgent = {
   open(options?: {
     onFatal?: (error: unknown) => void;
     chat?: ChatPort;
+    /** Read at every model request; defaults to a fixed key. */
+    apiKey?: () => string;
   }): Promise<{ runtime: AgentRuntime; database: () => FaultyDatabase }>;
 };
 
-/** A created Agent store, a scripted provider, and a fake workspace, all cleaned up after the test. */
+/**
+ * A created Agent store, a scripted provider, and a fake workspace, all cleaned up after the test. Pass `provider` to
+ * let several Agents share one provider, each conversation on its own lane.
+ */
 export async function testAgent(
   settings: AgentSettings = defaultSettings,
-  clock?: Clock,
+  options: { clock?: Clock; provider?: ScriptedProvider } = {},
 ): Promise<TestAgent> {
+  const { clock } = options;
   const file = join(temporaryDirectory(), "agents", "agent-1.sqlite");
-  const provider = await ScriptedProvider.start();
-  onTestFinished(() => provider.close());
+  const provider = options.provider ?? (await ScriptedProvider.start());
+  if (options.provider === undefined) onTestFinished(() => provider.close());
   const workspace = new FakeWorkspace();
   const catalog = builtinModels();
   await createAgentStore(file, settings);
@@ -44,7 +50,7 @@ export async function testAgent(
       let database: FaultyDatabase | undefined;
       const runtime = await openAgentRuntime({
         file,
-        apiKey: () => "test-key",
+        apiKey: options.apiKey ?? (() => "test-key"),
         workspace,
         resolveModel: ({ provider: name, modelId }) => {
           const model = catalog.getModel(name, modelId);
@@ -66,4 +72,17 @@ export async function testAgent(
       };
     },
   };
+}
+
+/** `promise`, or a rejection naming `what` if it has not settled within `ms`: a hang fails fast and says where. */
+export async function within<T>(ms: number, what: string, promise: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

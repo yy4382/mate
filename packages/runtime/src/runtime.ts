@@ -45,7 +45,10 @@ export type AgentRuntimeOptions = {
 export type WhenBusy = "steer" | "followUp";
 
 export type SubmittedInput = {
-  /** Resolves when the input was answered, or will never be (withdrawn, aborted, or failed). */
+  /**
+   * Resolves when the input was answered, or will never be (withdrawn, aborted, or its run failed). Rejects if this
+   * runtime closes or its storage fails first: the input is then still stored, and its work resumes on reopen.
+   */
   settled(): Promise<"done" | "unanswered">;
 };
 
@@ -150,7 +153,10 @@ export class AgentRuntime {
       },
       BACKGROUND_CONTEXT,
     );
-    return { settled: async () => (await submission.wait(BACKGROUND_CONTEXT)).status };
+    return {
+      settled: async () =>
+        (await this.#lifetime.orFailure(submission.wait(BACKGROUND_CONTEXT))).status,
+    };
   }
 
   /** Withdraw the input admitted under `requestId`, if the model has not seen it yet. */
@@ -215,9 +221,9 @@ export class AgentRuntime {
     }, BACKGROUND_CONTEXT);
   }
 
-  /** Resolves when no work is running or queued. */
+  /** Resolves when no work is running or queued. Rejects once the runtime is closed or dead. */
   idle(): Promise<void> {
-    return this.#harness.waitForIdle(BACKGROUND_CONTEXT);
+    return this.#lifetime.orFailure(this.#harness.waitForIdle(BACKGROUND_CONTEXT));
   }
 
   async usage() {

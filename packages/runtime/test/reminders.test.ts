@@ -5,7 +5,7 @@ import { defaultSettings, testAgent } from "./support.ts";
 describe("reminders", () => {
   it("delivers a reminder that comes due while the Agent is idle", async () => {
     const clock = new FakeClock();
-    const agent = await testAgent(defaultSettings, clock);
+    const agent = await testAgent(defaultSettings, { clock });
     let reminderText: string | undefined;
     agent.provider
       .step("set", (request) => {
@@ -31,7 +31,7 @@ describe("reminders", () => {
 
   it("delivers an overdue reminder as soon as the Agent is reopened", async () => {
     const clock = new FakeClock();
-    const agent = await testAgent(defaultSettings, clock);
+    const agent = await testAgent(defaultSettings, { clock });
     agent.provider
       .step("set", (request) => {
         request.call([
@@ -60,7 +60,7 @@ describe("reminders", () => {
 
   it("never delivers a reminder a second time after the process died before it was cleared", async () => {
     const clock = new FakeClock();
-    const agent = await testAgent(defaultSettings, clock);
+    const agent = await testAgent(defaultSettings, { clock });
     agent.provider
       .step("set", (request) => {
         request.call([
@@ -99,7 +99,7 @@ describe("reminders", () => {
 
   it("never delivers a cancelled reminder", async () => {
     const clock = new FakeClock();
-    const agent = await testAgent(defaultSettings, clock);
+    const agent = await testAgent(defaultSettings, { clock });
     agent.provider
       .step("set", (request) => {
         request.call([
@@ -127,7 +127,7 @@ describe("reminders", () => {
 
   it("delivers a reminder that comes due mid-run as a steer, without starting a second run", async () => {
     const clock = new FakeClock();
-    const agent = await testAgent(defaultSettings, clock);
+    const agent = await testAgent(defaultSettings, { clock });
     agent.provider
       .step("set and work", (request) => {
         request.call([

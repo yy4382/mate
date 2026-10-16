@@ -196,7 +196,7 @@ interface AgentRuntime {
   withdraw(requestId) // 撤回尚未交给模型的提交
   cursor(name) / advanceCursor(name, value) // 环境在某个来源里的位置，只进不退；连接器用 "chat-inbox"
   configure(settings) // 模型、thinking 级别、说明文字；从下一次请求起生效
-  idle() // 没有进行中、也没有排队的工作时返回
+  idle() // 没有进行中、也没有排队的工作时返回；runtime 已关闭或存储已失败时 reject
   usage()
   close() // 中止所有进行中的工作，然后关闭 Harness
   // 给管理界面观察的 view() / watchEvents() 还没有实现，属于 M6

@@ -147,10 +147,9 @@ export class ScriptedRequest extends ScriptedRequestBody {
     return ids;
   }
 
-  /** Start streaming a tool call and never finish it; the client must cancel. */
-  partialCall(name: string, argumentsPrefix: string): void {
-    this.#expectsCancellation = true;
-    this.#response.writeHead(200, { "content-type": "text/event-stream" });
+  /** Start streaming a tool call and never finish it; the client must cancel. Resolves once it does. */
+  partialCall(name: string, argumentsPrefix: string): Promise<void> {
+    this.#startStream();
     const item = {
       type: "function_call",
       id: `fc_${this.step}`,
@@ -164,6 +163,27 @@ export class ScriptedRequest extends ScriptedRequestBody {
       output_index: 0,
       delta: argumentsPrefix,
     });
+    return this.#cancelled.promise;
+  }
+
+  /** Start streaming a text answer and never finish it; the client must cancel. Resolves once it does. */
+  partialText(prefix: string): Promise<void> {
+    this.#startStream();
+    const item = { type: "message", id: `msg_${this.step}`, role: "assistant", content: [] };
+    this.#write({ type: "response.output_item.added", output_index: 0, item });
+    this.#write({
+      type: "response.content_part.added",
+      output_index: 0,
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    });
+    this.#write({
+      type: "response.output_text.delta",
+      output_index: 0,
+      content_index: 0,
+      delta: prefix,
+    });
+    return this.#cancelled.promise;
   }
 
   /** Never answer; the client must cancel. Resolves once it does. */
@@ -203,6 +223,11 @@ export class ScriptedRequest extends ScriptedRequestBody {
       },
     });
     this.#response.end();
+  }
+
+  #startStream(): void {
+    this.#expectsCancellation = true;
+    this.#response.writeHead(200, { "content-type": "text/event-stream" });
   }
 
   #write(event: unknown): void {

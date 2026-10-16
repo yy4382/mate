@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { ScriptedProvider } from "@mate/testkit";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { testChat } from "./test-chat.ts";
-import { testAgent, text } from "./support.ts";
+import { defaultSettings, testAgent, text } from "./support.ts";
 
 describe("agent loop", () => {
   it("answers an input through the model and posts its final text nowhere", async () => {
@@ -134,5 +135,55 @@ describe("agent loop", () => {
     expect(await steered.settled()).toBe("done");
     await runtime.idle();
     agent.provider.assertComplete();
+  });
+
+  it("keeps two Agents' contexts apart: each sees only its own inputs and tool results", async () => {
+    const provider = await ScriptedProvider.start();
+    onTestFinished(() => provider.close());
+    const alice = await testAgent(defaultSettings, { provider });
+    const bob = await testAgent(defaultSettings, { provider });
+    alice.workspace.answerAll(() => text("alice-output"));
+    bob.workspace.answerAll(() => text("bob-output"));
+    const asks = (who: string) => (request: { userTexts(): string[] }) =>
+      request.userTexts()[0]?.startsWith(who) ?? false;
+    const script = (lane: ReturnType<ScriptedProvider["lane"]>, who: string) =>
+      lane
+        .step(
+          `${who} lists`,
+          (request) => void request.call([{ name: "bash", arguments: { command: "ls" } }]),
+        )
+        .step(`${who} answers`, (request) => request.text(`${who} is done`))
+        .step(`${who} answers again`, (request) => request.text(`${who} again`));
+    script(provider.lane("alice", asks("alice")), "alice");
+    script(provider.lane("bob", asks("bob")), "bob");
+    const [a, b] = await Promise.all([alice.open(), bob.open()]);
+
+    await Promise.all([
+      (await a.runtime.submit("alice: secret one", { requestId: "m1" })).settled(),
+      (await b.runtime.submit("bob: secret two", { requestId: "m1" })).settled(),
+    ]);
+    await Promise.all([
+      (await a.runtime.submit("alice: more", { requestId: "m2" })).settled(),
+      (await b.runtime.submit("bob: more", { requestId: "m2" })).settled(),
+    ]);
+
+    for (const who of ["alice", "bob"]) {
+      const other = who === "alice" ? "bob" : "alice";
+      const requests = provider.requests.filter((request) => request.lane === who);
+      const last = requests.at(-1);
+      expect(last?.userTexts(), `${who} sees her own inputs, in order`).toEqual([
+        `${who}: secret ${who === "alice" ? "one" : "two"}`,
+        `${who}: more`,
+      ]);
+      expect(last?.toolOutputs(), `${who} sees her own tool result`).toEqual([
+        expect.stringContaining(`${who}-output`),
+      ]);
+      for (const request of requests)
+        expect(
+          JSON.stringify(request.body.input),
+          `${who} never sees ${other}'s input, tool result or answer`,
+        ).not.toContain(other);
+    }
+    provider.assertComplete();
   });
 });

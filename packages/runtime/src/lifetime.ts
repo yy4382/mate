@@ -27,6 +27,19 @@ export class Lifetime {
     return this.#failed.promise;
   }
 
+  /**
+   * `work`, unless the runtime fails first; then a rejection with the storage error. A failed Harness never settles its
+   * waits, so every wait the runtime hands out goes through here.
+   */
+  orFailure<T>(work: Promise<T>): Promise<T> {
+    return Promise.race([
+      work,
+      this.#failed.promise.then((error) => {
+        throw error;
+      }),
+    ]);
+  }
+
   end(): void {
     this.#controller.abort(new Error("Agent runtime closed"));
   }
