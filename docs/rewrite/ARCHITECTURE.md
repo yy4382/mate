@@ -108,8 +108,16 @@ interface ChatApp {
   join / leave / openDm / invite(account, ..., { requestId })
   // 给连接器用：读某个账号在某个事件 ID 之后的收件事件
   inboxEvents(account, { after, limit })
-  // 给通知用：该账号当前的未读摘要
-  unreadSummary(account): { total, mentions, perTimeline: [...] }
+  // 给连接器用：收件信号。每个提交后追加了收件事件的写操作触发一次，参数是收到事件的账号（去重）。
+  // 只在事务提交之后触发；回滚、被拦下的发送、按 requestId 返回回执的重复调用都不触发。
+  // 监听者抛错不影响写操作，也不影响其他监听者。返回取消订阅的函数。
+  watchInbox(listener: (accounts) => void): () => void
+  // 给通知用：该账号当前的未读摘要。每条时间线带上渲染通知所需的一切，连接器不必再查。
+  unreadSummary(account): {
+    total, mentions,
+    timelines: [{ conversationId, timeline, kind, label, inThread, unread, mentioned, latestSender }]
+    // kind：public | private | dm；label：频道名，私信为对方的 handle；latestSender：最新一条未读的发送者 handle
+  }
   // 账号管理，给 Agent Manager 用；以 externalId 幂等
   ensureAccount({ externalId, displayName, handle }): AccountId
   deactivateAccount(account)

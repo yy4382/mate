@@ -18,6 +18,8 @@ import { readForward, DEFAULT_BUDGET, Budget, ReadPage } from "./forward-reading
 import { Id, RequestId } from "./identifiers.ts";
 import {
   inboxEvents,
+  inboxMark,
+  notifiedSince,
   unreadSummary,
   InboxQuery,
   type InboxEvent,
@@ -44,6 +46,9 @@ export type { SendResult, SentMessage, HeldMessage } from "./send.ts";
 export type { Task, TaskResult } from "./tasks.ts";
 export type { TimelineRef } from "./timelines.ts";
 
+/** Told which accounts just received inbox events. */
+export type InboxListener = (accounts: readonly number[]) => void;
+
 /** The requestId every write carries, plus whatever else that write needs. */
 const WithRequest = { requestId: RequestId };
 const ChannelRequest = z.object({ ...WithRequest, ...ChannelInput.shape });
@@ -67,6 +72,7 @@ function stableHash(content: unknown): string {
  */
 export class ChatApp {
   readonly #db: ChatDatabase;
+  readonly #inboxListeners = new Set<InboxListener>();
 
   constructor(file: string) {
     this.#db = new ChatDatabase(file);
@@ -83,7 +89,7 @@ export class ChatApp {
     result: S,
     work: () => z.output<S>,
   ): z.output<S> {
-    return this.#db.transaction("write", () =>
+    return this.#write(() =>
       idempotent(
         this.#db,
         account,
@@ -96,6 +102,33 @@ export class ChatApp {
     );
   }
 
+  /**
+   * The only way a write transaction is opened. It notes the newest inbox event before `work` and, after the
+   * commit, signals the accounts that received events since. Watching the inbox table rather than each place that
+   * appends to it means no write path can append events without signalling, and a rollback, a held send or a
+   * replayed receipt appends none, so it signals nothing.
+   */
+  #write<T>(work: () => T): T {
+    const { result, notified } = this.#db.transaction("write", () => {
+      const mark = inboxMark(this.#db);
+      const result = work();
+      return { result, notified: notifiedSince(this.#db, mark) };
+    });
+    if (notified.length > 0) this.#signalInbox(notified);
+    return result;
+  }
+
+  #signalInbox(accounts: readonly number[]): void {
+    for (const listener of [...this.#inboxListeners]) {
+      try {
+        listener(accounts);
+      } catch (error) {
+        // The write has committed; a failing listener must neither undo it nor starve the others.
+        console.error("chat inbox listener failed", error);
+      }
+    }
+  }
+
   // ── Accounts ────────────────────────────────────────────────────────────────
 
   /**
@@ -104,9 +137,7 @@ export class ChatApp {
    * receipt on, and the caller's stable identity for the account is already the natural key.
    */
   ensureAccount(input: z.input<typeof EnsureAccountInput>): number {
-    return this.#db.transaction("write", () =>
-      ensureAccount(this.#db, EnsureAccountInput.parse(input)),
-    );
+    return this.#write(() => ensureAccount(this.#db, EnsureAccountInput.parse(input)));
   }
 
   /** Deactivation is permanent. The account's messages stay readable. */
@@ -261,6 +292,18 @@ export class ChatApp {
     return this.#db.transaction("read", () =>
       inboxEvents(this.#db, actor.id, parseInput(InboxQuery, query ?? {})),
     );
+  }
+
+  /**
+   * Call `listener` after every committed write that appended inbox events, with the distinct accounts that
+   * received them. Inside the listener those events and their messages are already readable. Returns unsubscribe.
+   */
+  watchInbox(listener: InboxListener): () => void {
+    const entry: InboxListener = (accounts) => listener(accounts);
+    this.#inboxListeners.add(entry);
+    return () => {
+      this.#inboxListeners.delete(entry);
+    };
   }
 
   /** Unread counts per timeline for the account, for the connector's notice. */

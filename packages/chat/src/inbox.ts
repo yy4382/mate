@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
+import { ConversationKind } from "./conversations.ts";
 import { Id } from "./identifiers.ts";
 import { TimelineRef, timelineRefOf, type Timeline } from "./timelines.ts";
 
@@ -51,6 +52,25 @@ export function notifyMessage(
       timeline.conversation.id,
     );
   }
+}
+
+const Mark = z.object({ mark: z.number() });
+const Notified = z.object({ account_id: Id });
+
+/** The newest inbox event ID so far; event IDs are never reused, so every later event lies above it. */
+export function inboxMark(db: ChatDatabase): number {
+  return db.get(Mark, "SELECT coalesce(max(id), 0) AS mark FROM inbox_events")?.mark ?? 0;
+}
+
+/** The distinct accounts that received an inbox event after `mark`, in account order. */
+export function notifiedSince(db: ChatDatabase, mark: number): number[] {
+  return db
+    .all(
+      Notified,
+      "SELECT DISTINCT account_id FROM inbox_events WHERE id > ? ORDER BY account_id",
+      mark,
+    )
+    .map((row) => row.account_id);
 }
 
 export const InboxEvent = z.object({
@@ -124,8 +144,14 @@ export const UnreadSummary = z.object({
     z.object({
       conversationId: Id,
       timeline: TimelineRef,
+      kind: ConversationKind,
+      /** The channel's name; for a DM, the handle of the other member (both, comma-separated, for a non-member). */
+      label: z.string(),
+      inThread: z.boolean(),
       unread: z.number(),
       mentioned: z.boolean(),
+      /** Handle of the author of the newest unread entry. */
+      latestSender: z.string(),
     }),
   ),
 });
@@ -134,8 +160,11 @@ export type UnreadSummary = z.output<typeof UnreadSummary>;
 const SummaryRow = z.object({
   conversation_id: Id,
   root_entry_id: Id.nullable(),
+  kind: ConversationKind,
+  label: z.string(),
   unread: z.number(),
   mentions: z.number(),
+  latest_sender: z.string(),
 });
 
 /**
@@ -161,11 +190,19 @@ export function unreadSummary(db: ChatDatabase, actor: Actor): UnreadSummary {
            OR EXISTS (SELECT 1 FROM entries e JOIN mentions mn ON mn.entry_id = e.id
                       WHERE e.timeline_id = t.id AND mn.account_id = ?1))
      )
-     SELECT f.conversation_id, f.root_entry_id,
+     SELECT f.conversation_id, f.root_entry_id, c.kind,
+       CASE WHEN c.kind = 'dm'
+         THEN (SELECT group_concat(handle, ', ') FROM (SELECT a.handle FROM accounts a
+               WHERE a.id IN (c.dm_low, c.dm_high) AND a.id <> ?1 ORDER BY a.id))
+         ELSE c.name END AS label,
+       -- Every row has an unread entry by others, so the newest entry by others is an unread one.
+       (SELECT a.handle FROM entries le JOIN accounts a ON a.id = le.author_id
+        WHERE le.timeline_id = f.id AND le.author_id <> ?1 ORDER BY le.seq DESC LIMIT 1) AS latest_sender,
        count(e.id) AS unread,
        count(e.id) FILTER (WHERE EXISTS
          (SELECT 1 FROM mentions mn WHERE mn.entry_id = e.id AND mn.account_id = ?1)) AS mentions
      FROM followed f
+     JOIN conversations c ON c.id = f.conversation_id
      JOIN entries e ON e.timeline_id = f.id AND e.author_id <> ?1
        AND e.seq > coalesce((SELECT seq FROM read_positions r WHERE r.account_id = ?1 AND r.timeline_id = f.id), 0)
      GROUP BY f.id ORDER BY f.id`,
@@ -179,8 +216,12 @@ export function unreadSummary(db: ChatDatabase, actor: Actor): UnreadSummary {
     timelines: rows.map((row) => ({
       conversationId: row.conversation_id,
       timeline: timelineRefOf(row),
+      kind: row.kind,
+      label: row.label,
+      inThread: row.root_entry_id !== null,
       unread: row.unread,
       mentioned: row.mentions > 0,
+      latestSender: row.latest_sender,
     })),
   };
 }
