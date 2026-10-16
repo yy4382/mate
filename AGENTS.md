@@ -1,6 +1,6 @@
 # Mate
 
-- Read `docs/rewrite/ARCHITECTURE.md` before any design or code change. Read `docs/rewrite/MODULE_TESTS.md` before writing tests.
+- Read `docs/rewrite/ARCHITECTURE.md` before any design or code change. Read `docs/rewrite/MODULE_TESTS.md` before writing tests, and `docs/rewrite/WORKFLOW.md` before any implementation task.
 - Name things with the terms in `GLOSSARY.md`; add a term there when you introduce a new concept.
 - Tests drive a module only through its public interface and assert only what that interface exposes. Unit tests are out of scope.
 - Fix a recurring class of bug by changing the structure until it cannot occur, not by adding a guard for one case.
