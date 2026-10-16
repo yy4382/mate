@@ -80,6 +80,25 @@ importers:
         specifier: 8.18.1
         version: 8.18.1
 
+  packages/manager:
+    dependencies:
+      '@mate/chat':
+        specifier: workspace:*
+        version: link:../chat
+      '@mate/clock':
+        specifier: workspace:*
+        version: link:../clock
+      '@mate/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+    devDependencies:
+      '@earendil-works/pi-ai':
+        specifier: 1.1.0
+        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
+      '@mate/testkit':
+        specifier: workspace:*
+        version: link:../testkit
+
   packages/node-protocol:
     dependencies:
       zod:

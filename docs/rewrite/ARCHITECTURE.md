@@ -120,7 +120,8 @@ interface ChatApp {
   }
   // 账号管理，给 Agent Manager 用；以 externalId 幂等
   ensureAccount({ externalId, displayName, handle }): AccountId
-  deactivateAccount(account)
+  findAccount(externalId): AccountId | undefined // 只读；停用的账号也能找到。Manager 打开 Agent 时用它找账号，不另存账号 ID
+  deactivateAccount(account, { requestId })
 }
 ```
 
@@ -212,16 +213,19 @@ setAgentPaused(file, paused)
 **流程：**
 
 1. 从上次处理到的事件 ID 往后读这个账号的收件事件。这个位置存在 runtime 的 Durable 文档里。
-2. 有新事件时，向聊天 app 要这个账号当前的未读摘要，生成一条通知：
+2. 有新事件时，向聊天 app 要这个账号当前的未读摘要，生成一条通知。每行带上聊天工具接受的 timeline 参数，模型可以照抄去读；时间点带日期和时区，因为模型没有别的时钟：
    ```
-   截至 14:32:05，至少有 7 条未读（其中 2 条 @ 了你），分布在 3 处，之后可能还有更多：
-   #general        至少 4 条 · 最新发送者 @richard · @了你
-   #general/讨论串 3f2a  至少 2 条 · 最新发送者 @lin
-   私信 @所有者     至少 1 条
-   通知只是提示，可能已过时；需要时用读取工具查看。什么时候读由你决定。
+   截至 2026-01-01 14:32:05 UTC，至少有 7 条未读（其中 2 条 @ 了你），分布在 3 处，之后可能还有更多：
+   #general {"conversation":1} 至少 4 条 · 最新发送者 @richard · @了你
+   #general/讨论串 {"thread":42} 至少 2 条 · 最新发送者 @lin
+   私信 @owner {"conversation":5} 至少 1 条 · 最新发送者 @owner
+   通知只是提示，可能已过时；需要时用 chat_read_unread 读取，每行花括号里就是它要的 timeline。什么时候读由你决定。
    ```
+   如果这些事件对应的消息都已经读过（摘要为空），不提交通知，只推进事件位置。
 3. 提交时 `requestId = notice:<最新事件 ID>`，`whenBusy = "steer"`，`replaces = "notice:"`：Agent 正在运行时，通知插在当前这轮工具调用之后；收件箱里还没交给模型的旧通知先被撤回。哪些通知还没交付由 Durable 的提交记录决定，连接器不另记，所以崩溃后重来也最多只有一条未交付的通知。撤回时如果那条恰好已经交给了模型，就照常提交新的。
 4. 把事件位置推进到最新事件 ID（`advanceCursor("chat-inbox", …)`）。
+
+连接器在打开时跑一遍，之后每收到一次这个账号的收件信号跑一遍。同一时间只跑一遍：跑的过程中来的信号，不管几个，都只让它结束后再跑一遍，这一遍读到期间到达的全部事件。一遍出错只报告，事件位置不动，下一个信号重来。runtime 关闭前，Manager 先停掉连接器（取消订阅并等这一遍跑完）。连接器由 `@mate/manager` 的 `connectInbox` 实现，它只需要 runtime 的 `cursor`、`advanceCursor` 和 `submit`。
 
 **为什么不会丢、不会重复：** 第 3 步和第 4 步之间崩溃的话，重启后会重新处理同一批事件，生成同一个 `requestId`；`replaces` 不撤回与这次 `requestId` 相同的那条，Durable 去重。整个流程里没有跨库事务，也不需要。
 
@@ -234,13 +238,17 @@ setAgentPaused(file, paused)
 **对外接口：**
 
 ```ts
+openAgentManager({ directory, chat, workspaces, apiKey, resolveModel?, clock?, report? }): AgentManager
+// workspaces: WorkspaceHost { prepare(agentId), port(agentId): WorkspacePort }
+// report(error, agentId)：打不开的 Agent、出错的连接器、存储失败的 runtime 都报告到这里，不让进程崩溃
 interface AgentManager {
-  list(): AgentSummary[]
-  create(spec): AgentId
-  delete(id)
+  list(): { agentId, open }[] // 就是目录里的 <agentId>.sqlite
+  create({ agentId?, displayName, handle, settings }): AgentId // 失败时抛 AgentCreationFailed，带上 agentId
+  delete(id) // 关闭 runtime，停用聊天账号，删除文件
   pause(id) // 关闭 runtime，在 Agent 文件里记下"已暂停"
   resume(id) // 清除"已暂停"，打开 runtime
   runtime(id): AgentRuntime | undefined // 已打开时返回
+  close() // 关闭所有 runtime
 }
 ```
 
@@ -255,7 +263,9 @@ interface AgentManager {
    3. 让 node 创建工作目录；
    4. 在临时文件里初始化 Durable 存储，再改名为正式文件。
 
-   中途失败了，重做一遍即可。改名是最后一步，所以 Agent 要么完整存在，要么不存在。
+   中途失败了，重做一遍即可。改名是最后一步，所以 Agent 要么完整存在，要么不存在。`create` 失败时抛出的 `AgentCreationFailed` 带着这次的 Agent ID，调用方把它作为 `agentId` 传回 `create` 重做：每一步都可以重复（账号以 `externalId` 幂等、工作区准备幂等、文件已存在就跳过），所以得到的还是同一个 Agent、一个账号、一个文件。不带 `agentId` 重做会生成新 ID，而旧 ID 的账号仍占着 handle，所以重做必须带上它。目录里只有名字正好是 `<UUID>.sqlite` 的文件才算 Agent，临时文件（`.creating`）和 SQLite 的附属文件都不算。
+5. **打开一个 Agent：** 读它的"已暂停"，暂停了就不打开；用 `chat.findAccount(agentId)` 找到它的账号，把 `ChatApp` 绑定到这个账号作为聊天端口；打开 runtime，再挂上连接器。
+6. **删除的顺序：** 关闭 runtime，停用聊天账号，最后删除文件。删除中途失败，Agent 仍然存在，重做一遍即可。
 
 ### 4.5 Node 网关与 Node
 

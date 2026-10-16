@@ -1,0 +1,25 @@
+{
+  "name": "@mate/manager",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "mate-source": "./src/index.ts",
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mate/chat": "workspace:*",
+    "@mate/clock": "workspace:*",
+    "@mate/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.1.0",
+    "@mate/testkit": "workspace:*"
+  }
+}

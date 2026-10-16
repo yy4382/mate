@@ -140,6 +140,9 @@ Agent 给自己设定的定时输入，保存在它自己的存储文件里，�
 **node**
 以宿主机现有账号运行的执行进程，由 `mate node` CLI 管理成 systemd 用户服务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
 
+**工作区宿主**（WorkspaceHost）
+Agent Manager 看到的"工作区在哪里"：为一个 Agent 准备工作区（可以重复调用），以及给出这个 Agent 的工作区端口（`WorkspacePort`）。由 node 网关实现；测试里用假的。
+
 **node 网关**（node gateway）
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
 
