@@ -11,7 +11,8 @@
 | `packages/chat`（`@mate/chat`） | 聊天 app |
 | `packages/runtime`（`@mate/runtime`） | Agent runtime 及其扩展 |
 | `packages/manager`（`@mate/manager`） | Agent Manager 和连接器 |
-| `packages/node-protocol`（`@mate/node-protocol`） | 网关与 node 之间的消息格式 |
+| `packages/node-protocol`（`@mate/node-protocol`） | 网关与 node 之间的消息格式，包括工具名和工具结果的形状 |
+| `packages/clock`（`@mate/clock`） | 时钟：`now` 和可中止的 `sleep`，各模块共用，测试里换成可控时钟 |
 | `packages/gateway`（`@mate/gateway`） | node 网关 |
 | `packages/admin`（`@mate/admin`） | 管理模块 |
 | `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |

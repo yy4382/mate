@@ -268,6 +268,7 @@ interface NodeGateway {
   prepareWorkspace(nodeId, agentId): WorkspacePath
   browse(nodeId, agentId, path) // 管理界面浏览工作区，只读
   status(nodeId): online | offline
+  nodes() // 所有已配对 node 及其在线状态，给管理界面用
 }
 ```
 

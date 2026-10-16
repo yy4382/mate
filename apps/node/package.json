@@ -1,0 +1,30 @@
+{
+  "name": "@mate/node",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "mate-source": "./src/index.ts",
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "bin": {
+    "mate-node": "./dist/src/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-durable": "1.1.0",
+    "@mate/node-protocol": "workspace:*",
+    "ws": "8.22.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1",
+    "@mate/gateway": "workspace:*",
+    "@mate/testkit": "workspace:*"
+  }
+}
