@@ -16,23 +16,21 @@ export function notifyMessage(
 ): void {
   const { timeline } = message;
   if (timeline.rootEntryId === null) {
-    // Top-level message: notify all members except the author
+    // Top-level message: every other active member of the conversation. Membership already implies
+    // the right to read, so this needs no further visibility test.
     db.run(
       `INSERT INTO inbox_events (account_id, entry_id)
        SELECT a.id, ? FROM accounts a
-       WHERE a.id IN (SELECT account_id FROM memberships WHERE conversation_id = ?)
-         AND a.id <> ? AND a.active = 1
-         AND (a.role = 'owner' OR ? = 'public' OR a.id IN
-           (SELECT account_id FROM memberships WHERE conversation_id = ?))
+       JOIN memberships m ON m.account_id = a.id AND m.conversation_id = ?
+       WHERE a.id <> ? AND a.active = 1
        ORDER BY a.id`,
       message.entryId,
       timeline.conversation.id,
       message.author,
-      timeline.conversation.kind,
-      timeline.conversation.id,
     );
   } else {
-    // Thread reply: notify thread participants and mentioned accounts
+    // Thread reply: the thread's participants and everyone it mentions, but only while they can still
+    // read the conversation — a participant who has left a private channel is not told about it again.
     db.run(
       `INSERT INTO inbox_events (account_id, entry_id)
        SELECT a.id, ? FROM accounts a

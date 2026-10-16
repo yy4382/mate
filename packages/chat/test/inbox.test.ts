@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newAppWithTwo, rid } from "./support.ts";
+import { newAppWithOwner, newAppWithTwo, rid } from "./support.ts";
 
 describe("3.6 inbox events and unread summary", () => {
   it("a top-level message generates one inbox event per member except the author", () => {
@@ -16,6 +16,20 @@ describe("3.6 inbox events and unread summary", () => {
     expect(app.inboxEvents(bob).length).toBe(1);
     expect(app.inboxEvents(charlie).length).toBe(1);
     expect(app.inboxEvents(alice).length).toBe(0); // author not notified
+    app.close();
+  });
+
+  it("the owner is not notified of top-level messages in channels it never joined", () => {
+    const { app, ownerId } = newAppWithOwner();
+    const alice = app.ensureAccount({
+      externalId: "alice-ext",
+      displayName: "Alice",
+      handle: "alice",
+    });
+    const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
+    app.send(alice, { conversation: channel.conversationId }, { requestId: "s1", body: "hello" });
+    // The owner can read every conversation, but is only told about the ones it belongs to.
+    expect(app.inboxEvents(ownerId)).toEqual([]);
     app.close();
   });
 

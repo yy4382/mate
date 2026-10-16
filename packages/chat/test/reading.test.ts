@@ -60,6 +60,20 @@ describe("3.3 reading", () => {
     app.close();
   });
 
+  it("search treats % and _ as literal characters rather than LIKE wildcards", () => {
+    const { app, alice, bob } = newAppWithTwo();
+    const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
+    app.join(bob, { requestId: rid(), conversationId: channel.conversationId });
+    app.send(alice, { conversation: channel.conversationId }, { requestId: "s1", body: "plain" });
+    app.send(alice, { conversation: channel.conversationId }, { requestId: "s2", body: "50% off" });
+    const bodies = (query: string) =>
+      app.search(bob, query).flatMap((entry) => (entry.kind === "message" ? [entry.body] : []));
+    expect(bodies("%")).toEqual(["50% off"]);
+    expect(bodies("_")).toEqual([]);
+    expect(bodies("50% off")).toEqual(["50% off"]);
+    app.close();
+  });
+
   it("readUnread with the same requestId returns the same page even if new messages arrived", () => {
     const { app, alice, bob } = newAppWithTwo();
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });

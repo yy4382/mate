@@ -1,13 +1,12 @@
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
 import { ChatError } from "./chat-error.ts";
-import { readableConversation, requireWritable } from "./conversations.ts";
+import { requireWritable, type Conversation } from "./conversations.ts";
 import type { ChatDatabase } from "./database.ts";
 import { Attachment, loadEntries, appendEntry } from "./entries.ts";
 import { FreshnessOptions, ReadPage, freshWrite } from "./forward-reading.ts";
 import { Id, RequestId } from "./identifiers.ts";
 import { notifyMessage } from "./inbox.ts";
-import { readableConversation as _rc, type Conversation } from "./conversations.ts";
 import { TimelineRef, createTimeline, resolveTimeline } from "./timelines.ts";
 import { insertTask, TaskTitle, type Task } from "./tasks.ts";
 import type { Entry } from "./entries.ts";
@@ -117,19 +116,21 @@ export function readHistory(
 
 const SearchHit = z.object({ entry_id: Id, timeline_id: Id });
 
-/** Full-text keyword search: all messages whose body contains `query` in any timeline `actor` can read. */
+/** A LIKE pattern that matches `query` literally, so `%` and `_` are ordinary characters. */
+const likeContains = (query: string): string => `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+
+/** Keyword search: messages whose body contains `query` literally, in any timeline `actor` can read. */
 export function search(db: ChatDatabase, actor: Actor, query: string): Entry[] {
-  const q = `%${query}%`;
   const hits = db.all(
     SearchHit,
     `SELECT e.id AS entry_id, e.timeline_id FROM entries e
      JOIN timelines t ON t.id = e.timeline_id
      JOIN conversations c ON c.id = t.conversation_id
-     WHERE e.kind = 'message' AND e.body LIKE ?
+     WHERE e.kind = 'message' AND e.body LIKE ? ESCAPE '\\'
        AND (? = 1 OR c.kind = 'public'
          OR EXISTS (SELECT 1 FROM memberships m WHERE m.conversation_id = c.id AND m.account_id = ?))
      ORDER BY e.id`,
-    q,
+    likeContains(query),
     actor.owner ? 1 : 0,
     actor.id,
   );
@@ -137,8 +138,6 @@ export function search(db: ChatDatabase, actor: Actor, query: string): Entry[] {
     db,
     `e.id IN (SELECT value FROM json_each(?))`,
     "e.seq",
-    hits.map((hit) => hit.entry_id).join(",") === ""
-      ? "[]"
-      : JSON.stringify(hits.map((hit) => hit.entry_id)),
+    JSON.stringify(hits.map((hit) => hit.entry_id)),
   );
 }
