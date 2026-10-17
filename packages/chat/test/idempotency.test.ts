@@ -1,8 +1,43 @@
+import { FakeClock } from "@mate/testkit";
 import { describe, expect, it } from "vitest";
-import { newAppWithTwo, refusalReason, rid } from "./support.ts";
+import {
+  FakePushService,
+  newAppWithOwner,
+  newAppWithTwo,
+  refusalReason,
+  rid,
+  settled,
+  subscription,
+} from "./support.ts";
 import { ChatError } from "../src/index.ts";
 
 describe("3.4 idempotency", () => {
+  it("a DM to the owner sent twice with the same requestId pushes once and records one live event", async () => {
+    const clock = new FakeClock();
+    const service = new FakePushService(clock);
+    const { app, ownerId } = newAppWithOwner({ clock, push: service.send });
+    const ada = app.ensureAccount({ externalId: "ada", displayName: "Ada", handle: "ada" });
+    app.subscribePush(ownerId, subscription("phone"));
+    const dm = {
+      conversation: app.openDm(ada, { requestId: rid(), other: ownerId }).conversationId,
+    };
+    const cursor = app.liveSnapshot(ownerId).cursor;
+
+    app.send(ada, dm, { requestId: "s1", body: "once" });
+    app.send(ada, dm, { requestId: "s1", body: "once" });
+    await service.received(1);
+    clock.advance(24 * 60 * 60 * 1000);
+    await settled();
+    expect(service.requests, "one push").toHaveLength(1);
+    expect(app.liveEvents(ownerId, cursor), "one live event").toEqual(
+      expect.objectContaining({
+        status: "events",
+        events: [expect.objectContaining({ type: "entry" })],
+      }),
+    );
+    app.close();
+  });
+
   it("sending twice with the same requestId produces exactly one message and returns the same result", () => {
     const { app, alice, bob } = newAppWithTwo();
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });

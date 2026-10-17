@@ -6,6 +6,7 @@ import {
   deactivateAccount,
   ensureAccount,
   requireActor,
+  requireOwner,
   EnsureAccountInput,
 } from "./accounts.ts";
 import { ChatError, parseInput } from "./chat-error.ts";
@@ -32,6 +33,23 @@ import {
   type InboxEvent,
   type UnreadSummary,
 } from "./inbox.ts";
+import {
+  liveEvents,
+  liveMark,
+  liveSnapshot,
+  pruneLive,
+  type LiveEvents,
+  type LiveSnapshot,
+} from "./live.ts";
+import {
+  enqueuePushes,
+  PushDelivery,
+  PushEndpoint,
+  PushSubscription,
+  subscribePush,
+  unsubscribePush,
+  type PushSender,
+} from "./push.ts";
 import { idempotent } from "./receipts.ts";
 import {
   HistoryQuery,
@@ -53,16 +71,22 @@ import { resolveTimeline, TimelineRef } from "./timelines.ts";
 
 export { ChatError, type ChatErrorReason } from "./chat-error.ts";
 export { ChatStoreIncompatible } from "./database.ts";
+export type { AccountView } from "./accounts.ts";
 export type { ConversationView } from "./conversations.ts";
 export type { Entry, MessageEntry, TaskEntry } from "./entries.ts";
 export type { ReadPage } from "./forward-reading.ts";
 export type { InboxEvent, UnreadSummary } from "./inbox.ts";
+export type { LiveEvent, LiveEvents, LiveSnapshot } from "./live.ts";
+export type { PushNotice, PushSender, PushSubscription } from "./push.ts";
 export type { SendResult, SentMessage, HeldMessage } from "./send.ts";
 export type { Task, TaskResult } from "./tasks.ts";
 export type { TimelineRef } from "./timelines.ts";
 
 /** Told which accounts just received inbox events. */
 export type InboxListener = (accounts: readonly number[]) => void;
+
+/** Told that live events were just committed. */
+export type LiveListener = () => void;
 
 /** The requestId every write carries, plus whatever else that write needs. */
 const WithRequest = { requestId: RequestId };
@@ -71,6 +95,8 @@ const DmRequest = z.object({ ...WithRequest, other: Id });
 const ConversationRequest = z.object({ ...WithRequest, conversationId: Id });
 const InviteRequest = z.object({ ...WithRequest, conversationId: Id, invitee: Id });
 const ReadRequest = z.object({ ...WithRequest, budget: Budget.default(DEFAULT_BUDGET) });
+const SnapshotRequest = z.object({ timeline: TimelineRef.optional() });
+const LiveCursor = z.string();
 
 const Nothing = z.null();
 
@@ -88,10 +114,17 @@ function stableHash(content: unknown): string {
 export class ChatApp {
   readonly #db: ChatDatabase;
   readonly #inboxListeners = new Set<InboxListener>();
+  readonly #liveListeners = new Set<LiveListener>();
+  readonly #push: PushDelivery | undefined;
 
-  /** Open (or create) the chat database at `file`. Every timestamp the app writes comes from `clock`. */
-  constructor(file: string, options: { clock?: Clock } = {}) {
-    this.#db = new ChatDatabase(file, options.clock ?? systemClock);
+  /**
+   * Open (or create) the chat database at `file`. Every timestamp the app writes, and every push retry, follows
+   * `clock`. With `push`, the app delivers its push queue through it until `close()`; without it, pushes stay queued.
+   */
+  constructor(file: string, options: { clock?: Clock; push?: PushSender } = {}) {
+    const clock = options.clock ?? systemClock;
+    this.#db = new ChatDatabase(file, clock);
+    this.#push = options.push && new PushDelivery(this.#db, clock, options.push);
   }
 
   /**
@@ -138,28 +171,37 @@ export class ChatApp {
   }
 
   /**
-   * The only way a write transaction is opened. It notes the newest inbox event before `work` and, after the
-   * commit, signals the accounts that received events since. Watching the inbox table rather than each place that
-   * appends to it means no write path can append events without signalling, and a rollback, a held send or a
-   * replayed receipt appends none, so it signals nothing.
+   * The only way an operation opens a write transaction; the push queue's own bookkeeping, which touches nothing an
+   * operation reads, is the one other writer. It notes the newest inbox and live events before `work`. Inside the
+   * same transaction it queues the pushes the new inbox events call for and drops expired live events. After the
+   * commit it signals the accounts that received inbox events, the live listeners and the push queue. Watching the
+   * tables rather than each place that appends to them means no write path can append events without pushing or
+   * signalling, and a rollback, a held send or a replayed receipt appends none, so it signals nothing.
    */
   #write<T>(work: () => T): T {
-    const { result, notified } = this.#db.transaction("write", () => {
-      const mark = inboxMark(this.#db);
+    const { result, notified, live, pushed } = this.#db.transaction("write", () => {
+      const inbox = inboxMark(this.#db);
+      const liveBefore = liveMark(this.#db);
       const result = work();
-      return { result, notified: notifiedSince(this.#db, mark) };
+      const pushed = enqueuePushes(this.#db, inbox) > 0;
+      const live = liveMark(this.#db) > liveBefore;
+      pruneLive(this.#db);
+      return { result, notified: notifiedSince(this.#db, inbox), live, pushed };
     });
-    if (notified.length > 0) this.#signalInbox(notified);
+    if (notified.length > 0)
+      this.#signal("inbox", this.#inboxListeners, (listener) => listener(notified));
+    if (live) this.#signal("live", this.#liveListeners, (listener) => listener());
+    if (pushed) this.#push?.wake();
     return result;
   }
 
-  #signalInbox(accounts: readonly number[]): void {
-    for (const listener of [...this.#inboxListeners]) {
+  #signal<L>(name: string, listeners: Set<L>, call: (listener: L) => void): void {
+    for (const listener of [...listeners]) {
       try {
-        listener(accounts);
+        call(listener);
       } catch (error) {
         // The write has committed; a failing listener must neither undo it nor starve the others.
-        console.error("chat inbox listener failed", error);
+        console.error(`chat ${name} listener failed`, error);
       }
     }
   }
@@ -360,7 +402,63 @@ export class ChatApp {
     return this.#db.transaction("read", () => unreadSummary(this.#db, actor));
   }
 
+  // ── Live view ───────────────────────────────────────────────────────────────
+
+  /**
+   * What the owner's client shows, and the cursor it follows from, read together: whatever was committed before is
+   * in the snapshot, whatever is committed after arrives from `liveEvents(cursor)`. With `timeline`, the snapshot
+   * also holds that timeline's newest page, so the timeline a client opens with needs no second read.
+   */
+  liveSnapshot(account: number, request?: z.input<typeof SnapshotRequest>): LiveSnapshot {
+    const owner = requireOwner(this.#db, account);
+    const { timeline } = parseInput(SnapshotRequest, request ?? {});
+    return this.#db.transaction("read", () => liveSnapshot(this.#db, owner, timeline));
+  }
+
+  /**
+   * The live events after `cursor`, oldest first, at most 500; ask again from the last one's cursor until none come
+   * back. `resnapshot` when the cursor is from another epoch (the store was reset), older than the events kept (a day),
+   * or not one this store issued: the client must load a new snapshot.
+   */
+  liveEvents(account: number, cursor: string): LiveEvents {
+    const owner = requireOwner(this.#db, account);
+    const after = parseInput(LiveCursor, cursor);
+    return this.#db.transaction("read", () => liveEvents(this.#db, owner, after));
+  }
+
+  /**
+   * Call `listener` after every committed write that appended live events. Inside the listener those events are
+   * already readable. Returns unsubscribe.
+   */
+  watchLive(listener: LiveListener): () => void {
+    const entry: LiveListener = () => listener();
+    this.#liveListeners.add(entry);
+    return () => {
+      this.#liveListeners.delete(entry);
+    };
+  }
+
+  // ── Push ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Push the owner's DMs and mentions to this browser from now on. Idempotent on the endpoint rather than on a
+   * requestId: the endpoint is the subscription's natural key, so subscribing again only refreshes its keys.
+   */
+  subscribePush(account: number, subscription: z.input<typeof PushSubscription>): void {
+    requireOwner(this.#db, account);
+    const parsed = parseInput(PushSubscription, subscription);
+    this.#write(() => subscribePush(this.#db, parsed));
+  }
+
+  /** Stop pushing to the endpoint, dropping its queued pushes. Unsubscribing an unknown endpoint changes nothing. */
+  unsubscribePush(account: number, request: z.input<typeof PushEndpoint>): void {
+    requireOwner(this.#db, account);
+    const { endpoint } = parseInput(PushEndpoint, request);
+    this.#write(() => unsubscribePush(this.#db, endpoint));
+  }
+
   close(): void {
+    this.#push?.close();
     this.#db.close();
   }
 }

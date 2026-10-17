@@ -32,6 +32,8 @@ export class ChatDatabase {
     this.#clock = clock;
     mkdirSync(dirname(file), { recursive: true });
     this.#db = new DatabaseSync(file);
+    // The live-event triggers stamp their rows with this, so retention follows the injected clock.
+    this.#db.function("chat_now", () => clock.now());
     try {
       this.#db.exec(
         "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
@@ -83,8 +85,9 @@ export class ChatDatabase {
     return row === undefined ? undefined : schema.parse(row);
   }
 
-  run(sql: string, ...params: SQLInputValue[]): void {
-    this.#statement(sql).run(...params);
+  /** Run a statement; returns how many rows it changed. */
+  run(sql: string, ...params: SQLInputValue[]): number {
+    return Number(this.#statement(sql).run(...params).changes);
   }
 
   /** Run a statement with named parameters (`@name` in the SQL). */

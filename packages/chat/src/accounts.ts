@@ -93,3 +93,49 @@ export function targetAccount(db: ChatDatabase, account: number): Actor & { acti
     throw new ChatError("unknown-account", `account ${account} does not exist`);
   return { id: row.id, owner: row.role === "owner", active: row.active };
 }
+
+/** The acting account, which must be the owner: the live view and push subscriptions are the owner's alone. */
+export function requireOwner(db: ChatDatabase, account: number): Actor {
+  const actor = requireActor(db, account);
+  if (!actor.owner) throw new ChatError("owner-only", `account ${account} is not the owner`);
+  return actor;
+}
+
+/** An account as a client renders it: the author of an entry, a member of a conversation. */
+export const AccountView = z.object({
+  accountId: Id,
+  handle: z.string(),
+  displayName: z.string(),
+  owner: z.boolean(),
+  active: z.boolean(),
+});
+export type AccountView = z.output<typeof AccountView>;
+
+const AccountViewRow = z
+  .object({
+    id: Id,
+    handle: z.string(),
+    display_name: z.string(),
+    role: z.enum(["owner", "member"]),
+    active: SqlBoolean,
+  })
+  .transform((row): AccountView => ({
+    accountId: row.id,
+    handle: row.handle,
+    displayName: row.display_name,
+    owner: row.role === "owner",
+    active: row.active,
+  }));
+
+const SELECT_ACCOUNT_VIEW = "SELECT id, handle, display_name, role, active FROM accounts";
+
+/** Every account, deactivated ones included, since their entries stay readable. */
+export function listAccounts(db: ChatDatabase): AccountView[] {
+  return db.all(AccountViewRow, `${SELECT_ACCOUNT_VIEW} ORDER BY id`);
+}
+
+export function accountView(db: ChatDatabase, account: number): AccountView {
+  const view = db.get(AccountViewRow, `${SELECT_ACCOUNT_VIEW} WHERE id = ?`, account);
+  if (view === undefined) throw new Error(`account ${account} vanished`);
+  return view;
+}

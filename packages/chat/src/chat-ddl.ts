@@ -2,7 +2,7 @@
  * The chat database schema. A store is created at this version and never migrated: a file stamped with any other
  * `user_version` is refused (see ADR-0002, first-release compatibility reset).
  */
-export const CHAT_SCHEMA_VERSION = 2;
+export const CHAT_SCHEMA_VERSION = 3;
 
 export const CHAT_DDL = `
 CREATE TABLE accounts (
@@ -108,6 +108,77 @@ CREATE TABLE receipts (
   result TEXT NOT NULL,
   PRIMARY KEY (account_id, request_id)
 ) STRICT, WITHOUT ROWID;
+
+-- The owner's Web Push subscriptions. Pushes only ever go to the owner, so a subscription names no account.
+-- AUTOINCREMENT: an answer arriving for a deleted subscription must never land on a newer one that reused its ID.
+CREATE TABLE push_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL
+) STRICT;
+
+-- The push queue: one pending delivery of one message's push to one subscription.
+CREATE TABLE push_deliveries (
+  entry_id INTEGER NOT NULL REFERENCES entries (id),
+  subscription_id INTEGER NOT NULL REFERENCES push_subscriptions (id) ON DELETE CASCADE,
+  failures INTEGER NOT NULL DEFAULT 0,
+  due_at INTEGER NOT NULL,
+  PRIMARY KEY (entry_id, subscription_id)
+) STRICT, WITHOUT ROWID;
+
+-- The live event log the owner's browser follows. The triggers below append to it in the transaction that changes
+-- the fact, so no write path can change what the browser shows without telling it. An event names its subject only;
+-- its payload is read from the subject when the event is served. Its time comes from the chat app's clock through
+-- chat_now(), which the chat app registers on its own connection, and decides how long it is kept. Another connection
+-- (the sqlite3 shell, a test's raw connection) therefore cannot write the tables these triggers watch.
+CREATE TABLE live_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('entry', 'conversation', 'account', 'read')),
+  subject INTEGER NOT NULL
+) STRICT;
+
+-- The epoch is drawn once, when the store is created, so a cursor from a store that was reset names another epoch.
+-- Every event up to pruned_through has been deleted.
+CREATE TABLE live_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  epoch TEXT NOT NULL,
+  pruned_through INTEGER NOT NULL
+) STRICT;
+INSERT INTO live_state (id, epoch, pruned_through) VALUES (1, lower(hex(randomblob(16))), 0);
+
+CREATE TRIGGER live_entry AFTER INSERT ON entries BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'entry', NEW.id);
+END;
+CREATE TRIGGER live_conversation_created AFTER INSERT ON conversations BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'conversation', NEW.id);
+END;
+CREATE TRIGGER live_conversation_changed AFTER UPDATE ON conversations BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'conversation', NEW.id);
+END;
+CREATE TRIGGER live_member_added AFTER INSERT ON memberships BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'conversation', NEW.conversation_id);
+END;
+CREATE TRIGGER live_member_removed AFTER DELETE ON memberships BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'conversation', OLD.conversation_id);
+END;
+CREATE TRIGGER live_account_created AFTER INSERT ON accounts BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'account', NEW.id);
+END;
+CREATE TRIGGER live_account_changed AFTER UPDATE ON accounts
+  WHEN (NEW.display_name, NEW.handle, NEW.active) IS NOT (OLD.display_name, OLD.handle, OLD.active) BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'account', NEW.id);
+END;
+-- Only the owner's read positions are part of the owner's view.
+CREATE TRIGGER live_owner_read_started AFTER INSERT ON read_positions
+  WHEN NEW.account_id = (SELECT id FROM accounts WHERE role = 'owner') BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'read', NEW.timeline_id);
+END;
+CREATE TRIGGER live_owner_read_moved AFTER UPDATE ON read_positions
+  WHEN NEW.seq > OLD.seq AND NEW.account_id = (SELECT id FROM accounts WHERE role = 'owner') BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'read', NEW.timeline_id);
+END;
 
 -- Who may read a conversation: the owner reads every one, anyone reads a public channel, members read the rest.
 -- Every visibility test selects from this view, so the rule has one definition.

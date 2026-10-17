@@ -109,3 +109,10 @@ export function createTimeline(
     rootEntryId,
   );
 }
+
+/** The timeline with internal ID `timelineId`, if `actor` may read it. */
+export function timelineById(db: ChatDatabase, actor: Actor, timelineId: number): Timeline {
+  const row = db.get(TimelineRow, `${SELECT_TIMELINE} WHERE id = ?`, timelineId);
+  if (row === undefined) throw new Error(`timeline ${timelineId} vanished`);
+  return withConversation(db, actor, row);
+}
