@@ -75,6 +75,16 @@ export class AgentCreationFailed extends Error {
   }
 }
 
+/** `create` was given the ID of an Agent that exists. Nothing was changed. */
+export class AgentIdInUse extends Error {
+  readonly agentId: string;
+
+  constructor(agentId: string) {
+    super(`Agent ${agentId} already exists`);
+    this.agentId = agentId;
+  }
+}
+
 /**
  * What the manager knows of an Agent: open, with its runtime and connector, or closed. An Agent missing from the map is
  * closed. Only a closed Agent reaches its file directly: its paused record, its node, its settings. Each of those reads
@@ -168,27 +178,35 @@ export class AgentManager {
 
   /**
    * Create an Agent and open it: its chat account, its workspace on the chosen node, then its store, which records the
-   * node and is renamed into place last, so the Agent exists only once everything else is in place. Every step can be
-   * repeated, so when one fails the caller creates again with the `agentId` of the `AgentCreationFailed` and gets the
-   * same Agent, with one account and one file.
+   * node and is renamed into place last, so the Agent exists only once everything else is in place. Every step before
+   * the rename can be repeated, so when one fails the caller creates again with the `agentId` of the
+   * `AgentCreationFailed` and gets the same Agent, with one account and one file.
+   *
+   * An ID that already names an Agent, or named one that was deleted, is refused (`AgentIdInUse`, or `inactive-account`
+   * from the chat app), as is anything the chat app refuses about the names: nothing exists yet, so these are not
+   * `AgentCreationFailed`. Once the store is in place the Agent exists, so a runtime that then fails to open is reported
+   * and leaves the Agent closed, as at startup; `resume` opens it.
    */
   create(spec: AgentSpec): Promise<string> {
     const agentId = spec.agentId ?? randomUUID();
     return this.#lifecycle(agentId, async (state, file) => {
-      if (state.kind === "open") return agentId;
+      if (state.kind === "open" || existsSync(file)) throw new AgentIdInUse(agentId);
+      const { chat, workspaces } = this.#options;
+      chat.ensureAccount({
+        externalId: agentId,
+        displayName: spec.displayName,
+        handle: spec.handle,
+      });
       try {
-        const { chat, workspaces } = this.#options;
-        chat.ensureAccount({
-          externalId: agentId,
-          displayName: spec.displayName,
-          handle: spec.handle,
-        });
         await workspaces.prepare(spec.nodeId, agentId);
-        if (!existsSync(file))
-          await createAgentStore(file, { nodeId: spec.nodeId, settings: spec.settings });
-        await this.#start(agentId, state);
+        await createAgentStore(file, { nodeId: spec.nodeId, settings: spec.settings });
       } catch (error) {
         throw new AgentCreationFailed(agentId, error);
+      }
+      try {
+        await this.#start(agentId, state);
+      } catch (error) {
+        this.#report(error, agentId);
       }
       return agentId;
     });

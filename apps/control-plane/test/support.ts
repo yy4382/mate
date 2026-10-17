@@ -2,7 +2,7 @@ import { createPrivateKey, generateKeyPairSync, randomUUID, sign } from "node:cr
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PushNotice, PushSubscription } from "@mate/chat";
-import { FakeClock, FakeNode, temporaryDirectory } from "@mate/testkit";
+import { FakeClock, FakeNode, temporaryDirectory, type FakeNodeOptions } from "@mate/testkit";
 import { onTestFinished } from "vitest";
 import { startControlPlane, type ControlPlane } from "../src/control-plane.ts";
 
@@ -55,7 +55,10 @@ export function environment(options: { webDirectory?: string } = {}) {
           await plane.close();
         },
         /** Pair a fake node with a token the owner made, connected through the control plane's own HTTP server. */
-        async pairNode(owner: Browser): Promise<string> {
+        async pairNode(
+          owner: Browser,
+          behaviour: Pick<FakeNodeOptions, "onBrowse" | "onPrepareWorkspace"> = {},
+        ): Promise<string> {
           const { pairingToken } = (await owner.post("/api/admin/pairing-tokens")).json as {
             pairingToken: string;
           };
@@ -69,6 +72,7 @@ export function environment(options: { webDirectory?: string } = {}) {
             nodeId,
             publicKey,
             pairingToken,
+            ...behaviour,
             sign: (nonce) =>
               sign(null, Buffer.from(nonce), createPrivateKey(privateKey)).toString("base64url"),
           });
@@ -86,7 +90,10 @@ export type Site = {
   /** A new browser with no cookies. */
   browser(): Browser;
   close(): Promise<void>;
-  pairNode(owner: Browser): Promise<string>;
+  pairNode(
+    owner: Browser,
+    behaviour?: Pick<FakeNodeOptions, "onBrowse" | "onPrepareWorkspace">,
+  ): Promise<string>;
 };
 
 export type Answer = {
@@ -117,15 +124,32 @@ export class Browser {
     return this.request("POST", path, body);
   }
 
-  async request(method: string, path: string, body?: unknown): Promise<Answer> {
+  async request(
+    method: string,
+    path: string,
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<Answer> {
+    return this.send(method, path, {
+      headers: {
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...headers,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  }
+
+  /** A request exactly as given: its own headers and body text, as a page of another origin could send it. */
+  async send(
+    method: string,
+    path: string,
+    init: { headers?: Record<string, string>; body?: string } = {},
+  ): Promise<Answer> {
     const response = await fetch(this.#url + path, {
       method,
       redirect: "manual",
-      headers: {
-        ...(this.cookie === undefined ? {} : { cookie: this.cookie }),
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      headers: { ...(this.cookie === undefined ? {} : { cookie: this.cookie }), ...init.headers },
+      ...(init.body === undefined ? {} : { body: init.body }),
     });
     const setCookie = response.headers.get("set-cookie");
     if (setCookie !== null) {

@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { startControlPlane } from "../src/control-plane.ts";
-import { DAY_MS, environment, PASSWORD } from "./support.ts";
+import { DAY_MS, environment, PASSWORD, settle } from "./support.ts";
 
 describe("11.1 the owner's login", () => {
   it("answers the API with 401 and sends a page to the login page with where it was going, until the owner logs in", async () => {
@@ -58,24 +58,104 @@ describe("11.1 the owner's login", () => {
     expect((await browser.logIn()).status, "the right one still works").toBe(200);
   });
 
-  it("caps the password checks running at once and answers 429 beyond the cap", async () => {
+  it("checks the owner's password within bounded time while wrong-password clients loop", async () => {
     const site = await environment().start();
-    const attempts = await Promise.all(
-      Array.from({ length: 8 }, () => site.browser().logIn("not the password")),
-    );
-    const statuses = attempts.map((attempt) => attempt.status);
+    let flooding = true;
+    const statuses: number[] = [];
+    const flooders = Array.from({ length: 6 }, async () => {
+      const client = site.browser();
+      while (flooding) statuses.push((await client.logIn("not the password")).status);
+    });
 
+    const owner = site.browser();
+    for (let attempt = 0; attempt < 3; attempt++)
+      expect((await owner.logIn()).status, `the owner's attempt ${attempt + 1} is checked`).toBe(
+        200,
+      );
+    flooding = false;
+    await Promise.all(flooders);
+
+    expect(statuses.length, "the flood really ran").toBeGreaterThan(6);
     expect(
-      statuses.filter((status) => status === 429).length,
-      "some were turned away",
-    ).toBeGreaterThan(0);
+      statuses.every((status) => status === 401),
+      "the looping clients are checked and refused, never turned away",
+    ).toBe(true);
+    expect((await owner.get("/api/chat/unread")).status).toBe(200);
+  });
+
+  it("queues the password checks beyond two at a time instead of refusing them", async () => {
+    const site = await environment().start();
+
+    const attempts = await Promise.all(
+      Array.from({ length: 40 }, () => site.browser().logIn("not the password")),
+    );
+
+    expect(attempts.map((attempt) => attempt.status).every((status) => status === 401)).toBe(true);
+  });
+
+  it("checks queued passwords in the order they arrived", async () => {
+    const site = await environment().start();
+    const finished: string[] = [];
+    const attempt = async (who: string, password?: string) => {
+      await site.browser().logIn(password);
+      finished.push(who);
+    };
+    const attempts: Promise<void>[] = [];
+    for (let flooder = 0; flooder < 10; flooder++) {
+      attempts.push(attempt(`flooder ${flooder}`, "not the password"));
+      await settle(5);
+    }
+    attempts.push(attempt("owner"));
+    await settle(5);
+    attempts.push(attempt("latecomer", "not the password"));
+    await Promise.all(attempts);
+
+    expect(finished.indexOf("owner"), "the owner is not passed by a later arrival").toBeLessThan(
+      finished.indexOf("latecomer"),
+    );
+  });
+
+  it("answers 429 with Retry-After beyond a bounded queue, checks the rest, and lets the owner in after", async () => {
+    const site = await environment().start();
+
+    const answered = await Promise.all(
+      Array.from({ length: 90 }, () => site.browser().logIn("not the password")),
+    );
+
+    const statuses = answered.map((attempt) => attempt.status);
     expect(
       statuses.every((status) => status === 401 || status === 429),
       String(statuses),
     ).toBe(true);
-    for (const turnedAway of attempts.filter((attempt) => attempt.status === 429))
+    expect(
+      statuses.filter((status) => status === 429).length,
+      "some were turned away",
+    ).toBeGreaterThan(0);
+    for (const turnedAway of answered.filter((attempt) => attempt.status === 429))
       expect(turnedAway.headers.get("retry-after")).toBe("1");
     expect((await site.browser().logIn()).status, "after the burst the owner gets in").toBe(200);
+  });
+
+  it("answers 429 to a check that has waited ten seconds for its turn, and lets the owner in after", async () => {
+    const env = environment();
+    const site = await env.start();
+    const attempts = Promise.all(
+      Array.from({ length: 12 }, () => site.browser().logIn("not the password")),
+    );
+    await settle(40);
+    env.clock.advance(10_000);
+
+    const statuses = (await attempts).map((attempt) => attempt.status);
+
+    expect(
+      statuses.every((status) => status === 401 || status === 429),
+      String(statuses),
+    ).toBe(true);
+    expect(
+      statuses.filter((status) => status === 429).length,
+      "the waiting ones gave up",
+    ).toBeGreaterThan(0);
+    expect((await site.browser().logIn()).status, "the owner gets in").toBe(200);
   });
 
   it("reads the initial password file only on the first start", async () => {

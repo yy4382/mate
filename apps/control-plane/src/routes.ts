@@ -269,10 +269,18 @@ export function matchRoute(
     const matches = pattern.every((part, index) => {
       const segment = segments[index] ?? "";
       if (!part.startsWith(":")) return part === segment;
-      params[part.slice(1)] = decodeURIComponent(segment);
+      params[part.slice(1)] = decoded(segment);
       return segment !== "";
     });
     if (matches) return { route, params };
   }
   return undefined;
+}
+
+function decoded(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw new HttpError(400, "invalid-input", `malformed percent-encoding in ${segment}`);
+  }
 }

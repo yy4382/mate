@@ -3,14 +3,18 @@ import { ChatError } from "./chat-error.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
 
-export const EnsureAccountInput = z.object({
-  /** The caller's stable identity for this account, such as an Agent ID. */
-  externalId: z.string().min(1).max(256),
+/** What an account is called: the one place the rules for display names and handles are written. */
+export const AccountNames = z.object({
   displayName: z.string().trim().min(1).max(120),
   handle: z
     .string()
     .max(64)
     .regex(/^[\p{L}\p{N}][\p{L}\p{N}_.-]*$/u, "a handle is letters, digits, '_', '.' or '-'"),
+});
+
+export const EnsureAccountInput = AccountNames.extend({
+  /** The caller's stable identity for this account, such as an Agent ID. */
+  externalId: z.string().min(1).max(256),
   /** The owner can read every conversation. There is at most one owner, fixed when the account is created. */
   role: z.enum(["owner", "member"]).default("member"),
 });
@@ -41,6 +45,8 @@ export function ensureAccount(
     throw new ChatError("handle-taken", `the handle ${input.handle} is already in use`);
   const existing = db.get(AccountRow, `${SELECT_ACCOUNT} WHERE external_id = ?`, input.externalId);
   if (existing !== undefined) {
+    if (!existing.active)
+      throw new ChatError("inactive-account", `account ${existing.id} is deactivated for good`);
     db.run(
       "UPDATE accounts SET display_name = ?, handle = ?, handle_key = ? WHERE id = ?",
       input.displayName,

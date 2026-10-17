@@ -40,6 +40,7 @@ const ADMIN_STATUS: Record<AdminErrorReason, number> = {
   "unknown-node": 404,
   "unknown-provider": 404,
   "unknown-assistant": 404,
+  "agent-exists": 409,
   "no-credentials": 409,
   "agent-closed": 409,
   "not-found": 404,
@@ -92,7 +93,11 @@ export function sendJson(
     .end(JSON.stringify(body));
 }
 
-/** The request's JSON body, or undefined when it has none. */
+/**
+ * The request's JSON body, or undefined when it has none. A body must be declared `application/json`: a cross-site
+ * form or `fetch` without a preflight can only send `text/plain` and the like, so it cannot put words in the owner's
+ * mouth even if the browser attaches the cookie.
+ */
 export async function readJson(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -102,6 +107,9 @@ export async function readJson(request: IncomingMessage): Promise<unknown> {
     chunks.push(chunk);
   }
   if (size === 0) return undefined;
+  const type = (request.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
+  if (type !== "application/json")
+    throw new HttpError(415, "unsupported-media-type", "send the body as application/json");
   try {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
@@ -127,4 +135,22 @@ export function forwarded<T>(body: unknown): T {
   if (typeof body !== "object" || body === null || Array.isArray(body))
     throw new HttpError(400, "invalid-input", "the body must be a JSON object");
   return body as T;
+}
+
+/**
+ * Refuse a state-changing request that a page of another origin made: browsers name the page's origin in `Origin` on
+ * every cross-origin POST, PUT and DELETE, and it must be this server's own. A request with no `Origin` is not from a
+ * browser page.
+ */
+export function requireSameOrigin(request: IncomingMessage): void {
+  const origin = request.headers.origin;
+  if (origin === undefined) return;
+  let host: string | undefined;
+  try {
+    host = new URL(origin).host;
+  } catch {
+    // Not a URL, such as "null": it is not this origin.
+  }
+  if (host === undefined || host !== request.headers.host)
+    throw new HttpError(403, "cross-origin", "the request comes from another origin");
 }

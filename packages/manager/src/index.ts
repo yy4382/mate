@@ -1,5 +1,6 @@
 export {
   AgentCreationFailed,
+  AgentIdInUse,
   openAgentManager,
   type AgentManager,
   type AgentDescription,
@@ -14,3 +15,4 @@ export {
   type InboxConnectorOptions,
   type NoticeTarget,
 } from "./connector.ts";
+export { isAgentId } from "./agent-files.ts";

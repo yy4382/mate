@@ -4,7 +4,7 @@ import { existsSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { AgentCreationFailed } from "../src/index.ts";
+import { AgentCreationFailed, AgentIdInUse } from "../src/index.ts";
 import { environment, nodeId, notices, settings, settle, text } from "./support.ts";
 
 const agentFiles = (directory: string) =>
@@ -36,16 +36,15 @@ describe("creating an Agent", () => {
   it("finishes the same Agent when a create that failed at any step is run again with its agentId", async () => {
     const env = await environment();
     const manager = await env.open();
-    // Fails at the chat account: the handle belongs to someone else.
+    // Refused at the chat account: the handle belongs to someone else. Nothing exists yet, so it is no create to finish.
     env.chat.ensureAccount({ externalId: "someone", displayName: "Lin", handle: "lin" });
-    const atAccount = await manager
-      .create({ displayName: "Lin", handle: "lin", settings, nodeId })
-      .catch((error: unknown) => error);
-    expect(atAccount, "the failure names the Agent to finish").toBeInstanceOf(AgentCreationFailed);
-    const agentId = (atAccount as AgentCreationFailed).agentId;
+    await expect(
+      manager.create({ displayName: "Lin", handle: "lin", settings, nodeId }),
+    ).rejects.toMatchObject({ reason: "handle-taken" });
     expect(manager.list(), "no Agent before the store is in place").toEqual([]);
 
     // Fails at the workspace, after the chat account was made.
+    const agentId = randomUUID();
     env.workspaces.beforeNextPrepare = () => {
       throw new Error("node offline");
     };
@@ -68,12 +67,56 @@ describe("creating an Agent", () => {
       await manager.create({ agentId, displayName: "Lin", handle: "lin2", settings, nodeId }),
       "the rerun finishes the same Agent",
     ).toBe(agentId);
-    // Everything was in place already: a further rerun changes nothing.
-    await manager.create({ agentId, displayName: "Lin", handle: "lin2", settings, nodeId });
+    // The Agent exists now: a further rerun is refused, not repeated.
+    await expect(
+      manager.create({ agentId, displayName: "Lin", handle: "lin2", settings, nodeId }),
+    ).rejects.toBeInstanceOf(AgentIdInUse);
 
     expect(env.chat.findAccount(agentId), "the same account throughout").toBe(account);
     expect(agentFiles(env.directory), "one file").toEqual([`${agentId}.sqlite`]);
     expect(manager.list()).toEqual([{ agentId, open: true }]);
+  });
+
+  it("refuses to create with the ID of an Agent that exists, paused or not, or that was deleted, and changes nothing", async () => {
+    const env = await environment();
+    const manager = await env.open();
+    const agentId = await manager.create({ displayName: "Lin", handle: "lin", settings, nodeId });
+    const names = () => env.chat.liveSnapshot(env.owner).accounts.map((account) => account.handle);
+    const again = (handle: string) =>
+      manager.create({ agentId, displayName: "Other", handle, settings, nodeId });
+
+    await expect(again("other"), "an open Agent").rejects.toBeInstanceOf(AgentIdInUse);
+    await manager.pause(agentId);
+    await expect(again("other"), "a paused Agent").rejects.toBeInstanceOf(AgentIdInUse);
+    expect(names(), "the Agent was not renamed").toEqual(["owner", "lin"]);
+    expect((await manager.describe(agentId)).state, "and is still paused").toBe("paused");
+
+    await manager.delete(agentId);
+    await expect(again("other"), "a deleted Agent").rejects.toMatchObject({
+      reason: "inactive-account",
+    });
+    expect(manager.list(), "not brought back").toEqual([]);
+    expect(names(), "nor renamed").toEqual(["owner", "lin"]);
+  });
+
+  it("keeps an Agent whose runtime fails to open right after the store was put in place, closed and reported", async () => {
+    const env = await environment();
+    const manager = await env.open();
+    const agentId = randomUUID();
+    env.workspaces.onOpen = () => {
+      throw new Error("cannot open");
+    };
+
+    expect(
+      await manager.create({ agentId, displayName: "Lin", handle: "lin", settings, nodeId }),
+      "the Agent exists, so the create is done",
+    ).toBe(agentId);
+    expect(env.reports.map((report) => report.agentId)).toEqual([agentId]);
+    expect(manager.list()).toEqual([{ agentId, open: false }]);
+
+    env.workspaces.onOpen = undefined;
+    await manager.resume(agentId);
+    expect(manager.list(), "resume opens it").toEqual([{ agentId, open: true }]);
   });
 
   it("does not see an Agent whose store was never renamed into place, and a rerun finishes it", async () => {

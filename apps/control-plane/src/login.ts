@@ -8,17 +8,70 @@ import { z } from "zod";
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Password checks running at once. Each scrypt check takes tens of milliseconds and 32 MiB, so an attacker hammering the
- * login is turned away with 429 instead of starving the process; there is no lockout, so the owner can always get in
- * once the burst passes.
+ * Password checks running at once. Each scrypt check takes tens of milliseconds and 32 MiB, so no more than this many
+ * run together; the rest wait their turn in `CheckQueue`.
  */
 const MAX_CONCURRENT_CHECKS = 2;
+/** Checks waiting for a turn. Past this the login answers 429 at once: the process is being flooded. */
+const MAX_WAITING_CHECKS = 64;
+/** A check that has waited this long for a turn is not made: the login answers 429. */
+const MAX_WAIT_MS = 10_000;
 
 const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } satisfies ScryptOptions;
 const KEY_BYTES = 32;
 
 /** A logged-in owner: the token the cookie carries, and when it stops working. */
 export type Session = { readonly token: string; readonly expiresAt: number };
+
+/**
+ * Admits password checks, at most `MAX_CONCURRENT_CHECKS` at a time, and hands turns to the waiting ones in arrival
+ * order. There is no lockout and no per-client count, so wrong passwords never keep the owner out: a flood only lengthens
+ * the line, and the owner's attempt is reached after at most the waiting ones ahead of it, within a bounded time.
+ */
+class CheckQueue {
+  readonly #clock: Clock;
+  #running = 0;
+  readonly #waiting: (() => void)[] = [];
+
+  constructor(clock: Clock) {
+    this.#clock = clock;
+  }
+
+  /**
+   * Run `check` when it has a turn; `undefined` when the line is full or the wait ran out. A finished check hands its
+   * turn straight to the first waiting one, so nobody arriving later can pass the line.
+   */
+  async run<T>(check: () => Promise<T>): Promise<T | undefined> {
+    if (this.#running < MAX_CONCURRENT_CHECKS) this.#running++;
+    else if (!(await this.#wait())) return undefined;
+    try {
+      return await check();
+    } finally {
+      const next = this.#waiting.shift();
+      if (next === undefined) this.#running--;
+      else next();
+    }
+  }
+
+  /** Whether a turn came before the line was full or the deadline passed. */
+  async #wait(): Promise<boolean> {
+    if (this.#waiting.length >= MAX_WAITING_CHECKS) return false;
+    const deadline = new AbortController();
+    const turn = new Promise<boolean>((resolve) => {
+      const wake = () => resolve(true);
+      this.#waiting.push(wake);
+      void this.#clock.sleep(MAX_WAIT_MS, deadline.signal).then(() => {
+        const at = this.#waiting.indexOf(wake);
+        if (at < 0) return;
+        this.#waiting.splice(at, 1);
+        resolve(false);
+      });
+    });
+    const arrived = await turn;
+    deadline.abort();
+    return arrived;
+  }
+}
 
 export type LoginResult =
   { status: "ok"; session: Session } | { status: "wrong" } | { status: "limited" };
@@ -33,11 +86,12 @@ const SessionRow = z.object({ expires_at: z.number() }).optional();
 export class OwnerLogin {
   readonly #db: DatabaseSync;
   readonly #clock: Clock;
-  #checking = 0;
+  readonly #checks: CheckQueue;
 
   private constructor(db: DatabaseSync, clock: Clock) {
     this.#db = db;
     this.#clock = clock;
+    this.#checks = new CheckQueue(clock);
   }
 
   /**
@@ -62,16 +116,15 @@ export class OwnerLogin {
     return new OwnerLogin(db, clock);
   }
 
-  /** Check the password and, if it is right, start a session. Over the concurrency cap the check is not attempted. */
+  /**
+   * Check the password and, if it is right, start a session. Checks run two at a time, the rest in arrival order;
+   * `limited` is for a check that found the line full or waited too long, and it was not made.
+   */
   async logIn(password: string): Promise<LoginResult> {
-    if (this.#checking >= MAX_CONCURRENT_CHECKS) return { status: "limited" };
-    this.#checking++;
-    let right: boolean;
-    try {
-      right = await verifyPassword(password, storedHash(this.#db) ?? "");
-    } finally {
-      this.#checking--;
-    }
+    const right = await this.#checks.run(() =>
+      verifyPassword(password, storedHash(this.#db) ?? ""),
+    );
+    if (right === undefined) return { status: "limited" };
     if (!right) return { status: "wrong" };
     const now = this.#clock.now();
     this.#db.prepare("DELETE FROM owner_sessions WHERE expires_at <= ?").run(now);

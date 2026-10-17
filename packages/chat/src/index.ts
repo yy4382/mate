@@ -71,7 +71,7 @@ import { resolveTimeline, TimelineRef } from "./timelines.ts";
 
 export { ChatError, type ChatErrorReason } from "./chat-error.ts";
 export { ChatStoreIncompatible } from "./database.ts";
-export type { AccountView } from "./accounts.ts";
+export { AccountNames, type AccountView } from "./accounts.ts";
 export type { ConversationView } from "./conversations.ts";
 export type { Entry, MessageEntry, TaskEntry } from "./entries.ts";
 export type { ReadPage } from "./forward-reading.ts";
@@ -211,10 +211,11 @@ export class ChatApp {
   /**
    * The account for `externalId`, created on first use and renamed on later calls. Idempotent on
    * `externalId` rather than on a requestId: this is the one write with no acting account to hang a
-   * receipt on, and the caller's stable identity for the account is already the natural key.
+   * receipt on, and the caller's stable identity for the account is already the natural key. A deactivated account
+   * is refused with `inactive-account`: deactivation is permanent, so its identity cannot be taken up again.
    */
   ensureAccount(input: z.input<typeof EnsureAccountInput>): number {
-    return this.#write(() => ensureAccount(this.#db, EnsureAccountInput.parse(input)));
+    return this.#write(() => ensureAccount(this.#db, parseInput(EnsureAccountInput, input)));
   }
 
   /**

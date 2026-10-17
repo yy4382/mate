@@ -8,7 +8,7 @@ import { createNodeGateway } from "@mate/gateway";
 import { z } from "zod";
 import { EventStream } from "./event-stream.ts";
 import { Frontend } from "./frontend.ts";
-import { cookie, HttpError, readJson, refusal, sendJson } from "./http.ts";
+import { cookie, HttpError, readJson, refusal, requireSameOrigin, sendJson } from "./http.ts";
 import { OwnerLogin, SESSION_TTL_MS, type Session } from "./login.ts";
 import { vapidKeys, webPushSender } from "./push.ts";
 import { adminRoutes, chatRoutes, matchRoute } from "./routes.ts";
@@ -91,6 +91,7 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
     async function api(request: IncomingMessage, response: ServerResponse, url: URL) {
       const method = request.method ?? "GET";
       const token = cookie(request, SESSION_COOKIE);
+      if (method !== "GET") requireSameOrigin(request);
       if (method === "POST" && url.pathname === "/api/login") {
         const input = LoginInput.safeParse(await readJson(request));
         if (!input.success) throw new HttpError(400, "invalid-input", input.error.message);

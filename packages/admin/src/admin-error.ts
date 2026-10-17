@@ -5,6 +5,7 @@ import type { z } from "zod";
  *
  * - `invalid-input`: the input does not match the operation's schema.
  * - `unknown-agent`: no Agent has that ID.
+ * - `agent-exists`: creating with the ID of an Agent that exists.
  * - `unknown-node`: no paired node has that ID.
  * - `unknown-provider`: the provider is not one Mate offers.
  * - `no-credentials`: the provider has no API key, so its models cannot be chosen.
@@ -20,6 +21,7 @@ import type { z } from "zod";
 export type AdminErrorReason =
   | "invalid-input"
   | "unknown-agent"
+  | "agent-exists"
   | "unknown-node"
   | "unknown-provider"
   | "no-credentials"

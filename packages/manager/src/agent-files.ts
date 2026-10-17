@@ -25,7 +25,7 @@ export class AgentFiles {
   }
 
   file(agentId: string): string {
-    if (!AGENT_ID.test(agentId)) throw new Error(`not an Agent ID: ${JSON.stringify(agentId)}`);
+    if (!isAgentId(agentId)) throw new Error(`not an Agent ID: ${JSON.stringify(agentId)}`);
     return join(this.directory, `${agentId}.sqlite`);
   }
 
@@ -34,6 +34,11 @@ export class AgentFiles {
     const file = this.file(agentId);
     for (const each of [file, `${file}-wal`, `${file}-shm`]) rmSync(each, { force: true });
   }
+}
+
+/** Whether `value` has the shape of an Agent ID: a lowercase UUID. */
+export function isAgentId(value: string): boolean {
+  return AGENT_ID.test(value);
 }
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";

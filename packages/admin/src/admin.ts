@@ -1,12 +1,19 @@
 import { join } from "node:path";
-import type { ChatApp } from "@mate/chat";
+import { AccountNames, type ChatApp } from "@mate/chat";
 import type { Clock } from "@mate/clock";
 import type { NodeGateway, NodeStatusResult } from "@mate/gateway";
-import { openAgentManager, type AgentDescription, type AgentManager } from "@mate/manager";
+import {
+  AgentIdInUse,
+  isAgentId,
+  openAgentManager,
+  type AgentDescription,
+  type AgentManager,
+} from "@mate/manager";
 import {
   AgentStoreMissing,
   catalogModels,
   type AgentEvent,
+  type AgentRuntime,
   type AgentSettings,
   type CatalogModel,
   type EventWatch,
@@ -28,12 +35,10 @@ const SettingsInput = z.object({
   instructions: z.string().max(50_000).optional(),
 });
 
-const CreateAgentInput = z.object({
+const CreateAgentInput = AccountNames.extend({
   /** The ID of a create that failed, to finish that Agent. */
-  agentId: z.string().optional(),
+  agentId: z.string().refine(isAgentId, "an Agent ID is a lowercase UUID").optional(),
   nodeId: z.string().min(1),
-  displayName: z.string(),
-  handle: z.string(),
   settings: SettingsInput,
 });
 
@@ -42,8 +47,6 @@ const CredentialsInput = z.object({
   /** Replaces the catalog's base URL for every model of the provider, for a compatible proxy. */
   baseUrl: z.url({ protocol: /^https?$/ }).optional(),
 });
-
-const AgentId = z.string().min(1);
 
 /** What the admin module needs of the node gateway. */
 export type AdminGateway = Pick<
@@ -155,34 +158,41 @@ export class Admin {
 
   /**
    * Create an Agent on a paired node and open it. With the `agentId` of an `AgentCreationFailed`, finish that Agent.
-   * The settings are checked as `configureAgent` checks them, before anything is created.
+   * The names and the settings are checked, as `configureAgent` checks settings, before anything is created. An ID that
+   * names an Agent is refused with `agent-exists`, one that named a deleted Agent with the chat app's `inactive-account`,
+   * and a handle in use with `handle-taken`: nothing exists yet, so these are plain refusals, not a create to finish.
    */
   async createAgent(input: z.input<typeof CreateAgentInput>): Promise<string> {
     const { agentId, nodeId, displayName, handle, settings } = parseInput(CreateAgentInput, input);
     if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId))
       throw new AdminError("unknown-node", `no paired node ${nodeId}`);
-    return this.#manager.create({
-      nodeId,
-      displayName,
-      handle,
-      settings: this.#settings(settings),
-      ...(agentId === undefined ? {} : { agentId }),
-    });
+    try {
+      return await this.#manager.create({
+        nodeId,
+        displayName,
+        handle,
+        settings: this.#settings(settings),
+        ...(agentId === undefined ? {} : { agentId }),
+      });
+    } catch (error) {
+      if (error instanceof AgentIdInUse) throw new AdminError("agent-exists", error.message);
+      throw error;
+    }
   }
 
   /** Close the Agent, aborting its work, and keep it closed until it is resumed, across restarts too. */
   async pauseAgent(agentId: string): Promise<void> {
-    await this.#manager.pause(this.#existing(agentId));
+    await this.#existing(agentId, (id) => this.#manager.pause(id));
   }
 
   /** Open a paused or closed Agent; it continues where it stopped. */
   async resumeAgent(agentId: string): Promise<void> {
-    await this.#manager.resume(this.#existing(agentId));
+    await this.#existing(agentId, (id) => this.#manager.resume(id));
   }
 
   /** Close the Agent, deactivate its chat account, delete its file. Its messages stay readable. */
   async deleteAgent(agentId: string): Promise<void> {
-    await this.#manager.delete(this.#existing(agentId));
+    await this.#existing(agentId, (id) => this.#manager.delete(id));
   }
 
   /**
@@ -190,13 +200,14 @@ export class Admin {
    * model request. Only a provider with a key, a model in its catalog, and a thinking level that model accepts.
    */
   async configureAgent(agentId: string, input: z.input<typeof SettingsInput>): Promise<void> {
-    const id = this.#existing(agentId);
-    await this.#manager.configure(id, this.#settings(parseInput(SettingsInput, input)));
+    await this.#existing(agentId, (id) =>
+      this.#manager.configure(id, this.#settings(parseInput(SettingsInput, input))),
+    );
   }
 
   /** The names of the open Agent's work assistants, each of which `watchAgent` can watch. */
   async assistants(agentId: string): Promise<string[]> {
-    return this.#running(agentId).assistants();
+    return this.#whileOpen(agentId, (runtime) => runtime.assistants());
   }
 
   /**
@@ -209,11 +220,12 @@ export class Admin {
     listener: (events: readonly AgentEvent[]) => void | Promise<void>,
     options: { assistant?: string } = {},
   ): Promise<EventWatch> {
-    const runtime = this.#running(agentId);
     const { assistant } = options;
-    if (assistant !== undefined && !(await runtime.assistants()).includes(assistant))
-      throw new AdminError("unknown-assistant", `Agent ${agentId} has no assistant ${assistant}`);
-    return runtime.watchEvents(listener, options);
+    return this.#whileOpen(agentId, async (runtime) => {
+      if (assistant !== undefined && !(await runtime.assistants()).includes(assistant))
+        throw new AdminError("unknown-assistant", `Agent ${agentId} has no assistant ${assistant}`);
+      return runtime.watchEvents(listener, options);
+    });
   }
 
   /**
@@ -221,12 +233,13 @@ export class Admin {
    * changes. The node refuses a path that leaves the workspace; an offline node is refused as `node-offline`.
    */
   async browseWorkspace(agentId: string, path: string): Promise<WorkspaceListing> {
-    const id = this.#existing(agentId);
     const at = parseInput(WorkspacePathSchema, path);
-    const { nodeId } = await this.#manager.describe(id);
-    const outcome = await this.#gateway.browse(nodeId, id, at);
-    if (!outcome.ok) throw new AdminError(outcome.reason, outcome.message);
-    return outcome.listing;
+    return this.#existing(agentId, async (id) => {
+      const { nodeId } = await this.#manager.describe(id);
+      const outcome = await this.#gateway.browse(nodeId, id, at);
+      if (!outcome.ok) throw new AdminError(outcome.reason, outcome.message);
+      return outcome.listing;
+    });
   }
 
   // ── Providers and models ────────────────────────────────────────────────────
@@ -286,19 +299,34 @@ export class Admin {
     this.#credentials.close();
   }
 
-  /** `agentId`, if an Agent has it. */
-  #existing(agentId: string): string {
-    const id = parseInput(AgentId, agentId);
-    if (!this.#manager.list().some((agent) => agent.agentId === id))
-      throw new AdminError("unknown-agent", `no Agent ${id}`);
-    return id;
+  /**
+   * Run `work` on the Agent `agentId`, which must exist. The Agent can be deleted while `work` waits in its queue, so
+   * the Manager's `AgentStoreMissing` from there is the same refusal as an unknown ID.
+   */
+  async #existing<T>(agentId: string, work: (agentId: string) => Promise<T>): Promise<T> {
+    const unknown = () => new AdminError("unknown-agent", `no Agent ${agentId}`);
+    if (!isAgentId(agentId) || !this.#manager.list().some((agent) => agent.agentId === agentId))
+      throw unknown();
+    try {
+      return await work(agentId);
+    } catch (error) {
+      throw error instanceof AgentStoreMissing ? unknown() : error;
+    }
   }
 
-  /** The runtime of the open Agent `agentId`. */
-  #running(agentId: string) {
-    const runtime = this.#manager.runtime(this.#existing(agentId));
-    if (runtime === undefined) throw new AdminError("agent-closed", `Agent ${agentId} is not open`);
-    return runtime;
+  /**
+   * Run `work` on the runtime of the open Agent `agentId`. A runtime that closes while `work` uses it (the Agent was
+   * paused or deleted meanwhile) fails in ways of its own; that is the same refusal as an Agent that is not open.
+   */
+  async #whileOpen<T>(agentId: string, work: (runtime: AgentRuntime) => Promise<T>): Promise<T> {
+    const runtime = await this.#existing(agentId, async (id) => this.#manager.runtime(id));
+    const closed = () => new AdminError("agent-closed", `Agent ${agentId} is not open`);
+    if (runtime === undefined) throw closed();
+    try {
+      return await work(runtime);
+    } catch (error) {
+      throw this.#manager.runtime(agentId) === runtime ? error : closed();
+    }
   }
 
   #provider(provider: string): ProviderId {
