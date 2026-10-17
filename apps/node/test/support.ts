@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +11,7 @@ import { FakeGateway } from "@mate/testkit";
 const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
 export const linux = process.platform === "linux";
 
-/** A node started as its own process, the way systemd starts it, against a fake gateway. */
+/** A node started as its own process, the way systemd starts it (`mate node run`), against a fake gateway. */
 export type NodeProcess = {
   /** The gateway the helpers below talk through; a test may swap it for one that replaced it. */
   gateway: FakeGateway;
@@ -47,20 +47,24 @@ export async function startNodeProcess(options: StartOptions = {}): Promise<Node
   const home = realpathSync(mkdtempSync(join(tmpdir(), "mate-node-")));
   onTestFinished(() => rmSync(home, { recursive: true, force: true }));
   const workspacesRoot = join(home, "agents");
+  mkdirSync(join(home, ".config/mate"), { recursive: true });
+  writeFileSync(
+    join(home, ".config/mate/node.json"),
+    JSON.stringify({
+      controlPlaneUrl: gateway.url,
+      workspacesRoot,
+      pairingToken: options.pairingToken ?? "pairing-token-for-tests",
+    }),
+  );
   const [command = process.execPath, ...args] = (options.launch ?? ((argv) => argv))([
     process.execPath,
     "--conditions=mate-source",
     main,
+    "node",
+    "run",
   ]);
   const child = spawn(command, args, {
-    env: {
-      ...process.env,
-      MATE_CONTROL_PLANE_URL: gateway.url,
-      MATE_NODE_DATA_DIR: join(home, "node"),
-      MATE_NODE_WORKSPACES_ROOT: workspacesRoot,
-      MATE_NODE_PAIRING_TOKEN: options.pairingToken ?? "pairing-token-for-tests",
-      ...options.env,
-    },
+    env: { ...process.env, HOME: home, ...options.env },
     stdio: ["ignore", "ignore", "pipe"],
   });
   let stderr = "";

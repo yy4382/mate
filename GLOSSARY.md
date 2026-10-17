@@ -210,6 +210,16 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 **node**
 以宿主机现有账号运行的执行进程，由 `mate node` CLI 管理成 systemd 用户服务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
 
+**发布包**（bundle）
+node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-node/` 一个目录（Node 运行时、打成一个脚本的 node 程序和 CLI、`mate` 启动命令、清单），旁边是它的 `.sha256`。由 `pnpm bundle:node` 构建，`mate node install`/`update` 读取。
+避免：安装包、release（指 GitHub 的发布页时才用）。
+
+**清单**（manifest）
+发布包和程序目录里的 `manifest.json`：版本、平台、架构，以及其余每个文件的路径。它同时是"程序目录里哪些文件属于 Mate"的唯一依据。
+
+**程序目录**（program directory）
+`~/.local/lib/mate-node`，解开的发布包。只会被整个放入（暂存目录改名）或整个挪走，从不原地修改，所以要么是完整的某个版本，要么不存在。配置、node 身份和工作区都在它之外。
+
 **工作区宿主**（WorkspaceHost）
 Agent Manager 看到的"工作区在哪里"：在一个 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出这个 Agent 在那个 node 上的工作区端口（`port(nodeId, agentId)`）。Agent 的 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：准备工作区调 `prepareWorkspace`，端口的每次调用转给 `runTool` 并带上调用的 signal。Manager 的测试里用假的。
 

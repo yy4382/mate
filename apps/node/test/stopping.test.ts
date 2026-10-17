@@ -122,7 +122,7 @@ describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
     ).toBe(false);
   });
 
-  it("exits instead of retrying when the gateway rejects its identity", async () => {
+  it("exits instead of retrying when the gateway rejects its identity, with the status its service unit never restarts", async () => {
     const gateway = new FakeGateway({ onConnect: () => false });
     await gateway.start();
     const node = await startNodeProcess({ gateway });
@@ -131,7 +131,7 @@ describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
       new Promise((resolve) => setTimeout(() => resolve("still running"), 5000)),
     ]);
     await gateway.close();
-    expect(ended, node.stderr()).toEqual({ code: 1, signal: null });
+    expect(ended, node.stderr()).toEqual({ code: 78, signal: null });
     expect(node.stderr()).toContain("pairing_rejected");
   });
 

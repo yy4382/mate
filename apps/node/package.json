@@ -10,7 +10,7 @@
     }
   },
   "bin": {
-    "mate-node": "./dist/src/main.js"
+    "mate": "./dist/src/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
