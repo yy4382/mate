@@ -174,7 +174,21 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 避免：说某个模块"拥有" `control.sqlite`；用 `PRAGMA user_version` 记控制库的版本（一个文件只有一个）。
 
 **Web 外壳**（shell）
-负责登录、HTTP 路由，以及把聊天和管理两个前端功能区挂在同一个网页里。
+负责登录、HTTP 路由，以及把聊天和管理两个前端功能区挂在同一个网页里。后端在 `apps/control-plane`：`startControlPlane` 组装聊天 app、网关和管理模块，挂在一个 HTTP 服务器上；它在控制库里的模块名是 `shell`。
+
+**登录会话**（Session）
+所有者用密码登录一次得到的会话：一个随机令牌放在 HttpOnly cookie 里，控制库只存它的 SHA-256。从登录起 30 天有效，退出登录立即失效，跨重启保留。
+避免：会话（那是频道或私信）、session 指代聊天里的东西。
+
+**初始密码文件**（initial password file）
+第一次启动时所有者密码的来源。控制库里还没有密码时读一次，只存 scrypt 哈希，之后不再读；第一次启动没有它就拒绝启动。
+
+**事件流**（EventStream）
+Web 外壳发给浏览器的一条 SSE 连接：所有者的实时事件流（`/api/chat/events`，SSE id 就是实时游标），或观察一个 Agent 的 agent 事件流。它只活在登录会话期间：会话结束后发 `login` 并关闭，不再发别的。
+避免：把它和实时事件本身混为一谈（事件是聊天 app 的日志，事件流只是把日志送出去的连接）。
+
+**VAPID 密钥**（VapidKeys）
+Web 外壳签名推送请求用的 P-256 密钥对，第一次启动时生成，存在控制库里，之后不变。浏览器用它的公钥订阅推送，所以换密钥会让所有订阅失效。
 
 **管理模块**（admin）
 所有者用来创建和配置 Agent、管理 API key、配对 node、查看对话记录和用量、浏览工作区的模块。它拥有 Agent Manager：`openAdmin` 打开 Manager，并把 node 网关接成 Manager 的工作区宿主，Web 外壳不直接碰 Manager。

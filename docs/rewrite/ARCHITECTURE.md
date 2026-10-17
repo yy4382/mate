@@ -378,6 +378,7 @@ interface NodeGateway {
 - 每个模块用 `@mate/control-store` 的 `openControlTables(dataDirectory, { module, version, ddl })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
 - 每个模块只建、只检查自己的表。结构版本记在 `schema_versions` 表里，每个模块一行（网关是 `gateway`）。一个模块的版本不对，只有这个模块拒绝启动，抛出带文件路径的 `ControlStoreIncompatible`；别的模块照常打开。
 - 一个模块第一次打开时，在同一个事务里建表并记下版本。建表用不带 `IF NOT EXISTS` 的 `CREATE TABLE`，表名和别的模块撞了同样拒绝启动，不会两个模块悄悄共用一张表。
+- 文件由 `openControlTables` 以 0600 新建（SQLite 的 `-wal`、`-shm` 随主文件的权限），里面有密码哈希、登录会话和 API key；已有的文件不改权限。
 - 每条连接都用 WAL、`synchronous=FULL`、5 秒 busy timeout。WAL 让一个模块开着读事务时别的模块照常提交。`node:sqlite` 是同步的，一个不 await 的事务在进程里别的连接开始事务之前就已结束，所以同一进程里的几条连接从不互相等待。规则是**控制库的事务里不 await**；busy timeout 只给进程外的读写者（备份、`sqlite3` 命令行）留余地。
 
 **后台命令。** `bash` 带 `background: true` 时，runtime 在发起它的对话（主对话或工作助手）里建一个 Durable 后台任务，把这个任务的 ID 作为命令 ID 立即返回给模型。后台任务不让对话保持忙碌，也不随对话的 run 结束或被中止，所以 Agent 照常工作、照常空闲。这个任务把调用交给网关、等结果，步骤和 Durable 自己的工具任务一样：
@@ -437,7 +438,16 @@ interface Admin {
 
 ### 4.7 Web 外壳
 
-**后端：** 负责登录（只有一个所有者账号）、会话 cookie 和 HTTP 路由。`/api/chat/*` 以所有者账号调用聊天 app；`/api/admin/*` 调用管理模块；实时更新各走各的事件流。
+**后端（`apps/control-plane`）：** 负责组装、登录（只有一个所有者账号）、登录会话 cookie、HTTP 路由、事件流、推送发送器和前端静态文件。入口是 `startControlPlane({ dataDirectory, port?, host?, initialPasswordFile?, webDirectory?, vapidSubject?, clock?, push? })`，`main.ts` 从环境变量读这些（`MATE_DATA_DIRECTORY`、`MATE_PORT`、`MATE_HOST`、`MATE_INITIAL_PASSWORD_FILE`、`MATE_WEB_DIRECTORY`、`MATE_VAPID_SUBJECT`），收到 SIGTERM 或 SIGINT 时关闭后退出。
+
+- **组装。** 先打开外壳自己在控制库里的表（模块名 `shell`），再 `new ChatApp(chat.sqlite, { clock, push })`，`ensureAccount` 所有者（`externalId: "owner"`，handle `owner`），建网关并把 HTTP 服务器上路径为 `/api/nodes/connect` 的 upgrade 交给 `handleUpgrade`（别的路径直接断开），最后 `openAdmin`。关闭时先停止 HTTP 服务（断开所有连接，事件流随之结束），再依次关闭管理模块、网关、聊天 app 和外壳的表。启动中途失败时，已打开的部分按相反顺序关闭。
+- **登录。** 密码只存 scrypt 哈希。没有存密码时（第一次启动）从 `initialPasswordFile` 读初始密码（去掉末尾换行，至少 12 字节），之后再也不读这个文件；第一次启动没有这个文件就拒绝启动。同时进行的密码校验最多 2 个，超出的直接回 429（`Retry-After: 1`），不做锁定，所以输错再多次所有者也进得来。登录成功发一个随机令牌，cookie 为 `__Host-mate_session`（`HttpOnly; Secure; SameSite=Lax; Path=/`），库里只存令牌的 SHA-256；登录会话从登录起 30 天有效，不随使用延长，跨重启保留。退出登录删掉这一行，令牌立即失效，别的登录会话不受影响。
+- **路由。** 除了 `POST /api/login`（`{ password, next? }`，回 `{ next }`：`next` 是站内 `/app` 下的路径时原样返回，否则是 `/app`）和 `POST /api/logout`，`/api/*` 都要登录，未登录回 401。页面请求：前端目录里存在的文件（脚本、样式、图标）不需要登录；`/` 跳到 `/app`；`/app` 及其下的页面未登录时跳到 `/login?next=<原地址>`；其余页面路径都回前端的 `index.html`，由前端路由。没有前端目录时页面回 404，API 照常工作。
+  - `/api/chat/*` 一个路由对应聊天 app 的一个所有者操作，账号固定为所有者。读：`GET snapshot`（可带 `conversation=` 或 `thread=`）、`conversations`、`unread`、`history`（`conversation=`/`thread=`、`before`、`limit`）、`search?q=`。写都带浏览器生成的 `requestId`：`POST read`（读未读，推进所有者的已读位置）、`messages`、`channels`、`dms`、`conversations/:id/join|leave|archive|invite`、`tasks`、`tasks/:id/change`。发送和任务操作总是关闭新鲜度检查（4.1 规则 2），请求里不接受这一项。推送：`GET push/key`（VAPID 公钥）、`POST push/subscribe`、`POST push/unsubscribe`。
+  - `/api/admin/*` 一个路由对应管理模块的一个操作：`GET|POST agents`、`POST agents/:id/pause|resume`、`DELETE agents/:id`、`PUT agents/:id/settings`、`GET agents/:id/assistants`、`GET agents/:id/events`（事件流，可带 `assistant=`）、`GET agents/:id/workspace?path=`、`GET providers`、`PUT|DELETE providers/:provider/credentials`、`GET models`、`GET nodes`、`POST pairing-tokens`。
+  - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`owner-only` 为 403；`archived`、`request-conflict`、`handle-taken`、`no-credentials`、`agent-closed` 为 409；`not-implemented` 为 501。创建 Agent 中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做。成功的操作回 200 加结果，没有结果的回 204。
+- **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, unread }`），SSE 的 id 是这批最后一条的游标，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前都查一次登录会话；会话已过期或已退出登录，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
+- **推送发送器。** VAPID 密钥对在第一次启动时生成，存在外壳的表里，之后不变：浏览器用公钥订阅，换了密钥所有订阅都会失效。`PushSender` 用 `web-push` 发出（加密、VAPID 签名、TTL 一天、请求超时 10 秒），推送服务的回答原样作为状态码交回聊天 app，连不上时抛错。VAPID 的联系地址来自 `MATE_VAPID_SUBJECT`，缺省为 `mailto:owner@mate.invalid`。
 
 **前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。
 
@@ -480,7 +490,7 @@ Manager 扫描 `data/agents/`，打开所有没有暂停的 Agent：
 
 ```
 data/
-  control.sqlite              所有者登录、API key、node 注册表
+  control.sqlite              所有者的密码哈希和登录会话、VAPID 密钥、API key、node 注册表（0600）
   chat.sqlite                 聊天 app 的全部数据（含附件元数据和推送队列）
   attachments/                附件文件（首版之后）
   agents/<agentId>.sqlite     每个 Agent 的 Durable 存储（含配置、提醒、连接器位置）

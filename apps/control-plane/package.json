@@ -1,0 +1,25 @@
+{
+  "name": "@mate/control-plane",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mate-control-plane": "./dist/src/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mate/admin": "workspace:*",
+    "@mate/chat": "workspace:*",
+    "@mate/clock": "workspace:*",
+    "@mate/control-store": "workspace:*",
+    "@mate/gateway": "workspace:*",
+    "web-push": "3.6.7",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@mate/testkit": "workspace:*",
+    "@types/web-push": "3.6.4"
+  }
+}

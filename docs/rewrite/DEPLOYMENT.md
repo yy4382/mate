@@ -10,9 +10,9 @@
 | 部署需要的东西 | 里程碑 | 现状 |
 |---|---|---|
 | 聊天 app、Agent runtime、连接器、Agent Manager | M1–M3 | 已完成，只能在测试里以进程内方式运行 |
-| node 网关与 node 进程 | M4 | 网关与 node 已实现，并在 Linux 容器里测试；还没有接到控制面进程里 |
+| node 网关与 node 进程 | M4 | 已完成，并在 Linux 容器里测试；网关挂在控制面 HTTP 服务器的 `/api/nodes/connect` 上 |
 | 历史工具、上下文压缩 | M5 | 未完成。压缩由 Durable 提供，但 Mate 还没有配置和测试它；读取被压缩掉的早期记录的历史工具还没写 |
-| 登录、HTTP 路由、实时事件流、推送、管理模块 | M6 | 未开始。没有它就没有可访问的控制面进程（`apps/control-plane` 不存在） |
+| 登录、HTTP 路由、实时事件流、推送、管理模块 | M6 | 后端已实现（`apps/control-plane`），以真实 HTTP 测试；还没有经过独立审查。没有前端，只能用 HTTP 客户端操作 |
 | 网页前端 | M7 | 未开始 |
 | node 发布包、`mate node` CLI | M8 | 已完成：`pnpm bundle:node` 构建 linux-x64/arm64 发布包；CLI 在临时 HOME 加假 systemd 下测试，真包在 Debian 13、Ubuntu 24.04 容器里冒烟 |
 | 控制面 Docker 镜像 | M8 | 未完成 |
@@ -55,9 +55,21 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 
 1. 建一个只属于你账号的私有数据目录，权限 0700，例如 `~/mate/data`。
 2. 拿到同一版本号的控制面镜像和 `compose.yaml`。
-3. 首次启动时提供一个初始密码文件（ARCHITECTURE §4.7、MODULE_TESTS 11.1：初始密码文件只在第一次启动时读取）。
+3. 首次启动时提供一个初始密码文件（至少 12 字节，末尾的换行不算），路径给 `MATE_INITIAL_PASSWORD_FILE`。控制面只在库里还没有密码时读它，只存 scrypt 哈希（ARCHITECTURE §4.7、MODULE_TESTS 11.1）；第一次启动没有它就拒绝启动。
 4. `docker compose up -d`，用初始密码登录网页，确认能登录后，把初始密码文件从 Compose 配置里去掉。
-5. 让反向代理把你的域名转发到控制面端口（旧设计是宿主 `127.0.0.1:8787`）。
+5. 让反向代理把你的域名转发到控制面端口（宿主 `127.0.0.1:8787`）。反向代理不要缓冲 `text/event-stream` 响应（nginx 认控制面发的 `X-Accel-Buffering: no`），否则实时更新会卡住；控制面每 25 秒发一次心跳，读超时设得比这长即可。
+
+控制面进程读这些环境变量（ARCHITECTURE §4.7）：
+
+| 变量 | 含义 | 缺省 |
+|---|---|---|
+| `MATE_DATA_DIRECTORY` | 数据目录（§5.1） | 必填 |
+| `MATE_PORT`、`MATE_HOST` | 监听的端口和地址；容器里要设成 `0.0.0.0`，由 Compose 只映射到宿主的 `127.0.0.1` | `8787`、`127.0.0.1` |
+| `MATE_INITIAL_PASSWORD_FILE` | 初始密码文件，只在第一次启动时读 | 无 |
+| `MATE_WEB_DIRECTORY` | 构建好的网页前端目录；没有时 API 照常，页面回 404 | 无 |
+| `MATE_VAPID_SUBJECT` | 推送服务联系你用的 `mailto:` 或 `https:` 地址，写在每个推送请求的签名里 | `mailto:owner@mate.invalid` |
+
+登录 cookie 带 `Secure`，浏览器只在 HTTPS（或 `localhost`）上保存它，所以经 HTTP 访问 VPS 的 IP 登录不上。`SIGTERM`（`docker compose stop`）让控制面先断开所有连接，再依次关闭所有 Agent、网关和聊天库后退出。
 
 ### 3.2 node
 
@@ -153,7 +165,7 @@ node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安�
 
 ```
 <数据目录>/                     控制面容器里的 data/
-  control.sqlite               登录、API key、node 注册表
+  control.sqlite               密码哈希、登录会话、VAPID 密钥、API key、node 注册表；控制面以 0600 新建它
   chat.sqlite                  聊天的全部数据
   attachments/                 附件文件
   agents/<agentId>.sqlite      每个 Agent 的全部状态：对话、配置、提醒、连接器位置、是否暂停
@@ -199,7 +211,17 @@ pnpm check          # 格式、类型检查、全部测试（macOS 上会跳过�
 pnpm test:linux     # 在非 root 的 Linux 容器里跑 node 的测试套件（以子进程启动 node，真实的进程组与文件系统）
 ```
 
-还没有可以手动启动的控制面进程，所以"装起来点一点"要等 M6。现在验证系统是否工作，靠的是各模块的边界测试和 M3 的进程内场景：所有者 @ Agent，Agent 收到通知、读取并回复（`packages/manager/test/scenarios.test.ts`）。
+控制面可以在本机启动，但还没有前端（M7），只能用 `curl` 之类的 HTTP 客户端操作：
+
+```sh
+pnpm --filter "@mate/control-plane..." build
+mkdir -m 700 -p ~/mate-dev && printf '%s\n' '一个至少十二字节的密码' > ~/mate-dev/password
+MATE_DATA_DIRECTORY=~/mate-dev/data MATE_INITIAL_PASSWORD_FILE=~/mate-dev/password \
+  node apps/control-plane/dist/src/main.js
+curl -i -X POST localhost:8787/api/login -d '{"password":"一个至少十二字节的密码"}'
+```
+
+登录返回的 `Set-Cookie` 要原样带在之后的请求里。路由见 ARCHITECTURE §4.7。各模块的边界测试仍是验证系统的主要手段，`apps/control-plane/test/composition.test.ts` 以真实 HTTP 跑通"经 HTTP 配对 node、创建 Agent、所有者私信它、它回复并推送"。
 
 ## 7. 正式部署之前还要定的事
 

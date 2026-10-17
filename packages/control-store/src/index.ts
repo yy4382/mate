@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -52,6 +52,7 @@ const Version = z.object({ version: z.number() }).optional();
 export function openControlTables(dataDirectory: string, tables: ControlTables): DatabaseSync {
   mkdirSync(dataDirectory, { recursive: true });
   const file = join(dataDirectory, CONTROL_STORE_FILE);
+  createPrivately(file);
   const db = new DatabaseSync(file, { timeout: BUSY_TIMEOUT_MS });
   try {
     // WAL lets one module read while another commits; FULL makes a commit survive power loss.
@@ -69,6 +70,19 @@ export function openControlTables(dataDirectory: string, tables: ControlTables):
     throw error;
   }
   return db;
+}
+
+/**
+ * The store holds the owner's password hash, sessions and API keys, so only the account Mate runs as may read it.
+ * The file is created empty with mode 0600 before SQLite opens it; SQLite gives its -wal and -shm files the main file's
+ * mode.
+ */
+function createPrivately(file: string): void {
+  try {
+    writeFileSync(file, "", { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+  }
 }
 
 function ensureTables(db: DatabaseSync, file: string, tables: ControlTables): void {
