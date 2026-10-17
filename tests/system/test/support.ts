@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, realpathSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,49 +44,56 @@ function launch(main: string, args: string[], env: Record<string, string>): Chil
   return { process, exited, output: () => output };
 }
 
+const STOP_TIMEOUT_MS = 10_000;
+
+/** Send `signal` and wait for the exit. A child that ignores it is SIGKILLed after a timeout, and that is reported as a failure. */
 async function stop(child: Child | undefined, signal: NodeJS.Signals): Promise<void> {
   if (child === undefined || child.process.exitCode !== null || child.process.signalCode !== null)
     return;
   child.process.kill(signal);
+  let timer: NodeJS.Timeout | undefined;
+  const stuck = new Promise<"stuck">((resolve) => {
+    timer = setTimeout(() => resolve("stuck"), STOP_TIMEOUT_MS);
+  });
+  const result = await Promise.race([child.exited.then(() => "exited" as const), stuck]);
+  clearTimeout(timer);
+  if (result === "exited") return;
+  child.process.kill("SIGKILL");
   await child.exited;
-}
-
-/** A port that was free a moment ago; the control plane keeps it across restarts so a node's configured URL stays valid. */
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  await new Promise((resolve) => server.close(resolve));
-  if (address === null || typeof address === "string") throw new Error("no port");
-  return address.port;
+  throw new Error(
+    `the process ignored ${signal} for ${STOP_TIMEOUT_MS} ms and was killed with SIGKILL:\n${child.output()}`,
+  );
 }
 
 /** The control plane as its own process, on a data directory that outlives the process. */
 class ControlPlaneProcess {
-  readonly port: number;
-  readonly url: string;
+  /** The port the first start bound; every restart asks for it again so a node's configured URL stays valid. */
+  port = 0;
   readonly #env: Record<string, string>;
   #child: Child | undefined;
   readonly logs: string[] = [];
 
-  constructor(port: number, data: string, passwordFile: string) {
-    this.port = port;
-    this.url = `http://127.0.0.1:${port}`;
+  constructor(data: string, passwordFile: string) {
     this.#env = {
       MATE_DATA_DIRECTORY: data,
-      MATE_PORT: String(port),
       MATE_HOST: "127.0.0.1",
       MATE_INITIAL_PASSWORD_FILE: passwordFile,
     };
   }
 
+  get url(): string {
+    return `http://127.0.0.1:${this.port}`;
+  }
+
   /** Start it and resolve once it listens. */
   async start(): Promise<void> {
-    const child = launch(controlPlaneMain, [], this.#env);
+    const child = launch(controlPlaneMain, [], { ...this.#env, MATE_PORT: String(this.port) });
     this.#child = child;
-    await Promise.race([
+    this.port = await Promise.race([
       until(() => {
-        if (!child.output().includes("listening on")) throw new Error("not listening yet");
+        const bound = /listening on http:\/\/[^\s:]+:(\d+)/.exec(child.output())?.[1];
+        if (bound === undefined) throw new Error("not listening yet");
+        return Number(bound);
       }),
       child.exited.then(() => {
         throw new Error(`the control plane exited while starting:\n${child.output()}`);
@@ -183,7 +189,7 @@ export async function startSystem(options: { proxied?: boolean } = {}) {
   const provider = await ScriptedProvider.start();
   onTestFinished(() => provider.close());
 
-  const plane = new ControlPlaneProcess(await freePort(), join(root, "data"), passwordFile);
+  const plane = new ControlPlaneProcess(join(root, "data"), passwordFile);
   onTestFinished(() => plane.close());
   await plane.start();
 

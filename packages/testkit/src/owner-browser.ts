@@ -101,9 +101,12 @@ export class EventReader {
     onTestFinished(() => this.cancel());
   }
 
-  /** Wait until an event arrives that `matches`, and return it. Rejects if the stream ends first. */
-  async next(matches: (event: ServerEvent) => boolean = () => true): Promise<ServerEvent> {
-    for (let seen = 0; ;) {
+  /** Wait until an event arrives that `matches`, and return it. Looks only at events from index `from` on (`events.length` at an earlier moment). Rejects if the stream ends first. */
+  async next(
+    matches: (event: ServerEvent) => boolean = () => true,
+    from = 0,
+  ): Promise<ServerEvent> {
+    for (let seen = from; ;) {
       const found = this.events.slice(seen).find(matches);
       if (found !== undefined) return found;
       seen = this.events.length;

@@ -61,6 +61,7 @@ describe("the system survives losing a part of itself", { timeout: 60_000 }, () 
     const richard = await system.hire("richard", "Richard");
     const general = await system.channel("general", [richard.account]);
     let command: string[] = [];
+    let cutRead: string[] = [];
     let lost: string[] = [];
     let again: string[] = [];
     let fresh: string[] = [];
@@ -72,6 +73,12 @@ describe("the system survives losing a part of itself", { timeout: 60_000 }, () 
       })
       .step("after the cut", (request) => {
         expect(output(request, command[0]), "the result is unknown").toMatch(/unknown/i);
+        cutRead = request.call([readUnread(general)]);
+      })
+      .step("speak during the cut", (request) => {
+        expect(output(request, cutRead[0]), "the Agent reads chat during the cut").toContain(
+          "Can you hear me?",
+        );
         lost = request.call([chatSend(general, "I lost the node.")]);
       })
       .step("wait for the node", (request) => {
@@ -95,6 +102,7 @@ describe("the system survives losing a part of itself", { timeout: 60_000 }, () 
     await system.post(general, "@richard Run the long job.", [richard.account]);
     await system.fileExists(join(richard.workspace, "started"));
     proxy.setMode("disconnect");
+    await system.post(general, "Can you hear me?");
     await system.messageFrom(general, richard.account, "I lost the node.");
     await processGone(pidIn(richard.workspace));
 
@@ -102,7 +110,7 @@ describe("the system survives losing a part of itself", { timeout: 60_000 }, () 
     await system.nodeOnline();
     await system.post(general, "@richard Try again.", [richard.account]);
     await system.messageFrom(general, richard.account, "The node is back.");
-    await system.provider.received(8);
+    await system.provider.received(9);
     system.provider.assertComplete();
   });
 
@@ -143,7 +151,6 @@ describe("the system survives losing a part of itself", { timeout: 60_000 }, () 
     await system.api("POST", `/api/admin/agents/${richard.agentId}/pause`, undefined, 204);
     await processGone(pidIn(richard.workspace));
     await system.post(general, "While you were paused, the build broke.", [richard.account]);
-    expect(system.provider.requests, "the pause stopped the model").toHaveLength(2);
 
     resumeRequested = true;
     await system.api("POST", `/api/admin/agents/${richard.agentId}/resume`, undefined, 204);

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { ServerEvent } from "@mate/testkit";
 import {
   chatSend,
   longCommand,
@@ -77,10 +78,21 @@ describe("the owner talks to an Agent in a channel", () => {
         request.text("replied");
       });
 
+    const events = await system.owner.stream(`/api/admin/agents/${richard.agentId}/events`);
+    const queuedIds = (event: ServerEvent): string[] =>
+      (event.data as { type: string; items?: { id: string }[] }[])
+        .filter((each) => each.type === "inbox_update" && each.items?.length === 1)
+        .map((each) => each.items?.[0]?.id ?? "");
+
     await system.post(general, "@richard Start the migration.", [richard.account]);
     await system.fileExists(join(richard.workspace, "started"));
+    const afterStart = events.events.length;
     await system.post(general, "Use the staging database.");
+    const firstNotice = queuedIds(
+      await events.next((event) => queuedIds(event).length > 0, afterStart),
+    )[0];
     await system.post(general, "And skip the audit table.");
+    await events.next((event) => queuedIds(event).some((id) => id !== firstNotice), afterStart);
     system.release(richard.workspace);
 
     await system.messageFrom(general, richard.account, "Migrated on staging, audit table skipped.");

@@ -46,7 +46,9 @@ describe("Agents work together", () => {
         calls.dm = request.call([readUnread(dm)]);
       })
       .step("tell the channel", (request) => {
-        expect(output(request, calls.dm?.[0])).toContain("Report written.");
+        const read = output(request, calls.dm?.[0]);
+        expect(read).toContain("Report written.");
+        expect(read, "the DM shows the task completed").toContain("completed");
         calls.report = request.call([chatSend(general, "Bob finished the report.")]);
       })
       .step("done", (request) => request.text("done"));
