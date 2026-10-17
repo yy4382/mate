@@ -7,7 +7,7 @@
 # Two containers: the first copies the sources and runs `pnpm install` (which runs dependency
 # install scripts) under Docker's default confinement. Only the second, which runs the tests, gets
 # the relaxed seccomp and /proc/sys options the PID-reuse test needs to choose PIDs in an
-# unprivileged user and PID namespace; MATE_REQUIRE_PID_NAMESPACE makes that test fail rather than
+# unprivileged user and PID namespace (AppArmor, where the host has it, would refuse mounting /proc there); MATE_REQUIRE_PID_NAMESPACE makes that test fail rather than
 # skip if the capability is missing anyway.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -25,6 +25,6 @@ docker run --rm --init --volume "$root:/src:ro" $volumes "$image" sh -ec '
 '
 # shellcheck disable=SC2086
 exec docker run --rm --init \
-  --security-opt seccomp=unconfined --security-opt systempaths=unconfined \
+  --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=unconfined \
   --env MATE_REQUIRE_PID_NAMESPACE=1 \
   $volumes "$image" sh -ec 'exec pnpm exec vitest run "$@"' test-linux "$@"
