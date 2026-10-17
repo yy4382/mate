@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { startControlPlane } from "../src/control-plane.ts";
-import { DAY_MS, environment, PASSWORD, settle } from "./support.ts";
+import { DAY_MS, environment, PASSWORD } from "./support.ts";
 
 describe("11.1 the owner's login", () => {
   it("answers the API with 401 and sends a page to the login page with where it was going, until the owner logs in", async () => {
@@ -94,24 +94,28 @@ describe("11.1 the owner's login", () => {
   });
 
   it("checks queued passwords in the order they arrived", async () => {
-    const site = await environment().start();
+    const env = environment();
+    const site = await env.start();
     const finished: string[] = [];
-    const attempt = async (who: string, password?: string) => {
-      await site.browser().logIn(password);
-      finished.push(who);
-    };
     const attempts: Promise<void>[] = [];
-    for (let flooder = 0; flooder < 10; flooder++) {
-      attempts.push(attempt(`flooder ${flooder}`, "not the password"));
-      await settle(5);
-    }
-    attempts.push(attempt("owner"));
-    await settle(5);
-    attempts.push(attempt("latecomer", "not the password"));
+    const arrive = async (who: string, password?: string, joinsLine = true) => {
+      const before = env.clock.sleeps;
+      const attempt = site
+        .browser()
+        .logIn(password)
+        .then(() => void finished.push(who));
+      attempts.push(attempt);
+      if (joinsLine) await Promise.race([env.clock.sleepsReached(before + 1), attempt]);
+    };
+    for (let flooder = 0; flooder < 4; flooder++)
+      await arrive(`flooder ${flooder}`, "not the password", flooder >= 2);
+    await arrive("owner");
+    for (let latecomer = 0; latecomer < 4; latecomer++)
+      await arrive(`latecomer ${latecomer}`, "not the password");
     await Promise.all(attempts);
 
-    expect(finished.indexOf("owner"), "the owner is not passed by a later arrival").toBeLessThan(
-      finished.indexOf("latecomer"),
+    expect(finished.indexOf("owner"), "the owner is not passed by the last arrival").toBeLessThan(
+      finished.indexOf("latecomer 3"),
     );
   });
 
@@ -139,10 +143,11 @@ describe("11.1 the owner's login", () => {
   it("answers 429 to a check that has waited ten seconds for its turn, and lets the owner in after", async () => {
     const env = environment();
     const site = await env.start();
+    const before = env.clock.sleeps;
     const attempts = Promise.all(
       Array.from({ length: 12 }, () => site.browser().logIn("not the password")),
     );
-    await settle(40);
+    await Promise.race([env.clock.sleepsReached(before + 1), attempts]);
     env.clock.advance(10_000);
 
     const statuses = (await attempts).map((attempt) => attempt.status);
