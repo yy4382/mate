@@ -19,10 +19,13 @@ const NODE_CONTAINER = "mate-smoke-node";
 const REPLY = "Yes, all three finished.";
 const settings = { model: { provider: "openai", modelId: "gpt-4.1" } };
 
-const arch = { aarch64: "arm64", arm64: "arm64", x86_64: "x64", amd64: "x64" }[
-  run("docker", ["info", "--format", "{{.Architecture}}"]).trim()
-];
-assert(arch === "arm64" || arch === "x64", "the Docker host is x86_64 or arm64");
+// MATE_SMOKE_ARCH (x64 or arm64) runs the other architecture under the Docker host's emulation.
+const arch =
+  process.env.MATE_SMOKE_ARCH ??
+  { aarch64: "arm64", arm64: "arm64", x86_64: "x64", amd64: "x64" }[
+    run("docker", ["info", "--format", "{{.Architecture}}"]).trim()
+  ];
+assert(arch === "arm64" || arch === "x64", "the architecture is x64 or arm64");
 const platform = arch === "x64" ? "linux/amd64" : "linux/arm64";
 
 const image = process.env.MATE_SMOKE_IMAGE ?? "mate-control-plane:smoke";

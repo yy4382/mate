@@ -406,4 +406,4 @@
 - `docker compose stop` 在 Compose 的 10 秒期限内以退出码 0 结束，日志里有 SIGTERM 的收尾。
 - 只用 `compose.yaml` 重新启动：存下的密码仍能登录，Agent 重新打开，私信还在，node 重新连上。
 
-冒烟不覆盖：前端（镜像里的页面目录没被访问）、反向代理和 HTTPS、两种架构里与宿主不同的那一种。
+冒烟默认跑 Docker 宿主的架构；`MATE_SMOKE_ARCH=x64` 或 `arm64` 改跑另一种，靠宿主的仿真。冒烟不覆盖：前端（镜像里的页面目录没被访问）、反向代理和 HTTPS。
