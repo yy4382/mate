@@ -1,0 +1,21 @@
+# The control plane as one Compose service. Settings come from `.env` next to this file (see .env.example).
+# First start: `docker compose -f compose.yaml -f compose.initialize.yaml up -d`; afterwards `docker compose up -d`.
+services:
+  control-plane:
+    image: ${MATE_IMAGE:?set MATE_IMAGE to an exact control-plane image tag}
+    user: "${MATE_UID:?set MATE_UID to the owner account's UID}:${MATE_GID:?set MATE_GID to the owner account's GID}"
+    environment:
+      MATE_DATA_DIRECTORY: /var/lib/mate
+      MATE_HOST: 0.0.0.0
+      MATE_PORT: "8787"
+      MATE_WEB_DIRECTORY: /opt/mate/web
+      MATE_VAPID_SUBJECT: ${MATE_VAPID_SUBJECT:-mailto:owner@mate.invalid}
+    ports:
+      - "${MATE_LISTEN:-127.0.0.1:8787}:8787"
+    volumes:
+      - type: bind
+        source: ${MATE_DATA:?set MATE_DATA to an existing private (0700) data directory}
+        target: /var/lib/mate
+        bind:
+          create_host_path: false
+    restart: unless-stopped

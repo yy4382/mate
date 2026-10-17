@@ -22,6 +22,7 @@ for image in debian:13 ubuntu:24.04; do
       su owner -c "
         set -e
         export PATH=/fake:\$HOME/.local/bin:\$PATH
+        (cd /bundles && sha256sum -c *.sha256)
         cd /tmp && tar -xzf /bundles/*.tar.gz
         ./mate-node/bin/mate node install /bundles/*.tar.gz
         rm -r mate-node

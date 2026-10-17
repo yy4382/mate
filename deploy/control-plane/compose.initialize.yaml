@@ -1,0 +1,11 @@
+# Only for the first start: hands the initial password file to the control plane, which reads it while no password
+# is stored and never again. Leave this file out once you have logged in, then delete the password file.
+services:
+  control-plane:
+    environment:
+      MATE_INITIAL_PASSWORD_FILE: /run/secrets/initial_password
+    secrets:
+      - initial_password
+secrets:
+  initial_password:
+    file: ${MATE_INITIAL_PASSWORD:?set MATE_INITIAL_PASSWORD to the initial password file}

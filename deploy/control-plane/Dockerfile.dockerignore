@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+.git
+.github
+.worktrees
+.pnpm-store
+.claude
+coverage
+data
+docs
+decisions.tsv
+**/.DS_Store
+**/.env

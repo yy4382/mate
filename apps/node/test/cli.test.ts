@@ -254,10 +254,18 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     expect(installed).toContain(unit(h));
     expect(installed).toContain(command(h));
     expect(theirs()).toEqual(before);
+    const callsBefore = h.systemd().calls.length;
     const removed = ok(h, "node", "uninstall");
     expect(removed).toContain(unit(h));
     expect(removed).toContain(command(h));
     expect(theirs()).toEqual(before);
+    expect(
+      h
+        .systemd()
+        .calls.slice(callsBefore)
+        .map(([, verb]) => verb),
+      "uninstall only reads the state of a service Mate did not define",
+    ).toEqual(["show"]);
     expect(existsSync(program(h))).toBe(false);
   });
 

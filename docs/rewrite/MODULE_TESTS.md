@@ -313,7 +313,7 @@
 - `uninstall` 停用并停止服务，删除程序目录、`mate` 命令和单元文件，保留配置、身份和工作区；再跑一次报告没有可删的东西，不改动任何文件。
 - `uninstall` 死在"单元已删"或"删程序目录到一半"之后，重跑完成卸载。
 - 程序目录里有 Mate 没装的文件或目录时，`update` 和 `uninstall` 拒绝，列出它们，不做任何改动；`status` 也报告它们。
-- 不是 Mate 写的单元文件和不是 Mate 的 `~/.local/bin/mate`，`install` 和 `uninstall` 都不碰，并在输出里报告。
+- 不是 Mate 写的单元文件和不是 Mate 的 `~/.local/bin/mate`，`install` 和 `uninstall` 都不碰，并在输出里报告；`uninstall` 对这样的单元定义的服务也只读状态，不停用它。
 - 发布包校验和不对、缺 `.sha256`、含符号链接、硬链接、特殊文件、含 `..` 的路径、绝对路径、`mate-node/` 之外的路径、清单没列的文件、缺清单列的文件、为别的平台构建时，拒绝；已安装的东西不变，首次安装不留下任何文件。
 - 没有用户管理器时，`install`、`update`、`uninstall` 拒绝，不做任何改动。
 - 管理命令以 root 运行时拒绝（Linux 上用 `unshare -r` 得到 UID 0）。`node run` 不检查，它只由用户服务启动。
@@ -386,3 +386,17 @@
 6. 所有者暂停一个正在运行的 Agent，再恢复：暂停期间模型没有被调用，恢复后 Agent 处理积压的通知。
 7. 两个 Agent 在私信里协作：A 派一个任务给 B，B 认领并完成，A 收到通知。
 8. Agent 派生一个工作助手执行命令，助手完成后汇报，Agent 把结果发到频道。
+
+## 13. 部署冒烟
+
+**边界：** 发布的东西本身：控制面镜像、`deploy/control-plane/` 的两个 Compose 文件、node 发布包。`pnpm smoke:deploy`（`deploy/smoke.ts`）需要 Docker，不在 `pnpm check` 里，发布前手动跑，或对已构建的镜像设 `MATE_SMOKE_IMAGE` 跑。
+
+**替身：** 脚本化模型提供商跑在宿主上，容器经 `host.docker.internal` 和一个监听 `0.0.0.0` 的中继到达它。其余都是真的：用宿主账号的 UID/GID 起 Compose 项目，node 在普通的 Debian 13 容器里由发布包安装（systemctl 是只回答"未运行"的替身，同 §9），所有者的操作通过 HTTP 发出。
+
+- 镜像非 root 运行，用 `compose.yaml` 加 `compose.initialize.yaml` 在 0700 的绑定挂载目录上起来，健康检查转为 healthy。
+- 先用 `sha256sum -c` 校验发布包，再用包里的 CLI 安装、配置，`node run` 用配对令牌连上，网页接口看到它在线。
+- 所有者保存提供商凭据，在这个 node 上创建 Agent，私信它，Agent 读取并回复。
+- `docker compose stop` 在 Compose 的 10 秒期限内以退出码 0 结束，日志里有 SIGTERM 的收尾。
+- 只用 `compose.yaml` 重新启动：存下的密码仍能登录，Agent 重新打开，私信还在，node 重新连上。
+
+冒烟不覆盖：前端（镜像里的页面目录没被访问）、反向代理和 HTTPS、两种架构里与宿主不同的那一种。

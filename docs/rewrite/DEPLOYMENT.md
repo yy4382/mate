@@ -15,7 +15,7 @@
 | 登录、HTTP 路由、实时事件流、推送、管理模块 | M6 | 后端已实现（`apps/control-plane`），以真实 HTTP 测试；还没有经过独立审查。没有前端，只能用 HTTP 客户端操作 |
 | 网页前端 | M7 | 未开始 |
 | node 发布包、`mate node` CLI | M8 | 已完成：`pnpm bundle:node` 构建 linux-x64/arm64 发布包；CLI 在临时 HOME 加假 systemd 下测试，真包在 Debian 13、Ubuntu 24.04 容器里冒烟 |
-| 控制面 Docker 镜像 | M8 | 未完成 |
+| 控制面 Docker 镜像 | M8 | 镜像、两个 Compose 文件和部署冒烟（`pnpm smoke:deploy`）已写好，冒烟在 Docker 里跑通控制面加 node 的整条链路；网页前端打进镜像要等 M7 |
 | 起真实进程的端到端场景 | M9 | 未开始 |
 
 下面第 1 到 5 节写的是**目标部署方式**，用来对齐预期，并给 M8 的实现提供规格。标了"待 M8 定稿"的细节沿用旧设计（ADR-0009），实现时可能调整。第 6 节写的是**今天**在开发机上能做什么。
@@ -49,27 +49,46 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 5. 一个域名和 HTTPS 反向代理。浏览器推送（Web Push）和登录 cookie 都需要 HTTPS。
 6. 至少一个模型提供商的 API key。具体接哪家还没定，测试目前按 OpenAI Responses 协议模拟模型。
 
-## 3. 安装（控制面部分待 M8 定稿）
+## 3. 安装
 
 ### 3.1 控制面
 
-1. 建一个只属于你账号的私有数据目录，权限 0700，例如 `~/mate/data`。
-2. 拿到同一版本号的控制面镜像和 `compose.yaml`。
-3. 首次启动时提供一个初始密码文件（至少 12 字节，末尾的换行不算），路径给 `MATE_INITIAL_PASSWORD_FILE`。控制面只在库里还没有密码时读它，只存 scrypt 哈希（ARCHITECTURE §4.7、MODULE_TESTS 11.1）；第一次启动没有它就拒绝启动。
-4. `docker compose up -d`，用初始密码登录网页，确认能登录后，把初始密码文件从 Compose 配置里去掉。
-5. 让反向代理把你的域名转发到控制面端口（宿主 `127.0.0.1:8787`）。反向代理不要缓冲 `text/event-stream` 响应（nginx 认控制面发的 `X-Accel-Buffering: no`），否则实时更新会卡住；控制面每 25 秒发一次心跳，读超时设得比这长即可。
+控制面是 `deploy/control-plane/` 里的一个镜像加两个 Compose 文件：`compose.yaml` 是日常配置，`compose.initialize.yaml` 只在第一次启动时叠加，把初始密码文件交给控制面。镜像用 `docker build --file deploy/control-plane/Dockerfile .` 从仓库根目录构建，构建出的镜像带网页前端；发布时由 CI 推到镜像仓库，用确切的版本号，不用 `latest`。
 
-控制面进程读这些环境变量（ARCHITECTURE §4.7）：
+1. 建一个只属于你账号的私有数据目录，权限 0700，例如 `mkdir -m 700 -p ~/mate/data`。Compose 不会替你建它（目录不存在就拒绝启动），因为让 Docker 建出来的会属于 root。
+2. 把 `compose.yaml`、`compose.initialize.yaml` 和 `.env.example`（改名 `.env`）放在同一个目录，填好 `.env`（变量见下表）。`MATE_UID`、`MATE_GID` 用 `id -u`、`id -g` 查你的账号。
+3. 写初始密码文件（至少 12 字节，末尾的换行不算），权限 0600，路径写进 `.env` 的 `MATE_INITIAL_PASSWORD`。控制面只在库里还没有密码时读它，只存 scrypt 哈希（ARCHITECTURE §4.7、MODULE_TESTS 11.1）；第一次启动没有它就拒绝启动。
+4. 第一次启动叠加两个文件：
+
+   ```sh
+   docker compose -f compose.yaml -f compose.initialize.yaml up -d --wait
+   ```
+
+   用初始密码登录网页，确认能登录后，删掉初始密码文件，之后只用 `compose.yaml`：`docker compose up -d`。
+5. 让 HTTPS 反向代理把你的域名转发到控制面端口（宿主 `127.0.0.1:8787`）。登录 cookie 带 `Secure`，浏览器只在 HTTPS（或 `localhost`）上保存它，所以经 HTTP 访问 VPS 的 IP 登录不上；Web Push 也需要 HTTPS。反向代理不要缓冲 `text/event-stream` 响应：nginx 认控制面发的 `X-Accel-Buffering: no`，其他代理要自己关缓冲；控制面每 25 秒发一次心跳，读超时设得比这长。
+
+`.env` 里的变量（`compose.yaml` 读它们）：
 
 | 变量 | 含义 | 缺省 |
 |---|---|---|
-| `MATE_DATA_DIRECTORY` | 数据目录（§5.1） | 必填 |
-| `MATE_PORT`、`MATE_HOST` | 监听的端口和地址；容器里要设成 `0.0.0.0`，由 Compose 只映射到宿主的 `127.0.0.1` | `8787`、`127.0.0.1` |
-| `MATE_INITIAL_PASSWORD_FILE` | 初始密码文件，只在第一次启动时读 | 无 |
-| `MATE_WEB_DIRECTORY` | 构建好的网页前端目录；没有时 API 照常，页面回 404 | 无 |
+| `MATE_IMAGE` | 控制面镜像，写确切版本号 | 必填 |
+| `MATE_UID`、`MATE_GID` | 容器进程的 UID 和 GID，用数据目录的所有者 | 必填 |
+| `MATE_DATA` | 宿主上的数据目录，绑定挂载到容器内 `/var/lib/mate` | 必填，目录必须已存在 |
+| `MATE_INITIAL_PASSWORD` | 初始密码文件的宿主路径，只有 `compose.initialize.yaml` 读它 | 第一次启动必填 |
+| `MATE_LISTEN` | 宿主上监听的地址和端口 | `127.0.0.1:8787` |
+| `MATE_VAPID_SUBJECT` | 见下表 | `mailto:owner@mate.invalid` |
+
+控制面进程读这些环境变量（ARCHITECTURE §4.7）。Compose 已经替你设好，只有 `MATE_VAPID_SUBJECT` 通过 `.env` 改：
+
+| 变量 | 含义 | 缺省 |
+|---|---|---|
+| `MATE_DATA_DIRECTORY` | 数据目录（§5.1）；Compose 设成 `/var/lib/mate` | 必填 |
+| `MATE_PORT`、`MATE_HOST` | 监听的端口和地址；容器里是 `8787`、`0.0.0.0`，由 Compose 只映射到 `MATE_LISTEN` | `8787`、`127.0.0.1` |
+| `MATE_INITIAL_PASSWORD_FILE` | 初始密码文件，只在第一次启动时读；`compose.initialize.yaml` 设成 `/run/secrets/initial_password` | 无 |
+| `MATE_WEB_DIRECTORY` | 构建好的网页前端目录；镜像里是 `/opt/mate/web`；没有时 API 照常，页面回 404 | 无 |
 | `MATE_VAPID_SUBJECT` | 推送服务联系你用的 `mailto:` 或 `https:` 地址，写在每个推送请求的签名里 | `mailto:owner@mate.invalid` |
 
-登录 cookie 带 `Secure`，浏览器只在 HTTPS（或 `localhost`）上保存它，所以经 HTTP 访问 VPS 的 IP 登录不上。`SIGTERM`（`docker compose stop`）让控制面先断开所有连接，再依次关闭所有 Agent、网关和聊天库后退出。
+镜像以非 root 用户运行，`user:` 让 Compose 换成你的 UID/GID，所以数据目录里的文件属于你的账号。镜像自带健康检查（带不带会话都能答的 API 路径返回 401 就算健康）。`SIGTERM`（`docker compose stop`）让控制面先断开所有连接，再依次关闭所有 Agent、网关和聊天库后退出，在 Compose 的 10 秒期限内完成。
 
 ### 3.2 node
 
@@ -79,12 +98,13 @@ node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安�
 2. 用包里的 CLI 安装（第一次只能这样，之后用装好的 `mate`）：
 
    ```sh
+   sha256sum -c mate-node-0.1.0-linux-x64.tar.gz.sha256
    tar -xzf mate-node-0.1.0-linux-x64.tar.gz
    ./mate-node/bin/mate node install mate-node-0.1.0-linux-x64.tar.gz
    rm -r mate-node
    ```
 
-   `install` 先按 `.sha256` 校验整个包，再在暂存目录里解包并检查：只能有普通文件和目录，路径都在 `mate-node/` 下，文件和清单 `manifest.json` 一一对应，平台和架构与本机相同。任何一项不过就拒绝，已安装的东西不变。通过后它放好程序目录、`~/.local/bin/mate` 链接和用户服务单元，**不启动服务**。
+   第一次没有 `mate` 可用，所以由你先跑 `sha256sum -c`，再解包。`install` 自己也会按 `.sha256` 校验整个包，再在暂存目录里解包并检查：只能有普通文件和目录，路径都在 `mate-node/` 下，文件和清单 `manifest.json` 一一对应，平台和架构与本机相同。任何一项不过就拒绝，已安装的东西不变。通过后它放好程序目录、`~/.local/bin/mate` 链接和用户服务单元，**不启动服务**。
 3. 在网页的"节点管理"里生成一次性配对令牌，写进配置：
 
    ```sh
@@ -128,8 +148,9 @@ node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安�
 | | 程序目录不存在（上次死在两次改名之间） | 和首次安装一样放好 |
 | | 之后 | 同 `install` 的链接和单元；服务保持停止 |
 | `uninstall` | 程序目录有清单外的文件或不是 Mate 的 | 拒绝，什么都不改 |
-| | 服务单元已加载 | `systemctl --user disable --now` |
-| | 单元文件、`mate` 链接是 Mate 的 | 删掉（单元删了就 `daemon-reload`）；别人的不碰并报告 |
+| | 单元文件是别人的 | 不碰它，也不停用它定义的服务（只读状态），在输出里报告 |
+| | 单元文件是 Mate 的，或服务已加载但没有单元文件 | `systemctl --user disable --now`，再删单元文件并 `daemon-reload` |
+| | `mate` 链接是 Mate 的 | 删掉；别人的不碰并报告 |
 | | 程序目录存在 | 挪进暂存目录再删 |
 | `start` | 没装、没有单元或没有配置 | 拒绝 |
 | | 其余 | `systemctl --user enable --now` |
@@ -152,7 +173,7 @@ node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安�
 |---|---|
 | 看 node 状态、日志 | `mate node status`（版本、服务状态、配置，不打印令牌）、`mate node logs [--lines <n>] [--follow]` |
 | 启停 node | `mate node stop`（停止并停用）、`mate node start`（启用并启动）。stop 之后保持停止，重复 `install` 也不会启动它 |
-| 看控制面日志、启停 | 在放 `compose.yaml` 的目录里 `docker compose logs -f`、`docker compose stop`、`docker compose start` |
+| 看控制面日志、启停 | 在放 `compose.yaml` 的目录里 `docker compose logs -f`、`docker compose stop`、`docker compose start`。日常命令只用 `compose.yaml`，不叠加 `compose.initialize.yaml` |
 | 暂停或恢复某个 Agent | 网页"管理"。暂停 = 立刻关闭它的 runtime，进行中的模型请求和 node 上的命令都被停掉（网关逐个通知 node 杀掉这些命令的进程组；用 `setsid` 之类脱离进程组的后台进程不受影响）；恢复后从停下的地方接着跑 |
 | 看 Agent 在想什么、做了什么 | 网页"管理"里的实时对话记录 |
 | 看用量 | 网页"管理"。只用于观察，没有任何配额 |
@@ -178,8 +199,8 @@ node 一侧：node 的身份密钥和配置在 node 账号自己的目录里；�
 ### 5.2 备份与搬家
 
 1. 停控制面：`docker compose stop`。
-2. 复制整个数据目录（连同 `-wal`、`-shm` 文件）。
-3. 在新机器上用同一版本启动，指向复制过去的目录。
+2. 复制整个数据目录（连同 `-wal`、`-shm` 文件），例如 `cp -a ~/mate/data ~/mate/backup-$(date +%F)`。
+3. 在新机器上用同一版本启动，`.env` 的 `MATE_DATA` 指向复制过去的目录。数据库里已有密码，所以不需要 `compose.initialize.yaml`。
 
 node 的工作区按普通文件备份即可。node 换机器时，在新机器上重新配对。
 
@@ -195,11 +216,17 @@ mate node start
 
 `update` 之后服务保持停止。程序目录里如果有你自己放的文件，`update` 会拒绝并列出它们，挪走后重跑。
 
-**数据不做迁移**（ADR-0002）。新版本发现某个数据库的结构版本不对时，会拒绝启动并报出文件名，不会改动它。重写期间结构变化很频繁（例如聊天库已经从版本 1 变成版本 2），所以在正式发布之前，每次升级都可能需要换一个新的空数据目录。
+**数据不做迁移**（ADR-0002）。新版本发现某个数据库的结构版本不对时，会拒绝启动并报出文件名，不会改动它。重写期间结构变化很频繁（例如聊天库已经从版本 1 变成版本 2），所以在正式发布之前，每次升级都可能需要换一个新的空数据目录（ARCHITECTURE §11 第 8 条，所有者已接受）：
+
+1. `docker compose down`，旧数据目录原样留着，需要回退时还能用。
+2. 建一个新的空 0700 目录，`.env` 里改 `MATE_IMAGE` 和 `MATE_DATA`，把初始密码文件重新写出来。
+3. 用两个 Compose 文件起新版本（§3.1 第 4 步），重新配对 node、重建 Agent；Agent 的工作区在 node 上，不受影响。旧数据目录里的对话不会带过来。
 
 ### 5.4 卸载
 
 `mate node uninstall` 停止并停用服务，删除程序目录、`~/.local/bin/mate` 和单元文件，保留配置、身份和工作区（MODULE_TESTS §9）；中断后重新执行即可完成。它只删 Mate 的东西：程序目录里有清单外的文件时拒绝并列出它们，不是 Mate 写的单元文件或 `mate` 命令留着不动并报告。控制面用 `docker compose down` 删除容器，数据目录保留。
+
+不是 Mate 写的单元文件，`uninstall` 不删，也不停用它定义的服务。
 
 ## 6. 今天在开发机上能做什么
 

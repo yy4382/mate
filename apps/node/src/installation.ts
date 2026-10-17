@@ -166,18 +166,19 @@ export function uninstall(layout: Layout): string[] {
   refuseUnlisted(layout, program);
   const service = readService();
   const report: string[] = [];
-  if (service.loaded) {
+  const unit = unitOwnership(layout);
+  if (service.loaded && unit !== "foreign") {
     systemctl("disable", "--now", SERVICE);
     report.push("The node service is stopped and disabled.");
   }
-  switch (unitOwnership(layout)) {
+  switch (unit) {
     case "mate":
       unlinkSync(layout.unit);
       systemctl("daemon-reload");
       report.push(`Removed ${layout.unit}.`);
       break;
     case "foreign":
-      report.push(`Left ${layout.unit} alone: Mate did not write it.`);
+      report.push(`Left ${layout.unit} and the service it defines alone: Mate did not write it.`);
   }
   switch (commandOwnership(layout)) {
     case "mate":

@@ -33,7 +33,7 @@
 - [ ] **M5 runtime 其余部分。** 工作助手、提醒、历史、压缩。完成标准：MODULE_TESTS 4.5 到 4.7 通过。工作助手和提醒已提前完成（b1895d7a、61da1346）；4.7 的用量测试已在 7744fad4 完成；历史与压缩（2abe2fa5）、后台命令随管理模块一起提交。
 - [ ] **M6 管理模块与 Web 外壳后端。** 登录、HTTP 路由、实时事件流、推送；网关注册表并入 `control.sqlite`，Agent 创建时选 node。附件推到首版之后。完成标准：MODULE_TESTS 3.8、3.9、第 10 节、11.1 通过。Web 外壳后端已写好（`apps/control-plane`，3.9 的最后一条和 11.1 在那里测），还没有经过独立审查。
 - [ ] **M7 前端。** 完成标准：MODULE_TESTS 11.2 通过。
-- [ ] **M8 打包。** 控制面 Docker 镜像、node 发布包、`mate node` CLI。完成标准：MODULE_TESTS 第 9 节通过。
+- [ ] **M8 打包。** 控制面 Docker 镜像、node 发布包、`mate node` CLI。完成标准：MODULE_TESTS 第 9 节通过。控制面镜像、两个 Compose 文件和部署冒烟（MODULE_TESTS 第 13 节）已写好并在 OrbStack 上通过，镜像里的网页前端等 M7；发版的 GitHub Actions 流程（`release.yml`，打 `v*` 标签时推镜像、传 node 发布包）已写，没跑过。
 - [ ] **M9 系统场景。** 完成标准：MODULE_TESTS 第 12 节通过。
 
 - [ ] **CI。** GitHub Actions 在每次推送时跑 `pnpm check` 和 `pnpm test:linux`。
