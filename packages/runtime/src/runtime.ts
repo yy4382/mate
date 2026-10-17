@@ -261,7 +261,8 @@ export class AgentRuntime {
    * Watch the primary conversation's agent events, or with `assistant` that assistant's: streamed text, tool calls and
    * their output, inputs, usage. The first batch is a snapshot of the conversation as it is; a listener that falls far
    * behind gets a fresh snapshot instead of the batches it missed. Watching writes nothing. The watch ends when it is
-   * stopped, the runtime closes, or the runtime dies from a storage failure.
+   * stopped, the runtime closes, or the runtime dies from a storage failure; a runtime that has already died refuses
+   * the watch.
    */
   async watchEvents(
     listener: (events: readonly AgentEvent[]) => void | Promise<void>,

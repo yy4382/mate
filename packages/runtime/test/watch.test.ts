@@ -30,7 +30,7 @@ describe("watching a runtime", () => {
     await within(2000, "the second watch ending", second.ended);
   });
 
-  it("ends a watch that was started after the runtime died", async () => {
+  it("refuses a watch started after the runtime died", async () => {
     const agent = await testAgent();
     const fatal = Promise.withResolvers<unknown>();
     const { runtime, database } = await agent.open({ onFatal: fatal.resolve });
@@ -38,8 +38,6 @@ describe("watching a runtime", () => {
     await expect(runtime.submit("hello", { requestId: "m1" })).rejects.toThrow();
     await within(2000, "onFatal", fatal.promise);
 
-    const late = await runtime.watchEvents(() => undefined).catch(() => undefined);
-
-    if (late !== undefined) await within(2000, "the late watch ending", late.ended);
+    await expect(runtime.watchEvents(() => undefined)).rejects.toThrow();
   });
 });

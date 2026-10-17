@@ -26,6 +26,11 @@ jobs:
           node-version: "24"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Nothing is published from a commit that does not pass the checks.
+      - run: pnpm --filter @mate/web exec playwright install --with-deps chromium-headless-shell
+      - run: pnpm check
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: pnpm test:linux
       - run: pnpm bundle:node "${VERSION#v}"
       - name: Push the control-plane image
         env:

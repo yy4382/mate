@@ -25,8 +25,8 @@ export type Session = { readonly token: string; readonly expiresAt: number };
 
 /**
  * Admits password checks, at most `MAX_CONCURRENT_CHECKS` at a time, and hands turns to the waiting ones in arrival
- * order. There is no lockout and no per-client count, so wrong passwords never keep the owner out: a flood only lengthens
- * the line, and the owner's attempt is reached after at most the waiting ones ahead of it, within a bounded time.
+ * order. There is no lockout and no per-client count, so repeated wrong passwords never keep the owner out. The line is
+ * bounded: enough concurrent clients to keep it full can still turn one attempt away with 429, which a retry gets past.
  */
 class CheckQueue {
   readonly #clock: Clock;

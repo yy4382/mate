@@ -5,20 +5,17 @@
 
 ## 0. 现在能不能部署
 
-**还不能。** 重写完成了 M1–M4（到 node 链路为止）。能在真实环境里跑起来所需的几块还没写：
+**能，做第一次部署。** M1–M8 已完成并经过独立审查：聊天 app、Agent runtime（含历史工具和上下文压缩）、Agent Manager、node 网关与 node、登录与 HTTP 路由、实时事件流、Web Push、管理模块、网页前端、控制面镜像、node 发布包和 `mate node` CLI。`pnpm smoke:deploy` 在 Docker 里用发布的镜像和 node 发布包跑通登录、配对、创建 Agent、私信回复和重启后数据仍在（MODULE_TESTS §13）。
 
-| 部署需要的东西 | 里程碑 | 现状 |
-|---|---|---|
-| 聊天 app、Agent runtime、连接器、Agent Manager | M1–M3 | 已完成，只能在测试里以进程内方式运行 |
-| node 网关与 node 进程 | M4 | 已完成，并在 Linux 容器里测试；网关挂在控制面 HTTP 服务器的 `/api/nodes/connect` 上 |
-| 历史工具、上下文压缩 | M5 | 未完成。压缩由 Durable 提供，但 Mate 还没有配置和测试它；读取被压缩掉的早期记录的历史工具还没写 |
-| 登录、HTTP 路由、实时事件流、推送、管理模块 | M6 | 后端已实现（`apps/control-plane`），以真实 HTTP 测试；还没有经过独立审查。没有前端，只能用 HTTP 客户端操作 |
-| 网页前端 | M7 | 已实现（`apps/web`），以真实控制面加无头 Chromium 测试；还没有经过独立审查 |
-| node 发布包、`mate node` CLI | M8 | 已完成：`pnpm bundle:node` 构建 linux-x64/arm64 发布包；CLI 在临时 HOME 加假 systemd 下测试，真包在 Debian 13、Ubuntu 24.04 容器里冒烟 |
-| 控制面 Docker 镜像 | M8 | 镜像、两个 Compose 文件和部署冒烟（`pnpm smoke:deploy`）已写好，冒烟在 Docker 里跑通控制面加 node 的整条链路；网页前端打进镜像要等 M7 |
-| 起真实进程的端到端场景 | M9 | 未开始 |
+还没做或没验证过的：
 
-下面第 1 到 5 节写的是**目标部署方式**，用来对齐预期，并给 M8 的实现提供规格。标了"待 M8 定稿"的细节沿用旧设计（ADR-0009），实现时可能调整。第 6 节写的是**今天**在开发机上能做什么。
+| 事项 | 现状 |
+|---|---|
+| 起真实进程的端到端场景（M9） | 未开始；各模块的边界测试和部署冒烟是目前的验证手段 |
+| 发布工作流（`.github/workflows/release.yml`） | 写好了，还没在真实的 `v*` 标签上跑过；第一次发布后在一台干净的主机上拉一次镜像确认 |
+| 部署冒烟覆盖的架构 | 只跑过开发机的架构（arm64）；x86_64 镜像和发布包没有在真实主机上跑过 |
+| 反向代理和 HTTPS | 冒烟不经过反向代理；按 §3.1 第 6 步配置 |
+| 附件 | 第一版之后（ARCHITECTURE §11 第 7 条） |
 
 ## 1. 部署形态
 
@@ -56,16 +53,17 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 控制面是 `deploy/control-plane/` 里的一个镜像加两个 Compose 文件：`compose.yaml` 是日常配置，`compose.initialize.yaml` 只在第一次启动时叠加，把初始密码文件交给控制面。镜像用 `docker build --file deploy/control-plane/Dockerfile .` 从仓库根目录构建，构建出的镜像带网页前端；发布时由 CI 推到镜像仓库，用确切的版本号，不用 `latest`。
 
 1. 建一个只属于你账号的私有数据目录，权限 0700，例如 `mkdir -m 700 -p ~/mate/data`。Compose 不会替你建它（目录不存在就拒绝启动），因为让 Docker 建出来的会属于 root。
-2. 把 `compose.yaml`、`compose.initialize.yaml` 和 `.env.example`（改名 `.env`）放在同一个目录，填好 `.env`（变量见下表）。`MATE_UID`、`MATE_GID` 用 `id -u`、`id -g` 查你的账号。
-3. 写初始密码文件（至少 12 字节，末尾的换行不算），权限 0600，路径写进 `.env` 的 `MATE_INITIAL_PASSWORD`。控制面只在库里还没有密码时读它，只存 scrypt 哈希（ARCHITECTURE §4.7、MODULE_TESTS 11.1）；第一次启动没有它就拒绝启动。
-4. 第一次启动叠加两个文件：
+2. 仓库是私有的，镜像仓库里的镜像也是私有的。先在 VPS 上登录 GHCR：用一个只有 `read:packages` 权限的 GitHub token，`echo <token> | docker login ghcr.io -u <GitHub 用户名> --password-stdin`。
+3. 把 `compose.yaml`、`compose.initialize.yaml` 和 `.env.example`（改名 `.env`）放在同一个目录，填好 `.env`（变量见下表）。`MATE_UID`、`MATE_GID` 用 `id -u`、`id -g` 查你的账号。
+4. 写初始密码文件（至少 12 字节，末尾的换行不算），权限 0600，路径写进 `.env` 的 `MATE_INITIAL_PASSWORD`。控制面只在库里还没有密码时读它，只存 scrypt 哈希（ARCHITECTURE §4.7、MODULE_TESTS 11.1）；第一次启动没有它就拒绝启动。
+5. 第一次启动叠加两个文件：
 
    ```sh
    docker compose -f compose.yaml -f compose.initialize.yaml up -d --wait
    ```
 
    用初始密码登录网页，确认能登录后，删掉初始密码文件，之后只用 `compose.yaml`：`docker compose up -d`。
-5. 让 HTTPS 反向代理把你的域名转发到控制面端口（宿主 `127.0.0.1:8787`）。登录 cookie 带 `Secure`，浏览器只在 HTTPS（或 `localhost`）上保存它，所以经 HTTP 访问 VPS 的 IP 登录不上；Web Push 也需要 HTTPS。反向代理不要缓冲 `text/event-stream` 响应：nginx 认控制面发的 `X-Accel-Buffering: no`，其他代理要自己关缓冲；控制面每 25 秒发一次心跳，读超时设得比这长。
+6. 让 HTTPS 反向代理把你的域名转发到控制面端口（宿主 `127.0.0.1:8787`），**并把浏览器请求里原来的 `Host` 传过去**。控制面拒绝 `Origin` 和 `Host` 不一致的写请求（跨站防护，ARCHITECTURE §4.7），而 nginx 的 `proxy_pass` 缺省把 `Host` 换成上游地址，结果连登录都回 403 `cross-origin`；nginx 里要写 `proxy_set_header Host $host;`（Caddy 缺省就保留原 `Host`）。登录 cookie 带 `Secure`，浏览器只在 HTTPS（或 `localhost`）上保存它，所以经 HTTP 访问 VPS 的 IP 登录不上；Web Push 也需要 HTTPS。反向代理不要缓冲 `text/event-stream` 响应：nginx 认控制面发的 `X-Accel-Buffering: no`，其他代理要自己关缓冲；控制面每 25 秒发一次心跳，读超时设得比这长。
 
 `.env` 里的变量（`compose.yaml` 读它们）：
 
@@ -249,7 +247,7 @@ MATE_DATA_DIRECTORY=~/mate-dev/data MATE_INITIAL_PASSWORD_FILE=~/mate-dev/passwo
 # 浏览器打开 http://localhost:8787 。登录 cookie 带 Secure，只有 localhost 和 HTTPS 上浏览器才保留它，所以不要用局域网 IP。
 # 改前端时可以另开 `pnpm --filter @mate/web dev`（Vite 开发服务器，/api 代理到 8787）。
 # 也可以直接用 HTTP 客户端：
-curl -i -X POST localhost:8787/api/login -d '{"password":"一个至少十二字节的密码"}'
+curl -i -X POST localhost:8787/api/login -H 'content-type: application/json' -d '{"password":"一个至少十二字节的密码"}'
 ```
 
 登录返回的 `Set-Cookie` 要原样带在之后的请求里。路由见 ARCHITECTURE §4.7。各模块的边界测试仍是验证系统的主要手段，`apps/control-plane/test/composition.test.ts` 以真实 HTTP 跑通"经 HTTP 配对 node、创建 Agent、所有者私信它、它回复并推送"。
