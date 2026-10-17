@@ -29,13 +29,14 @@ export type TestAgent = {
 
 /**
  * A created Agent store, a scripted provider, and a fake workspace, all cleaned up after the test. Pass `provider` to
- * let several Agents share one provider, each conversation on its own lane.
+ * let several Agents share one provider, each conversation on its own lane, and `contextWindow` to give every model
+ * that many tokens of context instead of its catalog size.
  */
 export async function testAgent(
   settings: AgentSettings = defaultSettings,
-  options: { clock?: Clock; provider?: ScriptedProvider } = {},
+  options: { clock?: Clock; provider?: ScriptedProvider; contextWindow?: number } = {},
 ): Promise<TestAgent> {
-  const { clock } = options;
+  const { clock, contextWindow } = options;
   const file = join(temporaryDirectory(), "agents", "agent-1.sqlite");
   const provider = options.provider ?? (await ScriptedProvider.start());
   if (options.provider === undefined) onTestFinished(() => provider.close());
@@ -54,7 +55,13 @@ export async function testAgent(
         workspace,
         resolveModel: ({ provider: name, modelId }) => {
           const model = catalog.getModel(name, modelId);
-          return model === undefined ? undefined : { ...model, baseUrl: provider.baseUrl };
+          return model === undefined
+            ? undefined
+            : {
+                ...model,
+                baseUrl: provider.baseUrl,
+                ...(contextWindow === undefined ? {} : { contextWindow }),
+              };
         },
         wrapDatabase: (inner) => (database = new FaultyDatabase(inner)),
         ...(clock === undefined ? {} : { clock }),

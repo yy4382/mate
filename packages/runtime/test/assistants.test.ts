@@ -58,7 +58,7 @@ describe("work assistants", () => {
     agent.provider.assertComplete();
   });
 
-  it("gives an assistant the workspace tools but not the assistant, reminder, or chat tools", async () => {
+  it("gives an assistant the workspace and history tools but not the assistant, reminder, or chat tools", async () => {
     const agent = await testAgent();
     const { port } = testChat();
     const finished = Promise.withResolvers<void>();
@@ -90,6 +90,10 @@ describe("work assistants", () => {
     expect(assistantTools, "the assistant works in the Agent's workspace").toEqual(
       expect.arrayContaining(["bash", "read", "write", "edit"]),
     );
+    for (const tools of [primaryTools, assistantTools])
+      expect(tools, "both conversations look up their own earlier records").toEqual(
+        expect.arrayContaining(["history_search", "history_read"]),
+      );
     expect(assistantTools, "the assistant cannot delegate").not.toContain("assistant");
     expect(assistantTools, "the assistant cannot set reminders").not.toContain("reminder");
     expect(primaryTools, "the primary conversation can chat").toContain("chat_send");

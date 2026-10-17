@@ -4,6 +4,7 @@ import {
   Harness,
   configure,
   createRegistry,
+  type CompactionPolicy,
   type Conversation,
   type Cursor,
   defineDoc,
@@ -13,6 +14,7 @@ import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { assistants } from "./assistants.ts";
 import { chatExtension, type ChatPort } from "./chat-tools.ts";
 import { systemClock, type Clock } from "@mate/clock";
+import { historyExtension } from "./history.ts";
 import { Lifetime, guardDatabase } from "./lifetime.ts";
 import { agentModels, type ModelRef, type ModelResolver } from "./models.ts";
 import { reminders } from "./reminders.ts";
@@ -100,6 +102,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     ...(options.chat === undefined ? [] : [chatExtension(options.chat)]),
   ];
   registry.install(workspaceExtension(options.workspace, lifetime.signal));
+  registry.install(historyExtension);
   for (const extension of primaryOnlyExtensions) registry.install(extension);
   registry.install(assistantsIdentity);
   const harness = await Harness.open(
@@ -107,7 +110,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     {
       models: agentModels(options.apiKey, options.resolveModel, lifetime.signal),
       registry,
-      settings: { toolExecution: "sequential" },
+      settings: { toolExecution: "sequential", compaction },
     },
     BACKGROUND_CONTEXT,
   );
@@ -243,6 +246,17 @@ export class AgentRuntime {
     return this.#closed;
   }
 }
+
+/**
+ * Durable's own defaults today, stated here so that the thresholds ARCHITECTURE 4.2 documents cannot move with a
+ * Durable release.
+ */
+const compaction: CompactionPolicy = {
+  enabled: true,
+  reserveTokens: 16_384,
+  keepRecentTokens: 20_000,
+  backgroundTokens: 32_768,
+};
 
 /** Positions of the Agent's environment in its sources, such as the connector's in the chat inbox, by name. */
 const CursorsDoc = defineDoc<{ positions: Record<string, number> }>({

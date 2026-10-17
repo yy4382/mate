@@ -118,16 +118,17 @@ export class ScriptedRequest extends ScriptedRequestBody {
     });
   }
 
-  text(text: string, options: { inputTokens?: number } = {}): void {
+  /** Answer with a text; `truncated` ends it as cut off at the output token limit. */
+  text(text: string, options: { inputTokens?: number; truncated?: boolean } = {}): void {
     const content = [{ type: "output_text", text, annotations: [] }];
     const item = {
       type: "message",
       id: `msg_${this.step}`,
       role: "assistant",
-      status: "completed",
+      status: options.truncated === true ? "incomplete" : "completed",
       content,
     };
-    this.#complete([item], options.inputTokens);
+    this.#complete([item], options.inputTokens, options.truncated === true);
   }
 
   /** Answer with tool calls; each call ID is `<step>:<index>` so tests can find its output later. */
@@ -192,15 +193,15 @@ export class ScriptedRequest extends ScriptedRequestBody {
     return this.#cancelled.promise;
   }
 
+  /** Fail with an HTTP error, typed as OpenAI types it: a 5xx is a server error, which clients retry; a 4xx is not. */
   status(code: number, message = "scripted failure"): void {
     this.#answered = true;
+    const type = code >= 500 ? "server_error" : "invalid_request_error";
     this.#response.writeHead(code, { "content-type": "application/json" });
-    this.#response.end(
-      JSON.stringify({ error: { message, type: "server_error", code: String(code) } }),
-    );
+    this.#response.end(JSON.stringify({ error: { message, type, code: String(code) } }));
   }
 
-  #complete(output: readonly unknown[], inputTokens = 50): void {
+  #complete(output: readonly unknown[], inputTokens = 50, truncated = false): void {
     if (this.#answered) throw new Error(`step ${this.step} already answered`);
     this.#answered = true;
     this.#response.writeHead(200, { "content-type": "text/event-stream" });
@@ -208,10 +209,12 @@ export class ScriptedRequest extends ScriptedRequestBody {
       this.#write({ type: "response.output_item.done", output_index: index, item }),
     );
     this.#write({
-      type: "response.completed",
+      type: truncated ? "response.incomplete" : "response.completed",
       response: {
         id: `resp_${this.step}`,
-        status: "completed",
+        ...(truncated
+          ? { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }
+          : { status: "completed" }),
         output,
         usage: {
           input_tokens: inputTokens,
@@ -306,9 +309,9 @@ export class ScriptedLane extends RequestLog {
  * Each conversation of the Agent (the primary conversation, each work assistant) has its own lane of named steps, so
  * concurrent conversations cannot steal each other's steps. `step()` scripts the default lane, which takes the first
  * conversation no declared lane claims; `lane(name, claim)` declares another, which takes the first conversation whose
- * first request `claim` accepts. Anything unplanned (an unclaimed conversation, a request without a conversation key,
- * a request after its lane's script ran out, an undeclared cancel) is recorded and fails `assertComplete()`, naming
- * the lane and step.
+ * first request `claim` accepts. A request without a conversation key, such as a summary request, is claimed by itself
+ * and leaves its lane free to claim the next one. Anything unplanned (an unclaimed request, a request after its lane's
+ * script ran out, an undeclared cancel) is recorded and fails `assertComplete()`, naming the lane and step.
  */
 export class ScriptedProvider extends RequestLog {
   readonly #default = new ScriptedLane("default");
@@ -386,18 +389,21 @@ export class ScriptedProvider extends RequestLog {
     }
   }
 
-  /** Find the lane that owns the request's conversation and take its next step, or say why there is none. */
+  /**
+   * Find the lane that owns the request's conversation and take its next step, or say why there is none. A request
+   * without a `prompt_cache_key`, such as Durable's summary request, belongs to no conversation: each one is claimed
+   * on its own and binds no lane.
+   */
   #plan(body: RequestBody, response: ServerResponse) {
     const key = body.prompt_cache_key;
-    if (key === undefined) return "a request carried no prompt_cache_key, so no lane can own it";
     const request = new ScriptedRequestBody(body);
     const taken = new Set(this.#bound.values());
     const lane =
-      this.#bound.get(key) ??
+      (key === undefined ? undefined : this.#bound.get(key)) ??
       [...this.#lanes, this.#default].find((each) => !taken.has(each) && each.claims(request));
     if (lane === undefined)
       return `a request from an unclaimed conversation (first user text ${JSON.stringify(request.userTexts()[0])})`;
-    this.#bound.set(key, lane);
+    if (key !== undefined) this.#bound.set(key, lane);
     const failed = (reason: string) => this.#failures.push(reason);
     return (
       lane.take((step) => new ScriptedRequest(lane.name, step, body, response, failed)) ??
