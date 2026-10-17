@@ -1,4 +1,4 @@
-import { BASH_MAX_TIMEOUT_SECONDS } from "@mate/node-protocol";
+import { BASH_TIMEOUT_SECONDS } from "@mate/node-protocol";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -86,16 +86,26 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     }
   });
 
-  it("refuses, without running it, a command whose timeout is past the protocol's maximum", async () => {
+  it("refuses, without running it, a command whose timeout is past the protocol's maximum for its mode", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    const result = await node.run(agentId, "bash", {
-      command: "touch ran",
-      timeout: BASH_MAX_TIMEOUT_SECONDS + 1,
+    const { foreground, background } = BASH_TIMEOUT_SECONDS;
+    for (const [mode, args] of [
+      ["foreground", { command: "touch ran", timeout: foreground.max + 1 }],
+      ["background", { command: "touch ran", background: true, timeout: background.max + 1 }],
+    ] as const) {
+      const result = await node.run(agentId, "bash", args);
+      expect(result.isError, mode).toBe(true);
+      expect(textOf(result), mode).toMatch(/Invalid bash arguments/);
+      expect(existsSync(join(workspace, "ran")), `nothing ran in the ${mode}`).toBe(false);
+    }
+
+    const long = await node.run(agentId, "bash", {
+      command: "echo allowed",
+      background: true,
+      timeout: foreground.max + 1,
     });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toMatch(/Invalid bash arguments/);
-    expect(existsSync(join(workspace, "ran")), "nothing ran").toBe(false);
+    expect(textOf(long), "a background command may ask for more than an hour").toBe("allowed\n");
   });
 
   it("reports a command the system cannot start as not started", async () => {

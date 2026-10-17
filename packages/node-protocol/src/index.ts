@@ -26,25 +26,72 @@ export type ToolName = z.infer<typeof ToolNameSchema>;
 
 /** Bytes of a command's combined output its result keeps: the tail. Earlier output is dropped and the result says so. */
 export const BASH_KEPT_OUTPUT_BYTES = 50 * 1024;
-/** The longest timeout a command may ask for: one day. */
-export const BASH_MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
 
 /**
- * The arguments of the node's `bash` tool. The runtime shows the model this schema and the node validates calls with
- * it, so what the model is promised and what the node does come from one place.
+ * A command's timeout in seconds, by how it runs: the one it gets when the call names none, and the most it may ask
+ * for. A foreground command holds up its conversation, so it always has a limit.
  */
-export const BashArgumentsSchema = z.object({
-  command: z.string().describe("The command, run verbatim by /bin/sh -c"),
-  timeout: z
-    .number()
-    .positive()
-    .max(BASH_MAX_TIMEOUT_SECONDS)
-    .optional()
-    .describe(
-      `Timeout in seconds, at most ${BASH_MAX_TIMEOUT_SECONDS}; no timeout when omitted. On timeout every process the command started is killed`,
-    ),
-});
-export type BashArguments = z.infer<typeof BashArgumentsSchema>;
+export const BASH_TIMEOUT_SECONDS = {
+  foreground: { default: 10 * 60, max: 60 * 60 },
+  background: { default: undefined, max: 24 * 60 * 60 },
+} as const;
+
+const { foreground, background } = BASH_TIMEOUT_SECONDS;
+
+/**
+ * The arguments of the node's `bash` tool. The runtime shows the model this schema and parses calls with it, and the
+ * node parses them again with it, so what the model is promised, the defaults, and what the node does come from one
+ * place. Parsing applies the mode's default timeout; parsing the result again changes nothing.
+ */
+const BashArgumentsSchema = z
+  .object({
+    command: z.string().describe("The command, run verbatim by /bin/sh -c"),
+    timeout: z
+      .number()
+      .positive()
+      .max(background.max)
+      .optional()
+      .describe(
+        `Timeout in seconds. In the foreground ${foreground.default} when omitted and at most ${foreground.max}; in ` +
+          `the background none when omitted and at most ${background.max}. On timeout every process the command ` +
+          "started is killed",
+      ),
+    background: z
+      .boolean()
+      .optional()
+      .describe(
+        "Run the command in the background: bash returns a command ID at once and you keep working; the command's " +
+          "result arrives as a new input when it ends. Stop it with bash_stop",
+      ),
+  })
+  .refine(
+    (call) =>
+      call.background === true || call.timeout === undefined || call.timeout <= foreground.max,
+    {
+      message: `A foreground command's timeout is at most ${foreground.max} seconds`,
+      path: ["timeout"],
+    },
+  )
+  .transform(({ command, timeout, background: inBackground = false }) => {
+    const effective =
+      timeout ?? BASH_TIMEOUT_SECONDS[inBackground ? "background" : "foreground"].default;
+    return {
+      command,
+      background: inBackground,
+      ...(effective === undefined ? {} : { timeout: effective }),
+    };
+  });
+export type BashArguments = z.output<typeof BashArgumentsSchema>;
+
+/** A `bash` call's arguments with its mode's default timeout applied, or why they are invalid. */
+export function parseBashArguments(
+  value: unknown,
+): { ok: true; arguments: BashArguments } | { ok: false; error: string } {
+  const parsed = BashArgumentsSchema.safeParse(value);
+  return parsed.success
+    ? { ok: true, arguments: parsed.data }
+    : { ok: false, error: `Invalid bash arguments: ${z.prettifyError(parsed.error)}` };
+}
 
 const { $schema: _, ...bashParameters } = z.toJSONSchema(BashArgumentsSchema, { io: "input" });
 
@@ -56,7 +103,9 @@ export const bashTool = {
     `the combined stdout and stderr; only the last ${BASH_KEPT_OUTPUT_BYTES / 1024}KB are kept, and the result says ` +
     "how much was dropped before them. A nonzero exit, a kill by signal, and a timeout are errors. When the command " +
     "returns while processes it started in the background still run, the result says so; if they still hold the " +
-    "output, it returns about a second after the command and says the output may be incomplete.",
+    "output, it returns about a second after the command and says the output may be incomplete. You wait for a " +
+    `foreground command, ${foreground.default / 60} minutes at most unless you give a timeout; run a long command ` +
+    "with background: true instead and keep working.",
   parameters: bashParameters,
 } as const;
 

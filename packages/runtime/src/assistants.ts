@@ -20,7 +20,7 @@ type Assistant = {
 };
 
 /** The primary conversation's assistants, by name. */
-const AssistantsDoc = defineDoc<{ assistants: Record<string, Assistant> }>({
+export const AssistantsDoc = defineDoc<{ assistants: Record<string, Assistant> }>({
   kind: "mate.assistants",
   version: 1,
   scope: "conversation",

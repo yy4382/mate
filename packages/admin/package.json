@@ -1,0 +1,29 @@
+{
+  "name": "@mate/admin",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "mate-source": "./src/index.ts",
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mate/chat": "workspace:*",
+    "@mate/clock": "workspace:*",
+    "@mate/control-store": "workspace:*",
+    "@mate/gateway": "workspace:*",
+    "@mate/manager": "workspace:*",
+    "@mate/runtime": "workspace:*",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@mate/node-protocol": "workspace:*",
+    "@mate/testkit": "workspace:*"
+  }
+}

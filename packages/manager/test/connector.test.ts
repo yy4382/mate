@@ -1,4 +1,3 @@
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { CHAT_READ_UNREAD, createAgentStore, openAgentRuntime } from "@mate/runtime";
 import { FaultyDatabase } from "@mate/testkit";
 import { join } from "node:path";
@@ -76,22 +75,17 @@ async function connect(env: Environment, account: number, runtime: NoticeTarget)
 /** A real runtime on its own store, outside any manager, with a store the test can freeze. */
 async function realRuntime(env: Environment) {
   const file = join(env.data, "agent.sqlite");
-  await createAgentStore(file, settings);
+  await createAgentStore(file, { nodeId: "node-a", settings });
   const workspace = new FakeWorkspace();
-  const catalog = builtinModels();
   return {
     workspace,
     async open() {
       let database: FaultyDatabase | undefined;
       const runtime = await openAgentRuntime({
         file,
-        apiKey: () => "test-key",
+        credentials: () => ({ apiKey: "test-key", baseUrl: env.provider.baseUrl }),
         workspace,
         clock: env.clock,
-        resolveModel: ({ provider, modelId }) => {
-          const model = catalog.getModel(provider, modelId);
-          return model === undefined ? undefined : { ...model, baseUrl: env.provider.baseUrl };
-        },
         wrapDatabase: (inner) => (database = new FaultyDatabase(inner)),
       });
       onTestFinished(() => (database?.frozen ? undefined : runtime.close()));

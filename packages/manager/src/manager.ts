@@ -3,22 +3,28 @@ import { existsSync } from "node:fs";
 import type { ChatApp } from "@mate/chat";
 import { systemClock, type Clock } from "@mate/clock";
 import {
+  configureAgentFile,
   createAgentStore,
   openAgentRuntime,
   readAgentState,
   setAgentPaused,
   type AgentRuntime,
   type AgentSettings,
-  type ModelResolver,
+  type AgentState as AgentFileState,
+  type AgentUsage,
+  type CredentialsLookup,
   type WorkspacePort,
 } from "@mate/runtime";
 import { AgentFiles } from "./agent-files.ts";
 import { connectInbox, type InboxConnector } from "./connector.ts";
 
-/** Where Agents' workspaces live. Preparing is idempotent: it creates the workspace once, later calls do nothing. */
+/**
+ * Where Agents' workspaces live: on nodes. Preparing is idempotent: it creates the Agent's workspace on the node once,
+ * later calls do nothing. The port runs the Agent's workspace tools on that node.
+ */
 export type WorkspaceHost = {
-  prepare(agentId: string): Promise<void>;
-  port(agentId: string): WorkspacePort;
+  prepare(nodeId: string, agentId: string): Promise<void>;
+  port(nodeId: string, agentId: string): WorkspacePort;
 };
 
 export type AgentManagerOptions = {
@@ -26,8 +32,8 @@ export type AgentManagerOptions = {
   readonly directory: string;
   readonly chat: ChatApp;
   readonly workspaces: WorkspaceHost;
-  readonly apiKey: () => string;
-  readonly resolveModel?: ModelResolver;
+  /** Each provider's credentials, read at every model request of every Agent. */
+  readonly credentials: CredentialsLookup;
   readonly clock?: Clock;
   /** Told about an Agent that failed to open, a failed connector pass, or a runtime whose storage failed. */
   readonly report?: (error: unknown, agentId: string) => void;
@@ -36,12 +42,26 @@ export type AgentManagerOptions = {
 export type AgentSpec = {
   /** Pass the ID of a failed create to finish that Agent instead of starting another. */
   readonly agentId?: string;
+  /** The node the Agent's workspace is on. It is recorded in the Agent's file and never changes. */
+  readonly nodeId: string;
   readonly displayName: string;
   readonly handle: string;
   readonly settings: AgentSettings;
 };
 
 export type AgentSummary = { readonly agentId: string; readonly open: boolean };
+
+/**
+ * An Agent as it is now. `paused` and `closed` are both closed Agents: a paused one stays closed until it is resumed; a
+ * closed one failed to open or its runtime died, and opens again on resume or the next start.
+ */
+export type AgentDescription = {
+  readonly agentId: string;
+  readonly nodeId: string;
+  readonly state: "open" | "paused" | "closed";
+  readonly settings: AgentSettings;
+  readonly usage: AgentUsage;
+};
 
 /** A create that stopped part way. Calling `create` again with `agentId` finishes the same Agent. */
 export class AgentCreationFailed extends Error {
@@ -57,21 +77,23 @@ export class AgentCreationFailed extends Error {
 
 /**
  * What the manager knows of an Agent: open, with its runtime and connector, or closed. An Agent missing from the map is
- * closed. Only a closed Agent carries its paused record, the one fact the manager keeps in the Agent's file so a paused
- * Agent stays closed across restarts; the record opens its own Durable session on the file, so writing it while a
- * runtime is open on that file would corrupt the runtime's storage. Reaching the record through `Closed` makes that
- * impossible.
+ * closed. Only a closed Agent reaches its file directly: its paused record, its node, its settings. Each of those reads
+ * and writes opens its own Durable session on the file, so doing it while a runtime is open on that file would corrupt
+ * the runtime's storage. Reaching the file through `Closed` makes that impossible; an open Agent is reached through
+ * its runtime, and keeps the node it was opened on.
  */
 type AgentState = Open | Closed;
 type Open = {
   readonly kind: "open";
+  readonly nodeId: string;
   readonly runtime: AgentRuntime;
   readonly inbox: InboxConnector;
 };
 type Closed = {
   readonly kind: "closed";
-  readonly paused: () => Promise<boolean>;
+  readonly read: () => Promise<AgentFileState>;
   readonly setPaused: (paused: boolean) => Promise<void>;
+  readonly configure: (settings: AgentSettings) => Promise<void>;
 };
 
 /** Open every Agent in the directory that is not paused. An Agent that fails to open is reported and skipped. */
@@ -124,11 +146,31 @@ export class AgentManager {
     return this.#open.get(agentId)?.runtime;
   }
 
+  /** The Agent's node, state, settings and usage. Rejects with `AgentStoreMissing` when the Agent does not exist. */
+  describe(agentId: string): Promise<AgentDescription> {
+    return this.#lifecycle(agentId, async (state) => {
+      if (state.kind === "open") {
+        const { nodeId, runtime } = state;
+        const settings = await runtime.settings();
+        return { agentId, nodeId, state: "open", settings, usage: await runtime.usage() };
+      }
+      const { paused, nodeId, settings, usage } = await state.read();
+      return { agentId, nodeId, state: paused ? "paused" : "closed", settings, usage };
+    });
+  }
+
+  /** Change the Agent's model settings, open or closed. An open Agent uses them from its next model request. */
+  configure(agentId: string, settings: AgentSettings): Promise<void> {
+    return this.#lifecycle(agentId, (state) =>
+      state.kind === "open" ? state.runtime.configure(settings) : state.configure(settings),
+    );
+  }
+
   /**
-   * Create an Agent and open it: its chat account, its workspace, then its store, which is renamed into place last, so
-   * the Agent exists only once everything else is in place. Every step can be repeated, so when one fails the caller
-   * creates again with the `agentId` of the `AgentCreationFailed` and gets the same Agent, with one account and one
-   * file.
+   * Create an Agent and open it: its chat account, its workspace on the chosen node, then its store, which records the
+   * node and is renamed into place last, so the Agent exists only once everything else is in place. Every step can be
+   * repeated, so when one fails the caller creates again with the `agentId` of the `AgentCreationFailed` and gets the
+   * same Agent, with one account and one file.
    */
   create(spec: AgentSpec): Promise<string> {
     const agentId = spec.agentId ?? randomUUID();
@@ -141,8 +183,9 @@ export class AgentManager {
           displayName: spec.displayName,
           handle: spec.handle,
         });
-        await workspaces.prepare(agentId);
-        if (!existsSync(file)) await createAgentStore(file, spec.settings);
+        await workspaces.prepare(spec.nodeId, agentId);
+        if (!existsSync(file))
+          await createAgentStore(file, { nodeId: spec.nodeId, settings: spec.settings });
         await this.#start(agentId, state);
       } catch (error) {
         throw new AgentCreationFailed(agentId, error);
@@ -219,11 +262,12 @@ export class AgentManager {
     return result;
   }
 
-  /** Open the closed Agent unless it is paused. Runs in the Agent's queue. */
+  /** Open the closed Agent unless it is paused, with its workspace on the node its file records. Runs in its queue. */
   async #start(agentId: string, state: Closed): Promise<void> {
-    if (await state.paused()) return;
+    const { paused, nodeId } = await state.read();
+    if (paused) return;
     const file = this.#files.file(agentId);
-    const { chat, workspaces, apiKey, resolveModel } = this.#options;
+    const { chat, workspaces, credentials } = this.#options;
     // The chat app holds the account; the Agent ID is its external identity, so there is no second record of it.
     const account = chat.findAccount(agentId);
     if (account === undefined) throw new Error(`Agent ${agentId} has no chat account`);
@@ -231,8 +275,8 @@ export class AgentManager {
     let opened: Open | undefined;
     const runtime = await openAgentRuntime({
       file,
-      apiKey,
-      workspace: workspaces.port(agentId),
+      credentials,
+      workspace: workspaces.port(nodeId, agentId),
       chat: chat.forAccount(account),
       clock: this.#clock,
       onFatal: (error) => {
@@ -243,10 +287,9 @@ export class AgentManager {
             await this.#stop(agentId, opened);
         });
       },
-      ...(resolveModel === undefined ? {} : { resolveModel }),
     });
     const inbox = await connectInbox({ chat, account, runtime, clock: this.#clock, report });
-    opened = { kind: "open", runtime, inbox };
+    opened = { kind: "open", nodeId, runtime, inbox };
     this.#open.set(agentId, opened);
   }
 
@@ -266,8 +309,9 @@ export class AgentManager {
 function closed(file: string): Closed {
   return {
     kind: "closed",
-    paused: async () => (await readAgentState(file)).paused,
+    read: () => readAgentState(file),
     setPaused: (paused) => setAgentPaused(file, paused),
+    configure: (settings) => configureAgentFile(file, settings),
   };
 }
 

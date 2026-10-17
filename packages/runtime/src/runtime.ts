@@ -1,9 +1,10 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
+  AgentDoc,
   Harness,
-  configure,
   createRegistry,
+  watchEvents,
+  type AgentEvent,
   type CompactionPolicy,
   type Conversation,
   type Cursor,
@@ -11,27 +12,23 @@ import {
   type Extension,
 } from "@earendil-works/pi-durable";
 import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { assistants } from "./assistants.ts";
+import { AgentStateDoc, type AgentUsage } from "./agent-state.ts";
+import { AssistantsDoc, assistants } from "./assistants.ts";
 import { chatExtension, type ChatPort } from "./chat-tools.ts";
 import { systemClock, type Clock } from "@mate/clock";
 import { historyExtension } from "./history.ts";
 import { Lifetime, guardDatabase } from "./lifetime.ts";
-import { agentModels, type ModelRef, type ModelResolver } from "./models.ts";
+import { agentModels, type CredentialsLookup, type ModelResolver } from "./models.ts";
 import { reminders } from "./reminders.ts";
+import { agentChange, configureConversations, settingsOf, type AgentSettings } from "./settings.ts";
 import { createAgentStorage, openAgentStorage, type DatabaseWrapper } from "./storage.ts";
 import { workspaceExtension, type WorkspacePort } from "./workspace-tools.ts";
-
-export type AgentSettings = {
-  readonly model: ModelRef;
-  readonly thinkingLevel?: ModelThinkingLevel;
-  readonly instructions?: string;
-};
 
 export type AgentRuntimeOptions = {
   /** `data/agents/<agentId>.sqlite`. Opening fails with `AgentStoreMissing` when it does not exist. */
   readonly file: string;
-  /** Read at every model request, so a key change applies from the next request. */
-  readonly apiKey: () => string;
+  /** Each provider's credentials, read at every model request, so a changed key applies from the next request. */
+  readonly credentials: CredentialsLookup;
   readonly workspace: WorkspacePort;
   /** The chat app bound to this Agent's account. Without it the Agent has no chat tools. */
   readonly chat?: ChatPort;
@@ -56,21 +53,40 @@ export type SubmittedInput = {
 
 export type WithdrawResult = "withdrawn" | "already_placed" | "settled" | "not_found";
 
-/** Create a new Agent store. The Agent exists once this resolves. */
-export async function createAgentStore(file: string, settings: AgentSettings): Promise<void> {
+/** A watch on one conversation's agent events. */
+export type EventWatch = {
+  /** Stop delivering events. */
+  stop(): Promise<void>;
+  /** Resolves once no more events will come: after `stop()`, or when the runtime closes. */
+  readonly ended: Promise<void>;
+};
+
+/**
+ * Create a new Agent store for an Agent whose workspace is on `nodeId`. The node is recorded in the same commit as the
+ * settings and never changes. The Agent exists once this resolves.
+ */
+export async function createAgentStore(
+  file: string,
+  agent: { readonly nodeId: string; readonly settings: AgentSettings },
+): Promise<void> {
   await createAgentStorage(file, async (storage) => {
     const lifetime = new Lifetime();
     const harness = await Harness.open(
       storage,
       {
-        models: agentModels(() => "", undefined, lifetime.signal),
+        models: agentModels(() => undefined, undefined, lifetime.signal),
         registry: createRegistry(),
         settings: { toolExecution: "sequential" },
       },
       BACKGROUND_CONTEXT,
     );
     try {
-      await harness.root(BACKGROUND_CONTEXT, { agent: agentChange(settings) });
+      await harness.root(BACKGROUND_CONTEXT, {
+        agent: agentChange(agent.settings),
+        init: async (tx) => {
+          (await tx.doc(AgentStateDoc)).nodeId = agent.nodeId;
+        },
+      });
     } finally {
       await harness.close(BACKGROUND_CONTEXT);
     }
@@ -101,14 +117,19 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     remindersExtension,
     ...(options.chat === undefined ? [] : [chatExtension(options.chat)]),
   ];
-  registry.install(workspaceExtension(options.workspace, lifetime.signal));
+  // `harness` exists by the time a tool runs: no task is scheduled before `resume()`.
+  registry.install(
+    workspaceExtension(options.workspace, lifetime.signal, (id, context) =>
+      harness.abortTask(id, context),
+    ),
+  );
   registry.install(historyExtension);
   for (const extension of primaryOnlyExtensions) registry.install(extension);
   registry.install(assistantsIdentity);
   const harness = await Harness.open(
     storage,
     {
-      models: agentModels(options.apiKey, options.resolveModel, lifetime.signal),
+      models: agentModels(options.credentials, options.resolveModel, lifetime.signal),
       registry,
       settings: { toolExecution: "sequential", compaction },
     },
@@ -213,15 +234,12 @@ export class AgentRuntime {
 
   /** Change the model settings of every conversation of this Agent, effective from each one's next request. */
   async configure(settings: AgentSettings): Promise<void> {
-    await this.#root.commit(async (tx) => {
-      let cursor: Cursor | undefined;
-      do {
-        const page = await tx.scanConversations({}, 100, cursor);
-        for (const conversation of page.items)
-          await configure(tx, conversation.id, agentChange(settings));
-        cursor = page.next;
-      } while (cursor !== undefined);
-    }, BACKGROUND_CONTEXT);
+    await this.#root.commit((tx) => configureConversations(tx, settings), BACKGROUND_CONTEXT);
+  }
+
+  /** The model settings the Agent's conversations share. */
+  async settings(): Promise<AgentSettings> {
+    return settingsOf(await this.#harness.snapshot(AgentDoc, this.#root.id, BACKGROUND_CONTEXT));
   }
 
   /** Resolves when no work is running or queued. Rejects once the runtime is closed or dead. */
@@ -229,8 +247,48 @@ export class AgentRuntime {
     return this.#lifetime.orFailure(this.#harness.waitForIdle(BACKGROUND_CONTEXT));
   }
 
-  async usage() {
+  async usage(): Promise<AgentUsage> {
     return this.#harness.usage(BACKGROUND_CONTEXT);
+  }
+
+  /** The names of the Agent's work assistants, whose conversations `watchEvents` can watch too. */
+  async assistants(): Promise<string[]> {
+    const state = await this.#harness.snapshot(AssistantsDoc, this.#root.id, BACKGROUND_CONTEXT);
+    return Object.keys(state?.assistants ?? {}).sort();
+  }
+
+  /**
+   * Watch the primary conversation's agent events, or with `assistant` that assistant's: streamed text, tool calls and
+   * their output, inputs, usage. The first batch is a snapshot of the conversation as it is; a listener that falls far
+   * behind gets a fresh snapshot instead of the batches it missed. Watching writes nothing. The watch ends when it is
+   * stopped or the runtime closes.
+   */
+  async watchEvents(
+    listener: (events: readonly AgentEvent[]) => void | Promise<void>,
+    options: { assistant?: string } = {},
+  ): Promise<EventWatch> {
+    const { assistant } = options;
+    let conversationId = this.#root.id;
+    if (assistant !== undefined) {
+      const state = await this.#harness.snapshot(AssistantsDoc, this.#root.id, BACKGROUND_CONTEXT);
+      const found = state?.assistants[assistant];
+      if (found === undefined) throw new Error(`no assistant named ${assistant}`);
+      conversationId = found.conversationId;
+    }
+    const stream = await watchEvents(this.#harness, conversationId, BACKGROUND_CONTEXT);
+    try {
+      await listener([stream.snapshot]);
+    } catch (error) {
+      await stream.stop();
+      throw error;
+    }
+    stream.start(async (events) => listener(events));
+    return {
+      stop: async () => {
+        await stream.stop();
+      },
+      ended: stream.closed.then(() => undefined),
+    };
   }
 
   /**
@@ -265,11 +323,3 @@ const CursorsDoc = defineDoc<{ positions: Record<string, number> }>({
   scope: "session",
   initial: () => ({ positions: {} }),
 });
-
-function agentChange(settings: AgentSettings) {
-  return {
-    model: settings.model,
-    thinkingLevel: settings.thinkingLevel ?? null,
-    instructions: settings.instructions ?? null,
-  };
-}

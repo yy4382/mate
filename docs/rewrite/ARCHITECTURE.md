@@ -221,24 +221,33 @@ interface ChatApp {
 **对外接口（给 Agent Manager 和连接器用）：**
 
 ```ts
-createAgentStore(file, settings) // 新建 Agent 文件；返回时 Agent 就存在了
-// 打开 Harness 并调用 resume()。存储出错时调用一次 onFatal，之后这个 runtime 就死了，要从文件重新打开
-openAgentRuntime({ file, apiKey, workspace, chat?, resolveModel?, clock?, onFatal? }): AgentRuntime
+// 新建 Agent 文件；node ID 和设置在同一次提交里写入，node ID 之后不变。返回时 Agent 就存在了
+createAgentStore(file, { nodeId, settings })
+// 打开 Harness 并调用 resume()。存储出错时调用一次 onFatal，之后这个 runtime 就死了，要从文件重新打开。
+// credentials(provider) 返回这个提供商的 { apiKey, baseUrl? }，每次模型请求时现读：改了 key 从下一次请求起生效；
+// 没有凭据的提供商，请求不发出就失败。baseUrl 替换模型目录里的地址（兼容的代理、部署冒烟测试的脚本化提供商）
+openAgentRuntime({ file, credentials, workspace, chat?, resolveModel?, clock?, onFatal? }): AgentRuntime
 interface AgentRuntime {
   // 透传给主对话。带 replaces 时，先撤回收件箱里 requestId 以它开头、且不是这次 requestId 的未交付输入
   submit(input, { requestId, whenBusy, replaces? }): Submission
   withdraw(requestId) // 撤回尚未交给模型的提交
   cursor(name) / advanceCursor(name, value) // 环境在某个来源里的位置，只进不退；连接器用 "chat-inbox"
   configure(settings) // 模型、thinking 级别、说明文字；从下一次请求起生效
+  settings() // 当前的设置
   idle() // 没有进行中、也没有排队的工作时返回；runtime 已关闭或存储已失败时 reject
   usage()
+  assistants() // 工作助手的名字
+  // 观察主对话（或带 assistant 时那个助手）的 Durable agent 事件：第一批是快照，之后是流式文字、工具调用和输出。
+  // 只读，不改变任何状态；stop() 或 runtime 关闭时结束（ended）
+  watchEvents(listener, { assistant? }): { stop(), ended }
   close() // 中止所有进行中的工作，然后关闭 Harness
-  // 给管理界面观察的 view() / watchEvents() 还没有实现，属于 M6
 }
 CHAT_READ_UNREAD // 读未读的聊天工具名；连接器在通知里引用它，不另写一份
-// 在没有打开 runtime 的 Agent 文件上读写"已暂停"，只给 Agent Manager 处于关闭状态的 Agent 用
-readAgentState(file): { paused }
+catalogModels(provider) // pi-ai 模型目录里这个提供商的模型和各自接受的 thinking 级别；Agent 的请求也在这个目录里解析
+// 在没有打开 runtime 的 Agent 文件上读写，只给 Agent Manager 处于关闭状态的 Agent 用
+readAgentState(file): { paused, nodeId, settings, usage }
 setAgentPaused(file, paused)
+configureAgentFile(file, settings) // 和 configure 一样改所有对话的设置
 ```
 
 **关键规则：**
@@ -283,8 +292,9 @@ setAgentPaused(file, paused)
 **对外接口：**
 
 ```ts
-openAgentManager({ directory, chat, workspaces, apiKey, resolveModel?, clock?, report? }): AgentManager
-// workspaces: WorkspaceHost { prepare(agentId), port(agentId): WorkspacePort }
+openAgentManager({ directory, chat, workspaces, credentials, clock?, report? }): AgentManager
+// workspaces: WorkspaceHost { prepare(nodeId, agentId), port(nodeId, agentId): WorkspacePort }
+// credentials：原样交给每个 runtime（见 4.2）
 // report(error, agentId)：打不开的 Agent、出错的连接器、存储失败的 runtime 都报告到这里，不让进程崩溃
 interface AgentManager {
   list(): { agentId, open }[] // 就是目录里的 <agentId>.sqlite
@@ -293,6 +303,10 @@ interface AgentManager {
   delete(id) // 关闭 runtime，停用聊天账号，删除文件
   pause(id) // 打开的先关闭；然后在 Agent 文件里记下"已暂停"
   resume(id) // 已打开的什么都不做；关闭的清除"已暂停"，再打开 runtime
+  // state：open、paused，或 closed（打不开或 runtime 死了，没有记为暂停）。打开的从 runtime 读，关闭的从文件读，
+  // 两种得到的事实相同。Agent 不存在时 reject AgentStoreMissing
+  describe(id): { agentId, nodeId, state, settings, usage }
+  configure(id, settings) // 打开的调 runtime.configure，关闭的写进文件；恢复后从下一次请求起生效
   runtime(id): AgentRuntime | undefined // 已打开时返回
   close() // 关闭所有 runtime
 }
@@ -303,7 +317,7 @@ interface AgentManager {
 1. **一个 Agent 存在，当且仅当 `data/agents/<id>.sqlite` 存在。** 启动时扫描目录，打开所有没有被暂停的 Agent。没有另外一张"Agent 列表"。
 2. **同一个 Agent 的生命周期操作串行执行**，每个 Agent 一条队列。所以同一个 Agent 最多只有一个已打开的 runtime，这由结构保证，不需要检查。
 3. **暂停就是立刻关闭。** 进行中的模型请求被中止，node 上的工具调用被停止。恢复时 Durable 从停下的地方接着跑。不存在"还在跑但已经没资格跑"的状态。
-   Manager 对每个 Agent 只记一个状态：打开（runtime 加连接器）或关闭。"已暂停"记录只能从关闭状态读写：它在文件上另开一个 Durable 会话，和打开的 runtime 并存就会弄坏 runtime 的存储。所以对打开的 Agent 调 `resume` 什么都不做，对关闭的 Agent 调 `pause` 只写记录。
+   Manager 对每个 Agent 只记一个状态：打开（runtime 加连接器，以及打开时从文件读出的 node ID）或关闭。Agent 文件里的东西（"已暂停"、node ID、设置、用量）只能从关闭状态直接读写：那样做会在文件上另开一个 Durable 会话，和打开的 runtime 并存就会弄坏 runtime 的存储。打开的 Agent 一律经它的 runtime 读写。所以对打开的 Agent 调 `resume` 什么都不做，对关闭的 Agent 调 `pause` 只写记录。
 4. **创建的顺序：**
    1. 生成 Agent ID；
    2. 调用 `chat.ensureAccount({ externalId: agentId })`，这个调用可以安全重复；
@@ -313,7 +327,7 @@ interface AgentManager {
    node ID 记在 Agent 文件里，之后不变；打开 Agent 时 Manager 从文件里读出它，把工作区工具接到这个 node。
 
    中途失败了，重做一遍即可。改名是最后一步，所以 Agent 要么完整存在，要么不存在。`create` 失败时 reject 的 `AgentCreationFailed` 带着这次的 Agent ID，调用方把它作为 `agentId` 传回 `create` 重做：每一步都可以重复（账号以 `externalId` 幂等、工作区准备幂等、文件已存在就跳过），所以得到的还是同一个 Agent、一个账号、一个文件。不带 `agentId` 重做会生成新 ID，而旧 ID 的账号仍占着 handle，所以重做必须带上它。目录里只有名字正好是 `<UUID>.sqlite` 的文件才算 Agent，临时文件（`.creating`）和 SQLite 的附属文件都不算。
-5. **打开一个 Agent：** 读它的"已暂停"，暂停了就不打开；用 `chat.findAccount(agentId)` 找到它的账号，把 `ChatApp` 绑定到这个账号作为聊天端口；打开 runtime，再挂上连接器。
+5. **打开一个 Agent：** 从它的文件读"已暂停"和 node ID，暂停了就不打开；用 `chat.findAccount(agentId)` 找到它的账号，把 `ChatApp` 绑定到这个账号作为聊天端口；用 `workspaces.port(nodeId, agentId)` 得到工作区端口；打开 runtime，再挂上连接器。
 6. **删除的顺序：** 关闭 runtime，停用聊天账号，最后删除文件。删除中途失败，Agent 仍然存在，重做一遍即可。
 7. **runtime 死了，Agent 就关闭。** runtime 的存储出错（`onFatal`）时，Manager 报告错误，并在这个 Agent 的队列里停掉连接器、关闭 runtime，`list()` 随即显示它已关闭。Manager 不自动重开：同样的故障多半会让重开再次失败。它没有被记为暂停，所以调 `resume` 或下次启动 Manager 时会重新打开，Durable 从文件里已提交的地方接着跑。
 
@@ -326,7 +340,7 @@ interface AgentManager {
 **工具调用按"整个调用"转发。** runtime 把一次完整的工具调用（工具名、参数）交给网关，网关发给 node，node 在本地执行，边执行边把输出流回来，最后返回结果。这样每次工具调用只有一次往返，不需要在网络上逐个实现 Durable 执行环境接口的二十多个文件方法。网关为每次调用生成自己的请求 ID（随机 UUID），输出、结果和停止都按它对应；调用方的任何 ID 都不上线路，所以不同 Agent 的调用不可能撞号。node 工具调用不按 ID 去重：有副作用的工具崩溃后不重做（4.2 规则 2），可重做的 `read` 重做一次也无妨。
 
 - **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于该工作区的 `NodeExecutionEnv`（**工作区环境**）上：参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
-- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用 `/bin/sh -c` 原样执行命令，每条命令一个**命令进程组**，结果如实区分正常退出（附退出码）、被信号终止、超时被杀、被停止、没能启动，并标明截断、输出可能不完整、后台进程仍在运行。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，node 拿同一个 schema 校验参数，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。
+- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用 `/bin/sh -c` 原样执行命令，每条命令一个**命令进程组**，结果如实区分正常退出（附退出码）、被信号终止、超时被杀、被停止、没能启动，并标明截断、输出可能不完整、后台进程仍在运行。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
 
 **接口（网关对 runtime）：**
 
@@ -341,7 +355,7 @@ interface NodeGateway {
   createPairingToken(): { pairingToken, expiresAt } // 一次性令牌，只能配对一个新 node
   handleUpgrade(req, socket, head) // 挂到 Web 外壳的 HTTP upgrade 上
   close()
-  // browse(nodeId, agentId, path)：管理界面只读浏览工作区，还没有实现，属于 M6
+  // browse(nodeId, agentId, path)：管理界面只读浏览工作区，形状见 4.6，还没有实现
 }
 ```
 
@@ -364,24 +378,60 @@ interface NodeGateway {
 - 一个模块第一次打开时，在同一个事务里建表并记下版本。建表用不带 `IF NOT EXISTS` 的 `CREATE TABLE`，表名和别的模块撞了同样拒绝启动，不会两个模块悄悄共用一张表。
 - 每条连接都用 WAL、`synchronous=FULL`、5 秒 busy timeout。WAL 让一个模块开着读事务时别的模块照常提交。`node:sqlite` 是同步的，一个不 await 的事务在进程里别的连接开始事务之前就已结束，所以同一进程里的几条连接从不互相等待。规则是**控制库的事务里不 await**；busy timeout 只给进程外的读写者（备份、`sqlite3` 命令行）留余地。
 
-**后台命令。** `bash` 带 `background: true` 时，网关照常转发这次调用，runtime 立即给模型返回一个命令 ID，调用继续在一个 Durable 后台任务里等结果。命令结束时，这个任务把结果作为输入（`requestId = command:<ID>`，`whenBusy = "steer"`）提交给发起它的对话，Durable 去重。`bash_stop(ID)` 中止那个任务的 signal，和前台调用的停止走同一条路（规则 6）。runtime 关闭（暂停、控制面重启）时后台命令和前台命令一样被停掉，重新打开后那个任务以"已中断"汇报一次，不重跑命令。前台命令不给 `timeout` 时默认 10 分钟，最多 1 小时；后台命令不给时没有时限，最多一天。
+**后台命令。** `bash` 带 `background: true` 时，runtime 在发起它的对话（主对话或工作助手）里建一个 Durable 后台任务，把这个任务的 ID 作为命令 ID 立即返回给模型。后台任务不让对话保持忙碌，也不随对话的 run 结束或被中止，所以 Agent 照常工作、照常空闲。这个任务把调用交给网关、等结果，步骤和 Durable 自己的工具任务一样：
+
+1. 交给网关之前，先记下"已交给 node"。重新打开的 runtime 发现任务停在这里，就知道命令可能跑过，汇报"已中断"，不重跑。
+2. 命令结束后，先把要汇报的文字（结果的全部文本，开头一行写明命令 ID、成功还是出错、命令本身）存进任务，再作为输入提交给发起它的对话（`requestId = command:<ID>`，`whenBusy = "steer"`），最后结束任务。提交之后、结束之前崩溃的话，重做时同一个 `requestId` 被 Durable 去重，所以结果恰好汇报一次。
+
+后台命令的输出不流式显示，只在汇报里出现，截断规则和前台一样由 node 定。`bash_stop(ID)` 中止那个任务（Durable 的 `abortTask`），任务的 signal 随之中止，网关停掉 node 上的这次调用，和前台调用的停止走同一条路（规则 6）；被停止的命令不再汇报，`bash_stop` 的结果就是"已停止"。只能停自己这个对话的后台命令：不认识的 ID 返回错误结果；已经结束的命令返回普通结果，说明它已结束、结果会作为输入到达。停止恰好发生在命令结束之后、汇报提交之前时，照样提交汇报。`bash_stop` 可以重做：再停一次什么都不变，回答从任务的结局读出。runtime 关闭（暂停、控制面重启）时后台命令和前台命令一样被停掉，重新打开后那个任务以"已中断"汇报一次，不重跑命令。没有列出后台命令的工具：命令 ID 就在 `bash` 的结果里，压缩之后也能用历史工具查到。前台命令不给 `timeout` 时默认 10 分钟，最多 1 小时；后台命令不给时没有时限，最多一天。
 
 ### 4.6 管理模块
 
 **职责：** 所有者用来管理 Agent 和环境：
 - 创建、删除、暂停、恢复 Agent（调用 Agent Manager）；
-- 设置模型、thinking 级别、说明文字（调用 `runtime.configure`）；
+- 设置模型、thinking 级别、说明文字（调用 `manager.configure`）；
 - 管理各提供商的 API key；
 - 配对 node，查看 node 状态；
 - 查看某个 Agent 的实时对话记录和工具调用（`watchEvents`）；
 - 查看 token 用量；
 - 浏览 Agent 的工作区。
 
-**不负责：** 聊天。管理模块需要给 Agent 开聊天账号时，以聊天 app 普通客户端的身份去调用。
+**不负责：** 聊天。Agent 的显示名和 handle 归聊天账号，管理模块以所有者的身份从聊天 app 读（`liveSnapshot(owner).accounts`），自己不另存；创建 Agent 时由 Manager 调 `ensureAccount` 开账号。
 
-**模型和 API key：** 模型来自 pi-ai 自带的目录。首版提供 OpenAI（Responses API）和 DeepSeek 两家；只能选已经存了 API key 的提供商的模型，thinking 级别按模型目录校验。
+**它拥有 Agent Manager。** `openAdmin` 先打开自己在控制库里的凭据表，再打开 `data/agents/` 上的 Manager：Manager 的工作区宿主是网关（准备工作区调 `prepareWorkspace`，工作区端口的每次调用转给 `runTool`，带上调用的 signal），凭据查找读凭据表。所以 Web 外壳只组装聊天 app、网关和管理模块，不直接碰 Manager。
 
-**持久化：** API key 存在 `data/control.sqlite`。Agent 自己的配置存在该 Agent 的文件里。
+**对外接口（给 Web 外壳的 `/api/admin/*` 用）：**
+
+```ts
+// gateway 只需 nodes、createPairingToken、prepareWorkspace、runTool；以后加上 browse 就能浏览工作区
+openAdmin({ dataDirectory, chat, owner, gateway, clock?, report? }): Admin
+interface Admin {
+  // 每个 Agent：显示名和 handle（聊天账号的）、nodeId、state（open | paused | closed）、settings、usage。
+  // 文件读不出来的 Agent 以 state: "unreadable" 和 problem 列出，所有者可以删掉它
+  agents(): AgentView[]
+  createAgent({ agentId?, nodeId, displayName, handle, settings }): AgentId // node 必须已配对；失败时 reject AgentCreationFailed
+  pauseAgent(id) / resumeAgent(id) / deleteAgent(id)
+  configureAgent(id, settings) // 打开或关闭的都可以；打开的从下一次请求起生效
+  assistants(id) // 打开的 Agent 的工作助手名字
+  watchAgent(id, listener, { assistant? }): { stop(), ended } // 只能看打开的 Agent；暂停、删除或控制面关闭时 ended
+  browseWorkspace(id, path) // 网关还没有 browse，现在一律以 not-implemented 拒绝
+  providers(): { provider, name, credentials: { apiKey: "…末四位", baseUrl } | null }[] // 每个提供商一行
+  setCredentials(provider, { apiKey, baseUrl? }) / deleteCredentials(provider)
+  models() // 已存了 key 的提供商的模型目录，每个模型带它接受的 thinking 级别
+  nodes() / createPairingToken() // 转给网关
+  close() // 关闭 Manager（所有 runtime），再关自己的控制库连接；网关和聊天 app 由 Web 外壳关闭
+}
+```
+
+拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`not-implemented`），被拒绝的操作什么都不改。
+
+**模型和 API key：** 模型来自 pi-ai 自带的目录（runtime 的 `catalogModels`，Agent 的请求也在这个目录里解析）。首版提供 OpenAI（Responses API）和 DeepSeek 两家；凭据按提供商存 `{ apiKey, baseUrl? }`，`baseUrl` 替换目录里这个提供商所有模型的地址。设置模型时先检查（创建 Agent 时也一样，在任何东西被创建之前）：提供商是这两家之一、已经存了 key、目录里有这个模型、thinking 级别在这个模型接受的级别里。不接受的级别直接拒绝，不降级。runtime 每次模型请求都现读凭据，所以改了 key 从下一次请求起生效，再存一次同样的值不影响任何正在运行的 Agent；删了 key，这个提供商的请求不发出就失败。
+
+**观察：** `watchAgent` 就是 runtime 的 `watchEvents`：Durable 的 agent 事件原样交出去，第一批是快照，之后是流式文字、工具调用和它们的输出、输入、用量。观察只读，不改变 Agent 的任何状态。关闭的 Agent 没有可看的，拒绝为 `agent-closed`。
+
+**浏览工作区（接口已定，网关和 node 一侧还没有实现）：** 网关将提供 `browse(nodeId, agentId, path)`：只读，返回目录的条目（名字、文件或目录、大小）或文件的文字（可能截断）；路径由 node 上的工作区环境解析，和文件工具一样不能逃出工作目录。管理模块按 Agent 文件里的 node ID 调它。
+
+**持久化：** API key 存在 `data/control.sqlite` 里管理模块自己的 `provider_credentials` 表（模块名 `admin`），是唯一一份，runtime 每次请求现读。Agent 自己的配置存在该 Agent 的文件里。
 
 ### 4.7 Web 外壳
 
@@ -496,7 +546,7 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 | 1 | node 安装器要不要一套可续做的文件状态机？ | 不要。`mate node` 的每个命令都从现有状态推出该做什么，不记"做到哪一步"：程序目录整个替换，配置、身份和工作区放在程序目录之外，从不被安装、更新、卸载动到。中途失败就重跑同一个命令；重跑不了就删掉程序目录重装，Agent 的 `MEMORY.md` 等资料不会丢 | 4.5、第 7 节、MODULE_TESTS 第 9 节 |
 | 2 | 首个真实接入的模型提供商？ | 走 pi-ai 自带的模型目录，不自己写协议。首版在管理界面里提供 OpenAI（Responses API）和 DeepSeek（例如 `deepseek-flash`，用于便宜地测试）。API key 按提供商存 | 4.6 |
 | 3 | 上下文压缩用哪个模型？Agent 知不知道被压缩？ | 用 Durable 自带的压缩（`settings.compaction`），摘要由这个对话自己的模型写，失败或被截断的摘要不生效，Durable 保证。被压缩掉的记录仍在存储里，历史工具读它们；历史扩展的系统提示告诉 Agent "更早的记录可以用历史工具查" | 4.2 |
-| 4 | bash 没有时限时会一直占着 Agent，要不要默认上限？ | 参照 Claude Code 的后台命令：`bash` 加 `background` 参数。前台命令默认 10 分钟、最多 1 小时，跑命令期间 Agent 不处理别的；后台命令立即返回一个命令 ID，Agent 继续工作，命令结束时结果作为一条输入（`command:<ID>`）提交给主对话，可以用 `bash_stop` 停掉。后台命令最多跑一天 | 4.2、4.5 |
+| 4 | bash 没有时限时会一直占着 Agent，要不要默认上限？ | 参照 Claude Code 的后台命令：`bash` 加 `background` 参数。前台命令默认 10 分钟、最多 1 小时，跑命令期间 Agent 不处理别的；后台命令立即返回一个命令 ID，Agent 继续工作，命令结束时结果作为一条输入（`command:<ID>`）提交给发起它的对话（主对话或工作助手），可以用 `bash_stop` 停掉。后台命令最多跑一天 | 4.2、4.5 |
 | 5 | node 注册表放 `nodes.sqlite` 还是 `control.sqlite`？ | 统一放 `control.sqlite`，尽量少分文件。控制面里的网关、登录和管理模块共用这一个文件，各自建自己的表 | 4.5、4.6、第 6 节 |
 | 6 | 一个 Agent 用哪个 node？ | 创建 Agent 时从已配对的 node 列表里选一个，只有一个就只能选它。node ID 记在 Agent 自己的文件里，之后不变 | 4.4 |
 | 7 | 首版要不要 Web Push 和附件？ | 推送在 M6 做；附件推到首版之后，首版的聊天接口没有附件参数 | 4.1、PLAN |

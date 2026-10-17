@@ -1,8 +1,7 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { z } from "zod";
 import type { Clock } from "@mate/clock";
-import { BashArgumentsSchema, type GatewayRunTool, type ToolResult } from "@mate/node-protocol";
+import { parseBashArguments, type GatewayRunTool, type ToolResult } from "@mate/node-protocol";
 import { Commands } from "./commands.ts";
 import { runFileTool } from "./files.ts";
 
@@ -35,14 +34,14 @@ export class Executor {
       );
     }
     if (call.tool !== "bash") return runFileTool(call.tool, call.arguments, workspace, signal);
-    const args = BashArgumentsSchema.safeParse(call.arguments);
-    if (!args.success) return failure(`Invalid bash arguments: ${z.prettifyError(args.error)}`);
+    const args = parseBashArguments(call.arguments);
+    if (!args.ok) return failure(args.error);
     return this.#commands.run(
       {
         agentId: call.agentId,
-        command: args.data.command,
+        command: args.arguments.command,
         workspace,
-        timeoutSeconds: args.data.timeout,
+        timeoutSeconds: args.arguments.timeout,
       },
       onOutput,
       signal,

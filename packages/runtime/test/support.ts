@@ -9,6 +9,7 @@ import {
   type AgentSettings,
   type ChatPort,
   type Clock,
+  type CredentialsLookup,
 } from "../src/index.ts";
 
 export { FakeClock, FakeWorkspace, toolText as text } from "@mate/testkit";
@@ -22,8 +23,8 @@ export type TestAgent = {
   open(options?: {
     onFatal?: (error: unknown) => void;
     chat?: ChatPort;
-    /** Read at every model request; defaults to a fixed key. */
-    apiKey?: () => string;
+    /** Read at every model request; defaults to a fixed key for every provider. */
+    credentials?: CredentialsLookup;
   }): Promise<{ runtime: AgentRuntime; database: () => FaultyDatabase }>;
 };
 
@@ -42,7 +43,7 @@ export async function testAgent(
   if (options.provider === undefined) onTestFinished(() => provider.close());
   const workspace = new FakeWorkspace();
   const catalog = builtinModels();
-  await createAgentStore(file, settings);
+  await createAgentStore(file, { nodeId: "node-1", settings });
   return {
     file,
     provider,
@@ -51,7 +52,7 @@ export async function testAgent(
       let database: FaultyDatabase | undefined;
       const runtime = await openAgentRuntime({
         file,
-        apiKey: options.apiKey ?? (() => "test-key"),
+        credentials: options.credentials ?? (() => ({ apiKey: "test-key" })),
         workspace,
         resolveModel: ({ provider: name, modelId }) => {
           const model = catalog.getModel(name, modelId);

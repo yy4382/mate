@@ -1,10 +1,11 @@
-import { AgentRuntime, createAgentStore, readAgentState, setAgentPaused } from "@mate/runtime";
+import { AgentRuntime, createAgentStore, readAgentState } from "@mate/runtime";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { AgentCreationFailed } from "../src/index.ts";
-import { environment, notices, settings, settle, text } from "./support.ts";
+import { environment, nodeId, notices, settings, settle, text } from "./support.ts";
 
 const agentFiles = (directory: string) =>
   readdirSync(directory).filter((name) => name.endsWith(".sqlite"));
@@ -14,10 +15,17 @@ describe("creating an Agent", () => {
     const env = await environment();
     const manager = await env.open();
 
-    const agentId = await manager.create({ displayName: "Richard", handle: "richard", settings });
+    const agentId = await manager.create({
+      displayName: "Richard",
+      handle: "richard",
+      settings,
+      nodeId,
+    });
 
     expect(env.chat.findAccount(agentId), "the chat account exists").toBeDefined();
-    expect(env.workspaces.prepared.has(agentId), "the workspace was prepared").toBe(true);
+    expect(env.workspaces.prepared.get(agentId), "the workspace was prepared on the node").toBe(
+      nodeId,
+    );
     expect(agentFiles(env.directory), "one store file named by the Agent ID").toEqual([
       `${agentId}.sqlite`,
     ]);
@@ -31,7 +39,7 @@ describe("creating an Agent", () => {
     // Fails at the chat account: the handle belongs to someone else.
     env.chat.ensureAccount({ externalId: "someone", displayName: "Lin", handle: "lin" });
     const atAccount = await manager
-      .create({ displayName: "Lin", handle: "lin", settings })
+      .create({ displayName: "Lin", handle: "lin", settings, nodeId })
       .catch((error: unknown) => error);
     expect(atAccount, "the failure names the Agent to finish").toBeInstanceOf(AgentCreationFailed);
     const agentId = (atAccount as AgentCreationFailed).agentId;
@@ -42,7 +50,7 @@ describe("creating an Agent", () => {
       throw new Error("node offline");
     };
     await expect(
-      manager.create({ agentId, displayName: "Lin", handle: "lin2", settings }),
+      manager.create({ agentId, displayName: "Lin", handle: "lin2", settings, nodeId }),
     ).rejects.toBeInstanceOf(AgentCreationFailed);
     const account = env.chat.findAccount(agentId);
     expect(account, "the account was made before the failure").toBeDefined();
@@ -53,15 +61,15 @@ describe("creating an Agent", () => {
       throw new Error("died after the workspace was made");
     };
     await expect(
-      manager.create({ agentId, displayName: "Lin", handle: "lin2", settings }),
+      manager.create({ agentId, displayName: "Lin", handle: "lin2", settings, nodeId }),
     ).rejects.toBeInstanceOf(AgentCreationFailed);
 
     expect(
-      await manager.create({ agentId, displayName: "Lin", handle: "lin2", settings }),
+      await manager.create({ agentId, displayName: "Lin", handle: "lin2", settings, nodeId }),
       "the rerun finishes the same Agent",
     ).toBe(agentId);
     // Everything was in place already: a further rerun changes nothing.
-    await manager.create({ agentId, displayName: "Lin", handle: "lin2", settings });
+    await manager.create({ agentId, displayName: "Lin", handle: "lin2", settings, nodeId });
 
     expect(env.chat.findAccount(agentId), "the same account throughout").toBe(account);
     expect(agentFiles(env.directory), "one file").toEqual([`${agentId}.sqlite`]);
@@ -74,7 +82,7 @@ describe("creating an Agent", () => {
     env.chat.ensureAccount({ externalId: agentId, displayName: "Lin", handle: "lin" });
     // A complete store under the temporary name: the process died just before the rename.
     const staged = join(env.directory, `${agentId}.sqlite`);
-    await createAgentStore(staged, settings);
+    await createAgentStore(staged, { nodeId, settings });
     renameSync(staged, `${staged}.creating`);
 
     const manager = await env.open();
@@ -82,9 +90,104 @@ describe("creating an Agent", () => {
     expect(manager.runtime(agentId)).toBeUndefined();
     expect(env.reports, "nothing to report").toEqual([]);
 
-    await manager.create({ agentId, displayName: "Lin", handle: "lin", settings });
+    await manager.create({ agentId, displayName: "Lin", handle: "lin", settings, nodeId });
     expect(manager.list()).toEqual([{ agentId, open: true }]);
     expect(agentFiles(env.directory)).toEqual([`${agentId}.sqlite`]);
+  });
+});
+
+describe("the node an Agent is on", () => {
+  it("prepares the Agent's workspace on the chosen node and runs its workspace tools there", async () => {
+    const env = await environment();
+    const manager = await env.open();
+    const { agentId, account } = await env.hire(manager, { nodeId: "node-b" });
+    env.workspaces.workspace(agentId, "node-b").answerAll(() => text("built"));
+    env.provider
+      .step(
+        "build",
+        (request) => void request.call([{ name: "bash", arguments: { command: "make" } }]),
+      )
+      .step("done", (request) => {
+        expect(request.toolOutputs().join(), "the chosen node answered").toContain("built");
+        request.text("built it");
+      });
+
+    env.post("Build it, @richard.", { mentions: [account] });
+    await env.provider.received(2);
+    await manager.runtime(agentId)?.idle();
+
+    expect(env.workspaces.prepared.get(agentId), "the workspace is on the chosen node").toBe(
+      "node-b",
+    );
+    expect(env.workspaces.workspace(agentId, "node-b").calls, "the call ran there").toHaveLength(1);
+    expect(env.workspaces.workspace(agentId, nodeId).calls, "and nowhere else").toEqual([]);
+    expect((await manager.describe(agentId)).nodeId).toBe("node-b");
+    env.provider.assertComplete();
+  });
+
+  it("opens the Agent on the node recorded at its creation, after a restart and after a resume", async () => {
+    const env = await environment();
+    const first = await env.open();
+    const agentId = await first.create({
+      displayName: "Richard",
+      handle: "richard",
+      settings,
+      nodeId: "node-b",
+    });
+    await first.close();
+
+    const second = await env.open();
+    await second.pause(agentId);
+    await second.resume(agentId);
+
+    expect(
+      env.workspaces.ports.filter((port) => port.agentId === agentId).map((port) => port.nodeId),
+      "created, restarted and resumed, always on its node",
+    ).toEqual(["node-b", "node-b", "node-b"]);
+  });
+});
+
+describe("describing and configuring an Agent", () => {
+  it("describes an Agent the same way whether it is open, paused or closed", async () => {
+    const env = await environment();
+    const manager = await env.open();
+    const { agentId, account } = await env.hire(manager);
+    env.provider.step("notice", (request) => request.text("seen", { inputTokens: 70 }));
+    env.post("Morning, @richard.", { mentions: [account] });
+    await env.provider.received(1);
+    await manager.runtime(agentId)?.idle();
+
+    const open = await manager.describe(agentId);
+    expect(open).toMatchObject({ agentId, nodeId, state: "open", settings });
+    expect(open.usage.models["openai/gpt-4.1"], "the usage so far").toMatchObject({ input: 70 });
+
+    await manager.pause(agentId);
+    expect(await manager.describe(agentId), "paused, with the same facts").toEqual({
+      ...open,
+      state: "paused",
+    });
+    env.provider.assertComplete();
+  });
+
+  it("changes a paused Agent's settings, and its first request after resuming uses them", async () => {
+    const env = await environment();
+    const manager = await env.open();
+    const { agentId, account } = await env.hire(manager);
+    await manager.pause(agentId);
+    const changed = { model: { provider: "openai", modelId: "gpt-4.1-mini" } };
+
+    await manager.configure(agentId, changed);
+    env.post("Morning, @richard.", { mentions: [account] });
+    env.provider.step("resumed", (request) => {
+      expect(request.body.model, "the settings changed while paused").toBe("gpt-4.1-mini");
+      request.text("seen");
+    });
+    await manager.resume(agentId);
+    await env.provider.received(1);
+    await manager.runtime(agentId)?.idle();
+
+    expect((await manager.describe(agentId)).settings).toEqual(changed);
+    env.provider.assertComplete();
   });
 });
 
@@ -92,8 +195,13 @@ describe("restarting", () => {
   it("opens every Agent that is not paused, and keeps a paused one closed", async () => {
     const env = await environment();
     const first = await env.open();
-    const working = await first.create({ displayName: "Richard", handle: "richard", settings });
-    const paused = await first.create({ displayName: "Lin", handle: "lin", settings });
+    const working = await first.create({
+      displayName: "Richard",
+      handle: "richard",
+      settings,
+      nodeId,
+    });
+    const paused = await first.create({ displayName: "Lin", handle: "lin", settings, nodeId });
     await first.pause(paused);
     await first.close();
 
@@ -112,7 +220,12 @@ describe("restarting", () => {
   it("keeps an Agent paused across a restart until it is resumed", async () => {
     const env = await environment();
     const first = await env.open();
-    const agentId = await first.create({ displayName: "Richard", handle: "richard", settings });
+    const agentId = await first.create({
+      displayName: "Richard",
+      handle: "richard",
+      settings,
+      nodeId,
+    });
     await first.pause(agentId);
     await first.close();
 
@@ -252,7 +365,12 @@ describe("pausing and resuming", () => {
   it("ends concurrent resume, pause, resume as if run in order, never with two runtimes alive", async () => {
     const env = await environment();
     const manager = await env.open();
-    const agentId = await manager.create({ displayName: "Richard", handle: "richard", settings });
+    const agentId = await manager.create({
+      displayName: "Richard",
+      handle: "richard",
+      settings,
+      nodeId,
+    });
     await manager.pause(agentId);
     // A runtime is alive from the moment it asks for its workspace until its close has finished.
     let alive = 0;
@@ -283,7 +401,7 @@ describe("pausing and resuming", () => {
     expect(alive, "one alive at the end").toBe(1);
     expect(manager.list(), "open at the end").toEqual([{ agentId, open: true }]);
     await manager.close();
-    expect(await readAgentState(join(env.directory, `${agentId}.sqlite`))).toEqual({
+    expect(await readAgentState(join(env.directory, `${agentId}.sqlite`))).toMatchObject({
       paused: false,
     });
   });
@@ -315,10 +433,15 @@ describe("pausing and resuming", () => {
     const manager = await env.open();
     const { agentId, account } = await env.hire(manager);
     const file = join(env.directory, `${agentId}.sqlite`);
-    // Something other than the runtime writes to its file, so the runtime's next commit fails.
-    await setAgentPaused(file, false);
+    // Another connection makes the store refuse new submissions, so the notice's commit fails.
+    const outside = new DatabaseSync(file);
+    onTestFinished(() => outside.close());
+    outside.exec(
+      "CREATE TRIGGER refuse BEFORE INSERT ON submissions BEGIN SELECT RAISE(ABORT, 'refused'); END",
+    );
     env.post("One.", { mentions: [account] });
     await vi.waitFor(() => expect(env.reports, "the failure is reported").not.toEqual([]));
+    outside.exec("DROP TRIGGER refuse");
 
     await vi.waitFor(() =>
       expect(manager.list(), "a dead runtime is not open").toEqual([{ agentId, open: false }]),
@@ -344,7 +467,8 @@ describe("a bad Agent ID", () => {
     const env = await environment();
     const manager = await env.open();
     const calls = {
-      create: () => manager.create({ agentId: "../x", displayName: "X", handle: "x", settings }),
+      create: () =>
+        manager.create({ agentId: "../x", displayName: "X", handle: "x", settings, nodeId }),
       pause: () => manager.pause("../x"),
       resume: () => manager.resume("../x"),
       delete: () => manager.delete("../x"),

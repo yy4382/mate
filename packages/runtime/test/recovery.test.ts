@@ -98,14 +98,14 @@ describe("closing", () => {
     const closeCalled = Promise.withResolvers<void>();
     let closing: Promise<void> | undefined;
     let runtime: AgentRuntime | undefined;
-    // The key is read as the request is prepared, so closing here is closing just before it is sent.
+    // The credentials are read as the request is prepared, so closing here is closing just before it is sent.
     const first = await agent.open({
-      apiKey: () => {
+      credentials: () => {
         if (runtime !== undefined) {
           closing = runtime.close();
           closeCalled.resolve();
         }
-        return "test-key";
+        return { apiKey: "test-key" };
       },
     });
     runtime = first.runtime;

@@ -95,6 +95,8 @@ export class ScriptedRequest extends ScriptedRequestBody {
   /** The lane whose step answers this request. */
   readonly lane: string;
   readonly step: string;
+  /** The API key the request was sent with: its bearer token, if it had one. */
+  readonly apiKey: string | undefined;
 
   constructor(
     lane: string,
@@ -102,10 +104,12 @@ export class ScriptedRequest extends ScriptedRequestBody {
     body: RequestBody,
     response: ServerResponse,
     onFailure: (reason: string) => void,
+    apiKey?: string,
   ) {
     super(body);
     this.lane = lane;
     this.step = step;
+    this.apiKey = apiKey;
     this.#response = response;
     response.once("close", () => {
       if (this.#answered) return;
@@ -371,8 +375,9 @@ export class ScriptedProvider extends RequestLog {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const parsed = requestBodySchema.safeParse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    const apiKey = /^Bearer (.+)$/.exec(request.headers.authorization ?? "")?.[1];
     const next = parsed.success
-      ? this.#plan(parsed.data, response)
+      ? this.#plan(parsed.data, response, apiKey)
       : "a request body was not a Responses request";
     if (typeof next === "string") {
       this.#failures.push(next);
@@ -394,7 +399,7 @@ export class ScriptedProvider extends RequestLog {
    * without a `prompt_cache_key`, such as Durable's summary request, belongs to no conversation: each one is claimed
    * on its own and binds no lane.
    */
-  #plan(body: RequestBody, response: ServerResponse) {
+  #plan(body: RequestBody, response: ServerResponse, apiKey: string | undefined) {
     const key = body.prompt_cache_key;
     const request = new ScriptedRequestBody(body);
     const taken = new Set(this.#bound.values());
@@ -406,7 +411,7 @@ export class ScriptedProvider extends RequestLog {
     if (key !== undefined) this.#bound.set(key, lane);
     const failed = (reason: string) => this.#failures.push(reason);
     return (
-      lane.take((step) => new ScriptedRequest(lane.name, step, body, response, failed)) ??
+      lane.take((step) => new ScriptedRequest(lane.name, step, body, response, failed, apiKey)) ??
       `lane ${lane.name}: a request arrived after its script ran out`
     );
   }

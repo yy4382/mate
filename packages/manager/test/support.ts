@@ -1,6 +1,5 @@
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ChatApp, type TimelineRef } from "@mate/chat";
-import type { AgentSettings, ModelResolver, WorkspacePort } from "@mate/runtime";
+import type { AgentSettings, WorkspacePort } from "@mate/runtime";
 import { FakeClock, FakeWorkspace, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
 import { join } from "node:path";
 import { onTestFinished } from "vitest";
@@ -15,32 +14,41 @@ export { FakeWorkspace, toolText as text } from "@mate/testkit";
 
 export const settings: AgentSettings = { model: { provider: "openai", modelId: "gpt-4.1" } };
 
-/** Stands in for the node: workspaces are prepared on request, and each Agent has one fake workspace. */
+/** The node Agents are created on unless a test chooses another. */
+export const nodeId = "node-a";
+
+/** Stands in for the nodes: workspaces are prepared on request, and each Agent has a fake workspace on each node. */
 export class FakeWorkspaces implements WorkspaceHost {
-  readonly prepared = new Set<string>();
+  /** The node each Agent's workspace was last prepared on. */
+  readonly prepared = new Map<string, string>();
+  /** Every port handed out, in order: the node each opened runtime runs its workspace tools on. */
+  readonly ports: { agentId: string; nodeId: string }[] = [];
   readonly #workspaces = new Map<string, FakeWorkspace>();
   /** Runs at the start of the next `prepare` and is then forgotten: a test makes a preparation fail with it. */
   beforeNextPrepare: ((agentId: string) => void) | undefined;
   /** Called whenever a runtime is opened, before it is: a test checks what holds at that moment. */
   onOpen: ((agentId: string) => void) | undefined;
 
-  async prepare(agentId: string): Promise<void> {
-    this.prepared.add(agentId);
+  async prepare(node: string, agentId: string): Promise<void> {
+    this.prepared.set(agentId, node);
     const hook = this.beforeNextPrepare;
     this.beforeNextPrepare = undefined;
     hook?.(agentId);
   }
 
-  port(agentId: string): WorkspacePort {
+  port(node: string, agentId: string): WorkspacePort {
     this.onOpen?.(agentId);
-    return this.workspace(agentId);
+    this.ports.push({ agentId, nodeId: node });
+    return this.workspace(agentId, node);
   }
 
-  workspace(agentId: string): FakeWorkspace {
-    let workspace = this.#workspaces.get(agentId);
+  /** The Agent's workspace on `node`. */
+  workspace(agentId: string, node = nodeId): FakeWorkspace {
+    const key = `${node}/${agentId}`;
+    let workspace = this.#workspaces.get(key);
     if (workspace === undefined) {
       workspace = new FakeWorkspace();
-      this.#workspaces.set(agentId, workspace);
+      this.#workspaces.set(key, workspace);
     }
     return workspace;
   }
@@ -83,11 +91,6 @@ export async function environment() {
     await provider.close();
     chat.close();
   });
-  const catalog = builtinModels();
-  const resolveModel: ModelResolver = ({ provider: name, modelId }) => {
-    const model = catalog.getModel(name, modelId);
-    return model === undefined ? undefined : { ...model, baseUrl: provider.baseUrl };
-  };
   const owner = chat.ensureAccount({
     externalId: "owner",
     displayName: "Owner",
@@ -117,8 +120,7 @@ export async function environment() {
         directory: join(data, "agents"),
         chat,
         workspaces,
-        apiKey: () => "test-key",
-        resolveModel,
+        credentials: () => ({ apiKey: "test-key", baseUrl: provider.baseUrl }),
         clock,
         report: (error, agentId) => reports.push({ agentId, error }),
       });
@@ -132,6 +134,7 @@ export async function environment() {
         displayName: spec.displayName ?? "Richard",
         handle,
         settings,
+        nodeId: spec.nodeId ?? nodeId,
         ...(spec.agentId === undefined ? {} : { agentId: spec.agentId }),
       });
       const account = chat.findAccount(agentId);

@@ -58,6 +58,37 @@ importers:
         specifier: 8.18.1
         version: 8.18.1
 
+  packages/admin:
+    dependencies:
+      '@mate/chat':
+        specifier: workspace:*
+        version: link:../chat
+      '@mate/clock':
+        specifier: workspace:*
+        version: link:../clock
+      '@mate/control-store':
+        specifier: workspace:*
+        version: link:../control-store
+      '@mate/gateway':
+        specifier: workspace:*
+        version: link:../gateway
+      '@mate/manager':
+        specifier: workspace:*
+        version: link:../manager
+      '@mate/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@mate/node-protocol':
+        specifier: workspace:*
+        version: link:../node-protocol
+      '@mate/testkit':
+        specifier: workspace:*
+        version: link:../testkit
+
   packages/chat:
     dependencies:
       '@mate/clock':

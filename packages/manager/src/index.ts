@@ -2,6 +2,7 @@ export {
   AgentCreationFailed,
   openAgentManager,
   type AgentManager,
+  type AgentDescription,
   type AgentManagerOptions,
   type AgentSpec,
   type AgentSummary,

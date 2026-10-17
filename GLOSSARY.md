@@ -158,8 +158,8 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 避免：条目（那是聊天 app 时间线上的项）。
 
 **后台命令**（background command）
-`bash` 带 `background: true` 启动的命令。工具调用立即返回一个命令 ID，命令在 node 上继续跑；结束时它的结果作为一条输入（`command:<ID>`）提交给发起它的对话。用 `bash_stop` 停止。runtime 关闭时它和前台命令一样被停掉，不会重跑。
-避免：守护进程（Agent 用 `setsid` 等方式自己脱离进程组的进程，Mate 不跟踪）。
+`bash` 带 `background: true` 启动的命令。工具调用立即返回一个命令 ID，也就是 runtime 为它在发起它的对话里建的 Durable 后台任务的 ID；命令在 node 上继续跑，对话照常工作、照常空闲。结束时它的结果作为一条输入（`command:<ID>`）提交给发起它的对话，恰好一次。用 `bash_stop` 停止，停止后不再汇报。runtime 关闭时它和前台命令一样被停掉，重新打开后汇报一次"已中断"，不会重跑。
+避免：后台进程（命令自己放到后台的进程，比如 `cmd &`，仍归命令进程组管）；守护进程（Agent 用 `setsid` 等方式自己脱离进程组的进程，Mate 不跟踪）。
 
 ## 环境与控制面
 
@@ -174,7 +174,22 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 负责登录、HTTP 路由，以及把聊天和管理两个前端功能区挂在同一个网页里。
 
 **管理模块**（admin）
-所有者用来创建和配置 Agent、管理 API key、配对 node、查看对话记录和用量、浏览工作区的模块。
+所有者用来创建和配置 Agent、管理 API key、配对 node、查看对话记录和用量、浏览工作区的模块。它拥有 Agent Manager：`openAdmin` 打开 Manager，并把 node 网关接成 Manager 的工作区宿主，Web 外壳不直接碰 Manager。
+
+**提供商**（provider）
+模型的提供方，在 pi-ai 模型目录里有一个 ID。首版只提供 `openai`（Responses API）和 `deepseek`。
+
+**模型目录**（model catalog）
+pi-ai 自带的模型清单（`builtinModels()`）。每个模型带它接受的 thinking 级别；runtime 的 `catalogModels(provider)` 列出一个提供商的模型，Agent 的请求也在这个目录里解析。
+避免：自己写一份模型或 thinking 级别的列表。
+
+**凭据**（ProviderCredentials）
+一个提供商的 `{ apiKey, baseUrl? }`，存在控制库里管理模块的表中，是唯一一份。runtime 每次模型请求都按提供商现读（`credentials(provider)`），所以改了从下一次请求起生效；`baseUrl` 替换模型目录里这个提供商的地址。没有凭据的提供商，请求不发出就失败。
+避免：把 key 复制进 Agent 文件或 runtime 的内存。
+
+**agent 事件**（AgentEvent）
+Durable 从一个对话的提交推出来的观察事件：快照、流式文字、工具调用的开始、输出和结束、输入、用量。runtime 的 `watchEvents` 和管理模块的 `watchAgent` 原样交出它们；观察只读，不改变 Agent 的状态。
+避免：transcript 文件、日志（Mate 不另存对话记录）。
 
 **Agent Manager**（manager）
 唯一能打开和关闭 runtime 的模块。一个 Agent 存在，当且仅当它的存储文件存在。
@@ -193,7 +208,7 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 以宿主机现有账号运行的执行进程，由 `mate node` CLI 管理成 systemd 用户服务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
 
 **工作区宿主**（WorkspaceHost）
-Agent Manager 看到的"工作区在哪里"：为一个 Agent 准备工作区（可以重复调用），以及给出这个 Agent 的工作区端口（`WorkspacePort`）。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由控制面把网关适配成它：准备工作区调 `prepareWorkspace`，端口的每次调用转给 `runTool` 并带上调用的 signal。这层适配在 M6 接线；测试里用假的。
+Agent Manager 看到的"工作区在哪里"：在一个 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出这个 Agent 在那个 node 上的工作区端口（`port(nodeId, agentId)`）。Agent 的 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：准备工作区调 `prepareWorkspace`，端口的每次调用转给 `runTool` 并带上调用的 signal。Manager 的测试里用假的。
 
 **node 网关**（node gateway）
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
@@ -226,7 +241,7 @@ node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 
 避免：timer handle、setTimeout 包装。
 
 **工具结果**（ToolResult）
-`@mate/node-protocol` 里一次 node 工具调用的结局：纯文本内容加 `isError`。网关把它交给调用方；runtime 有自己的 `WorkspaceToolResult`，两者结构兼容，由 Agent Manager 在两边之间适配。
+`@mate/node-protocol` 里一次 node 工具调用的结局：纯文本内容加 `isError`。网关把它交给调用方；runtime 有自己的 `WorkspaceToolResult`，两者结构兼容，管理模块把网关接成工作区宿主时直接交过去。
 
 ## 测试工具
 
@@ -236,6 +251,9 @@ node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 
 **lane**（ScriptedLane）
 脚本化提供商里一个会话自己的步骤队列。请求按 `prompt_cache_key` 归到 lane：会话的第一个请求由声明了认领条件的 lane 认领，没人认领时归默认 lane。这样主对话和工作助手并发请求时，谁先到不影响脚本。不带 `prompt_cache_key` 的请求（摘要请求）不属于任何会话：每个都由一个还没绑定会话的 lane 单独认领，认领后这个 lane 仍能认领下一个。
 避免：用全局步骤顺序区分会话。
+
+**假推送服务**（FakePushService）
+聊天 app 测试里的推送发送器：记录每次请求和到达的时间，按测试给每个 endpoint 写好的回答返回状态码或"连不上"，之后都回 201。
 
 **网络代理**（NetworkProxy）
 `@mate/testkit` 里夹在 node 和网关之间的本地 TCP 代理，由测试切换三种模式：转发（`forward`）、黑洞（`blackhole`，连接不断但两个方向的数据都被吞掉）、断开（`disconnect`，断掉现有连接，新连接一到就断）。
