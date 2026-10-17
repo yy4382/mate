@@ -33,7 +33,7 @@
 - [x] **M5 runtime 其余部分。** 工作助手、提醒、历史、压缩。完成标准：MODULE_TESTS 4.5 到 4.7 通过。工作助手和提醒已提前完成（b1895d7a、61da1346）；4.7 的用量测试已在 7744fad4 完成；历史与压缩（2abe2fa5）、后台命令随管理模块一起提交。 验证：2abe2fa5、f34da182、1b111002，独立审查（Opus）通过。
 - [x] **M6 管理模块与 Web 外壳后端。** 登录、HTTP 路由、实时事件流、推送；网关注册表并入 `control.sqlite`，Agent 创建时选 node。附件推到首版之后。完成标准：MODULE_TESTS 3.8、3.9、第 10 节、11.1 通过。Web 外壳后端已写好（`apps/control-plane`，3.9 的最后一条和 11.1 在那里测），还没有经过独立审查。 验证：5dade391、d70f10ca、5e0ac9ad、3f4c0e1c、3eacfec3、67879c38，独立审查（Opus）通过。
 - [x] **M7 前端。** 完成标准：MODULE_TESTS 11.2 通过。`apps/web` 已写好（登录、聊天、管理、推送开启），11.2 的页面测试在 `apps/web/test`；还没有经过独立审查，附件、任务总览页、搜索结果跳转受后端接口所限未做。 验证：5375c31b，独立审查（Opus）通过。
-- [ ] **M8 打包。** 控制面 Docker 镜像、node 发布包、`mate node` CLI。完成标准：MODULE_TESTS 第 9 节通过。控制面镜像、两个 Compose 文件和部署冒烟（MODULE_TESTS 第 13 节）已写好并在 OrbStack 上通过，镜像里的网页前端等 M7；发版的 GitHub Actions 流程（`release.yml`，打 `v*` 标签时推镜像、传 node 发布包）已写，没跑过。 只差一项：`release.yml` 还没在真实的 `v*` 标签上跑过，第一次发布并在干净主机上拉到镜像后勾选。
+- [x] **M8 打包。** 控制面 Docker 镜像、node 发布包、`mate node` CLI。完成标准：MODULE_TESTS 第 9 节通过。控制面镜像、两个 Compose 文件和部署冒烟（MODULE_TESTS 第 13 节）已写好并在 OrbStack 上通过，镜像带网页前端；打 `v*` 标签时 `ci.yml` 的 release 任务在检查通过后推镜像、传 node 发布包。验证：v0.1.0-alpha.1 的发布工作流（运行 39067877212）通过；在 x86_64 Debian 13 VPS 上用真实发布包和 systemd 用户服务走通安装、配对、创建 Agent、重启、卸载。
 - [x] **M9 系统场景。** 完成标准：MODULE_TESTS 第 12 节通过。八个场景已写在 `tests/system`（新的 pnpm 包 `@mate/system-tests`，根 vitest 和 `pnpm test:linux` 都会跑），还没有经过独立审查，所以不勾选。写它们时发现 `@mate/gateway` 的源码用 `.js` 后缀互相 import，导致控制面 `main.ts` 不能直接从源码用 Node 运行；已改成 `.ts` 并在 gateway 加了一条源码入口测试。 验证：9310f25e 及审查修正，独立审查（Opus）指出的场景 2 竞态已改为等事件流里的 `inbox_update`。
 
 - [x] **CI。** GitHub Actions 在每次推送时跑 `pnpm check` 和 `pnpm test:linux`。 验证：CI 运行 39061174637 两个任务都通过。

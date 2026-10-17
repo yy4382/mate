@@ -12,8 +12,8 @@
 | 事项 | 现状 |
 |---|---|
 | 起真实进程的端到端场景（M9） | 未开始；各模块的边界测试和部署冒烟是目前的验证手段 |
-| 发布工作流（`.github/workflows/release.yml`） | 写好了，还没在真实的 `v*` 标签上跑过；第一次发布后在一台干净的主机上拉一次镜像确认 |
-| 部署冒烟覆盖的架构 | arm64 原生跑过；x86_64 镜像和发布包在 arm64 主机上经仿真跑过（`MATE_SMOKE_ARCH=x64 pnpm smoke:deploy`），还没在真实的 x86_64 主机上跑过 |
+| 发布 | `v*` 标签在 `.github/workflows/ci.yml` 里先跑完 `pnpm check` 和 `pnpm test:linux`，再推镜像、建 Release；`v0.1.0-alpha.1` 走通了这条路 |
+| 真实主机 | 在一台 x86_64 的 Debian 13 VPS 上验证过：从 `v0.1.0-alpha.1` 源码构建的镜像用两个 Compose 文件起来、登录、跨站请求被拒；发布出的 x64 node 包经 `sha256sum -c`、安装、配置后由真正的 systemd 用户服务运行并连上，Agent 在它上面创建、工作区可浏览、越界被拒，重启控制面后数据和登录都在、node 自动重连，`uninstall` 干净。没在 VPS 上直接拉 GHCR 镜像（缺 `read:packages` token，匿名拉取按预期被拒），也没接真实模型 |
 | 反向代理和 HTTPS | 冒烟不经过反向代理；按 §3.1 第 6 步配置 |
 | 附件 | 第一版之后（ARCHITECTURE §11 第 7 条） |
 
