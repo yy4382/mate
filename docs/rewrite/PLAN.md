@@ -29,10 +29,12 @@
 - [x] **M2 聊天 app 核心。** 账号、会话、时间线、发送、读取、新鲜度检查、回执、收件事件、未读摘要、任务。完成标准：MODULE_TESTS 3.1 到 3.7 通过。验证：65f1d04c、f0ddf369、14dbc927、61da1346（独立审查后的修复）。3.4 到 3.6 里涉及推送队列和实时事件的部分随 M6 的 3.8、3.9 一起验证。
 - [x] **M3 连接器、Manager 和聊天工具。** 进程内跑通：所有者发消息，Agent 收到通知，读取后回复。完成标准：MODULE_TESTS 第 5 节、第 6 节中不涉及 node 的条目通过。验证：5c4ed765、12895fac、2d809428、61da1346（独立审查后的修复）。
 - [x] **M4 node 链路。** 网关与 node 之间的协议；node 用 Durable 的工具在本地执行。完成标准：MODULE_TESTS 第 7、8 节通过。验证：395db848、bd559b39、2445ee80、2b0cc29f（独立审查后的修复），第 8 节用 `pnpm test:linux` 在非 root 的 Linux 容器里以子进程运行。runtime 的 `WorkspacePort` 接到 `gateway.runTool` 的组装在 M6 做，届时补一条经真实网关的"暂停停掉 node 上的命令"测试。
-- [ ] **M5 runtime 其余部分。** 工作助手、提醒、历史、压缩。完成标准：MODULE_TESTS 4.5 到 4.7 通过。工作助手和提醒已提前完成（b1895d7a、61da1346）；4.7 的用量测试已在 7744fad4 完成；剩历史和压缩。
-- [ ] **M6 管理模块与 Web 外壳后端。** 登录、HTTP 路由、实时事件流、推送。完成标准：MODULE_TESTS 3.8、3.9、第 10 节、11.1 通过。
+- [ ] **M5 runtime 其余部分。** 工作助手、提醒、历史、压缩。完成标准：MODULE_TESTS 4.5 到 4.7 通过。工作助手和提醒已提前完成（b1895d7a、61da1346）；4.7 的用量测试已在 7744fad4 完成；剩历史、压缩，以及后台命令（架构第 11 节第 4 条）。
+- [ ] **M6 管理模块与 Web 外壳后端。** 登录、HTTP 路由、实时事件流、推送；网关注册表并入 `control.sqlite`，Agent 创建时选 node。附件推到首版之后。完成标准：MODULE_TESTS 3.8、3.9、第 10 节、11.1 通过。
 - [ ] **M7 前端。** 完成标准：MODULE_TESTS 11.2 通过。
 - [ ] **M8 打包。** 控制面 Docker 镜像、node 发布包、`mate node` CLI。完成标准：MODULE_TESTS 第 9 节通过。
 - [ ] **M9 系统场景。** 完成标准：MODULE_TESTS 第 12 节通过。
+
+- [ ] **CI。** GitHub Actions 在每次推送时跑 `pnpm check` 和 `pnpm test:linux`。
 
 M9 完成后，只剩真实提供商接入和 VPS 部署。

@@ -1,6 +1,6 @@
 # Mate 架构（重写草案）
 
-> 状态：已经所有者确认的架构。第 11 节列出仍未决定的问题。
+> 状态：已经所有者确认的架构。第 11 节记录所有者对原先待定问题的回答。
 > 读者：只读过 `README.md` 的工程师。第一次出现的术语都会解释。
 
 ## 1. Mate 是什么
@@ -173,11 +173,11 @@ interface ChatApp {
 
 | 扩展 | 内容 | 谁能用 |
 |---|---|---|
-| 聊天 | 读未读、回看历史、搜索、发送、加入或离开频道、打开私信、任务操作、发布附件 | 只有主对话 |
-| 工作区 | `bash`、`read`、`write`、`edit`，在 node 上执行（见 4.5） | 主对话和助手 |
+| 聊天 | 读未读、回看历史、搜索、发送、加入或离开频道、打开私信、任务操作（发布附件在首版之后） | 只有主对话 |
+| 工作区 | `bash`、`bash_stop`、`read`、`write`、`edit`，在 node 上执行（见 4.5）。后台命令结束时，结果作为一条输入提交给发起它的对话 | 主对话和助手 |
 | 提醒 | 设定、列出、取消提醒 | 主对话 |
 | 助手 | 派生助手、给助手发消息、等待、中断、列出（参照 Durable 的 `23-subagent-background` 示例） | 主对话 |
-| 历史 | 搜索、阅读自己被压缩掉的早期记录 | 主对话和助手 |
+| 历史 | 搜索、阅读自己被压缩掉的早期记录。压缩用 Durable 自带的机制，摘要由对话自己的模型写 | 主对话和助手 |
 | 身份 | 系统提示：你是谁、工作区在哪、`MEMORY.md` 是恢复入口；普通输出不会发到任何地方，发言必须调用发送工具；通知只是提示 | 全部 |
 
 所有工具都直接暴露给模型，不经过"先列出工具、再调用"的元工具。
@@ -255,7 +255,7 @@ openAgentManager({ directory, chat, workspaces, apiKey, resolveModel?, clock?, r
 interface AgentManager {
   list(): { agentId, open }[] // 就是目录里的 <agentId>.sqlite
   // 以下操作都返回 Promise；ID 不合法时 reject，不同步抛出
-  create({ agentId?, displayName, handle, settings }): AgentId // 失败时 reject AgentCreationFailed，带上 agentId
+  create({ agentId?, nodeId, displayName, handle, settings }): AgentId // 失败时 reject AgentCreationFailed，带上 agentId
   delete(id) // 关闭 runtime，停用聊天账号，删除文件
   pause(id) // 打开的先关闭；然后在 Agent 文件里记下"已暂停"
   resume(id) // 已打开的什么都不做；关闭的清除"已暂停"，再打开 runtime
@@ -273,8 +273,10 @@ interface AgentManager {
 4. **创建的顺序：**
    1. 生成 Agent ID；
    2. 调用 `chat.ensureAccount({ externalId: agentId })`，这个调用可以安全重复；
-   3. 让 node 创建工作目录；
-   4. 在临时文件里初始化 Durable 存储，再改名为正式文件。
+   3. 让所选的 node 创建工作目录；
+   4. 在临时文件里初始化 Durable 存储（带上 node ID），再改名为正式文件。
+
+   node ID 记在 Agent 文件里，之后不变；打开 Agent 时 Manager 从文件里读出它，把工作区工具接到这个 node。
 
    中途失败了，重做一遍即可。改名是最后一步，所以 Agent 要么完整存在，要么不存在。`create` 失败时 reject 的 `AgentCreationFailed` 带着这次的 Agent ID，调用方把它作为 `agentId` 传回 `create` 重做：每一步都可以重复（账号以 `externalId` 幂等、工作区准备幂等、文件已存在就跳过），所以得到的还是同一个 Agent、一个账号、一个文件。不带 `agentId` 重做会生成新 ID，而旧 ID 的账号仍占着 handle，所以重做必须带上它。目录里只有名字正好是 `<UUID>.sqlite` 的文件才算 Agent，临时文件（`.creating`）和 SQLite 的附属文件都不算。
 5. **打开一个 Agent：** 读它的"已暂停"，暂停了就不打开；用 `chat.findAccount(agentId)` 找到它的账号，把 `ChatApp` 绑定到这个账号作为聊天端口；打开 runtime，再挂上连接器。
@@ -290,7 +292,7 @@ interface AgentManager {
 **工具调用按"整个调用"转发。** runtime 把一次完整的工具调用（工具名、参数）交给网关，网关发给 node，node 在本地执行，边执行边把输出流回来，最后返回结果。这样每次工具调用只有一次往返，不需要在网络上逐个实现 Durable 执行环境接口的二十多个文件方法。网关为每次调用生成自己的请求 ID（随机 UUID），输出、结果和停止都按它对应；调用方的任何 ID 都不上线路，所以不同 Agent 的调用不可能撞号。node 工具调用不按 ID 去重：有副作用的工具崩溃后不重做（4.2 规则 2），可重做的 `read` 重做一次也无妨。
 
 - **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于该工作区的 `NodeExecutionEnv`（**工作区环境**）上：参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
-- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用 `/bin/sh -c` 原样执行命令，每条命令一个**命令进程组**，结果如实区分正常退出（附退出码）、被信号终止、超时被杀、被停止、没能启动，并标明截断、输出可能不完整、后台进程仍在运行。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`，最多一天）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，node 拿同一个 schema 校验参数，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。
+- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用 `/bin/sh -c` 原样执行命令，每条命令一个**命令进程组**，结果如实区分正常退出（附退出码）、被信号终止、超时被杀、被停止、没能启动，并标明截断、输出可能不完整、后台进程仍在运行。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，node 拿同一个 schema 校验参数，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。
 
 **接口（网关对 runtime）：**
 
@@ -322,7 +324,9 @@ interface NodeGateway {
 9. **一个 node 一条连接，调用绑定在连接上。** 同一个 node 新认证的连接关闭旧连接。每个工具调用只接受发出它的那条连接送回的输出和结果；连接结束时，它带着的调用以"结果未知"结束并被忘掉，之后谁送来它的结果都不会交给调用方。
 10. **违规的连接立即结束。** 未认证的连接最多 32 条，超出的直接关闭；单条消息按收到的序列化帧计不超过 1 MiB，超出的由 WebSocket 层关闭；无法解析、不认识的消息、认证前发别的消息、重复认证，网关回一个 `gateway.error` 后关闭连接，并且从这一刻起不再读取这条连接送来的任何东西，node 立即离线。心跳超时（TCP 没断但收不到数据也算）同样结束连接。
 
-**持久化：** node 的身份密钥和配置存在 node 本地。网关的 node 注册表存在 `data/control.sqlite`。
+**持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。网关的 node 注册表存在 `data/control.sqlite`，和登录、管理模块共用这个文件，各自建自己的表。
+
+**后台命令。** `bash` 带 `background: true` 时，网关照常转发这次调用，runtime 立即给模型返回一个命令 ID，调用继续在一个 Durable 后台任务里等结果。命令结束时，这个任务把结果作为输入（`requestId = command:<ID>`，`whenBusy = "steer"`）提交给发起它的对话，Durable 去重。`bash_stop(ID)` 中止那个任务的 signal，和前台调用的停止走同一条路（规则 6）。runtime 关闭（暂停、控制面重启）时后台命令和前台命令一样被停掉，重新打开后那个任务以"已中断"汇报一次，不重跑命令。前台命令不给 `timeout` 时默认 10 分钟，最多 1 小时；后台命令不给时没有时限，最多一天。
 
 ### 4.6 管理模块
 
@@ -337,7 +341,9 @@ interface NodeGateway {
 
 **不负责：** 聊天。管理模块需要给 Agent 开聊天账号时，以聊天 app 普通客户端的身份去调用。
 
-**持久化：** API key 和 node 注册表存在 `data/control.sqlite`。Agent 自己的配置存在该 Agent 的文件里。
+**模型和 API key：** 模型来自 pi-ai 自带的目录。首版提供 OpenAI（Responses API）和 DeepSeek 两家；只能选已经存了 API key 的提供商的模型，thinking 级别按模型目录校验。
+
+**持久化：** API key 存在 `data/control.sqlite`。Agent 自己的配置存在该 Agent 的文件里。
 
 ### 4.7 Web 外壳
 
@@ -386,7 +392,7 @@ Manager 扫描 `data/agents/`，打开所有没有暂停的 Agent：
 data/
   control.sqlite              所有者登录、API key、node 注册表
   chat.sqlite                 聊天 app 的全部数据（含附件元数据和推送队列）
-  attachments/                附件文件
+  attachments/                附件文件（首版之后）
   agents/<agentId>.sqlite     每个 Agent 的 Durable 存储（含配置、提醒、连接器位置）
 ```
 
@@ -443,16 +449,18 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 - 一个所有者，中文界面，适配手机。
 - 规模很小：一个所有者，少量 Agent（模型费用决定了不会多），消息量不大。不为数据量做性能优化或分页之类的设计，除非测量证明确实有问题；结构简单优先。
 
-## 11. 待定问题
+## 11. 已决定的问题
 
-| # | 问题 | 现状 |
-|---|---|---|
-| 1 | node 安装器那套可续做的文件状态机（安装、更新、卸载中途崩溃后重跑即可完成），有没有结构上更简单的做法？ | 待调研。暂时沿用旧 CLI 的功能范围，实现时重新审视 |
-| 2 | 首个真实接入的模型提供商是哪家？ | 测试按 OpenAI Responses 协议模拟模型。建议首版只接一家，接入之前定 |
-| 3 | 上下文压缩（M5）用哪个模型写摘要？Agent 要不要知道自己被压缩了？ | 建议用 Agent 自己的模型；压缩后在上下文里留一句"更早的记录可用历史工具查" |
-| 4 | bash 不给 timeout 时，命令没有时限，一直跑到被停止；给了则最长一天。要不要设默认上限？ | 现状如此（`BASH_MAX_TIMEOUT_SECONDS`）。建议保持：长任务是正当需求，停止靠暂停或中止 |
-| 5 | 网关的 node 注册表放在独立的 `nodes.sqlite`，还是按本文第 6 节放进 `control.sqlite`？ | 代码用 `nodes.sqlite`，文档写 `control.sqlite`。建议在 M6 组装控制面时统一成 `control.sqlite`，或改文档承认每个模块各有一个文件 |
-| 6 | 一个 Agent 用哪个 node？首版只有一台 node 时，是否创建 Agent 时自动绑定唯一的 node？ | `runTool(nodeId, …)` 需要 nodeId，Agent 文件里还没有记录它。建议创建时记下 nodeId，只有一台时自动选 |
-| 7 | 首版要不要 Web Push 推送和附件？ | 架构里都有，代码都还没有。推送需要 HTTPS 和 VAPID 密钥；附件需要上传、存储和预算计算。建议推送留在 M6，附件推到首版之后 |
-| 8 | 正式发布之前，每次升级都可能要换新的空数据目录（不做迁移），可以接受吗？ | 按 ADR-0002 不迁移。重写期间结构变化频繁 |
-| 9 | 要不要在 CI（如 GitHub Actions）里跑 `pnpm check` 和 `pnpm test:linux`？ | 现在只在本地跑。CI 需要推送分支，推送要你同意 |
+下面这些曾是待定问题，所有者在 2026-10-17 给了回答。每条写明决定和它落在本文哪里。
+
+| # | 问题 | 决定 | 落在 |
+|---|---|---|---|
+| 1 | node 安装器要不要一套可续做的文件状态机？ | 不要。`mate node` 的每个命令都从现有状态推出该做什么，不记"做到哪一步"：程序目录整个替换，配置、身份和工作区放在程序目录之外，从不被安装、更新、卸载动到。中途失败就重跑同一个命令；重跑不了就删掉程序目录重装，Agent 的 `MEMORY.md` 等资料不会丢 | 4.5、第 7 节、MODULE_TESTS 第 9 节 |
+| 2 | 首个真实接入的模型提供商？ | 走 pi-ai 自带的模型目录，不自己写协议。首版在管理界面里提供 OpenAI（Responses API）和 DeepSeek（例如 `deepseek-flash`，用于便宜地测试）。API key 按提供商存 | 4.6 |
+| 3 | 上下文压缩用哪个模型？Agent 知不知道被压缩？ | 用 Durable 自带的压缩（`settings.compaction`），摘要由这个对话自己的模型写，失败或被截断的摘要不生效，Durable 保证。被压缩掉的记录仍在存储里，历史工具读它们；历史扩展的系统提示告诉 Agent "更早的记录可以用历史工具查" | 4.2 |
+| 4 | bash 没有时限时会一直占着 Agent，要不要默认上限？ | 参照 Claude Code 的后台命令：`bash` 加 `background` 参数。前台命令默认 10 分钟、最多 1 小时，跑命令期间 Agent 不处理别的；后台命令立即返回一个命令 ID，Agent 继续工作，命令结束时结果作为一条输入（`command:<ID>`）提交给主对话，可以用 `bash_stop` 停掉。后台命令最多跑一天 | 4.2、4.5 |
+| 5 | node 注册表放 `nodes.sqlite` 还是 `control.sqlite`？ | 统一放 `control.sqlite`，尽量少分文件。控制面里的网关、登录和管理模块共用这一个文件，各自建自己的表 | 4.5、4.6、第 6 节 |
+| 6 | 一个 Agent 用哪个 node？ | 创建 Agent 时从已配对的 node 列表里选一个，只有一个就只能选它。node ID 记在 Agent 自己的文件里，之后不变 | 4.4 |
+| 7 | 首版要不要 Web Push 和附件？ | 推送在 M6 做；附件推到首版之后，首版的聊天接口没有附件参数 | 4.1、PLAN |
+| 8 | 正式发布前每次升级可能要换空数据目录？ | 可以接受 | 第 6 节 |
+| 9 | 要不要 CI？ | 要。GitHub Actions 跑 `pnpm check` 和 `pnpm test:linux`。正式发布前推送分支不需要再问所有者 | PLAN |

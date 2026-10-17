@@ -121,6 +121,13 @@ runtime 存在自己 Durable 存储里的一个命名位置，只进不退，比
 **提醒**（reminder）
 Agent 给自己设定的定时输入，保存在它自己的存储文件里，到时间后提交到主对话的收件箱。
 
+**压缩**（compaction）
+Durable 在上下文快满时，用对话自己的模型把较早的记录写成摘要，模型之后只看到摘要和最近的记录。被压缩掉的记录仍在存储里，Agent 用历史工具读它们。
+
+**后台命令**（background command）
+`bash` 带 `background: true` 启动的命令。工具调用立即返回一个命令 ID，命令在 node 上继续跑；结束时它的结果作为一条输入（`command:<ID>`）提交给发起它的对话。用 `bash_stop` 停止。runtime 关闭时它和前台命令一样被停掉，不会重跑。
+避免：守护进程（Agent 用 `setsid` 等方式自己脱离进程组的进程，Mate 不跟踪）。
+
 ## 环境与控制面
 
 **控制面**（control plane）
