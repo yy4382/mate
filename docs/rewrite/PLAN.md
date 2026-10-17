@@ -14,6 +14,7 @@
 | `packages/node-protocol`（`@mate/node-protocol`） | 网关与 node 之间的消息格式，包括工具名和工具结果的形状 |
 | `packages/clock`（`@mate/clock`） | 时钟：`now` 和可中止的 `sleep`，各模块共用，测试里换成可控时钟 |
 | `packages/gateway`（`@mate/gateway`） | node 网关 |
+| `packages/control-store`（`@mate/control-store`） | 控制库：几个模块共用 `control.sqlite` 时，各自打开自己的表并按模块检查结构版本 |
 | `packages/admin`（`@mate/admin`） | 管理模块 |
 | `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |
 | `apps/control-plane` | Web 外壳后端和组装入口 |

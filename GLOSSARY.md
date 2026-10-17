@@ -133,6 +133,10 @@ Durable 在上下文快满时，用对话自己的模型把较早的记录写成
 **控制面**（control plane）
 运行在 Docker 容器里的单个进程，包含 Web 外壳、聊天 app、管理模块、Agent Manager、所有 runtime 和 node 网关。
 
+**控制库**（control store）
+`data/control.sqlite`：网关的 node 注册表、Web 外壳的登录、管理模块的 API key 共用的一个 SQLite 文件。每个模块用 `@mate/control-store` 的 `openControlTables` 打开自己的一条连接，只建、只检查自己的表；`schema_versions` 表里每个模块一行结构版本，一个模块版本不对只让这个模块拒绝启动。
+避免：说某个模块"拥有" `control.sqlite`；用 `PRAGMA user_version` 记控制库的版本（一个文件只有一个）。
+
 **Web 外壳**（shell）
 负责登录、HTTP 路由，以及把聊天和管理两个前端功能区挂在同一个网页里。
 

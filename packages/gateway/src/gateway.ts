@@ -28,6 +28,7 @@ const DEFAULT_MAX_UNAUTHENTICATED = 32;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 35_000;
 
 export interface NodeGatewayOptions {
+  /** The control plane's data directory. The gateway keeps its node registry in the control store there. */
   dataDirectory: string;
   clock?: Clock;
   pairingTokenTtlMs?: number;

@@ -1,47 +1,30 @@
 import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openControlTables, type ControlTables } from "@mate/control-store";
 import { z } from "zod";
 
-const SCHEMA_VERSION = 1;
-
-const SCHEMA_SQL = `
-PRAGMA journal_mode=WAL;
-PRAGMA synchronous=FULL;
-
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS nodes (
+const GATEWAY_TABLES: ControlTables = {
+  module: "gateway",
+  version: 1,
+  ddl: `
+CREATE TABLE nodes (
   id TEXT PRIMARY KEY,
   public_key TEXT NOT NULL,
   paired_at INTEGER NOT NULL,
   last_connected_at INTEGER
 );
-CREATE TABLE IF NOT EXISTS pairing_tokens (
+CREATE TABLE pairing_tokens (
   token_hash TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   used INTEGER NOT NULL DEFAULT 0
 );
-`;
+`,
+};
 
+/** The gateway's own connection to the control store, holding the node registry and pairing tokens. */
 export function openGatewayDatabase(dataDirectory: string): DatabaseSync {
-  const path = `${dataDirectory}/nodes.sqlite`;
-  const db = new DatabaseSync(path);
-  db.exec(SCHEMA_SQL);
-
-  const row = z
-    .object({ value: z.string() })
-    .optional()
-    .parse(db.prepare("SELECT value FROM meta WHERE key='user_version'").get());
-
-  if (row === undefined) {
-    db.prepare("INSERT INTO meta(key,value) VALUES('user_version',?)").run(String(SCHEMA_VERSION));
-  } else if (Number(row.value) !== SCHEMA_VERSION) {
-    throw new Error(
-      `nodes.sqlite schema version mismatch: expected ${SCHEMA_VERSION}, got ${row.value}`,
-    );
-  }
-
-  return db;
+  return openControlTables(dataDirectory, GATEWAY_TABLES);
 }
 
 export function createPairingToken(

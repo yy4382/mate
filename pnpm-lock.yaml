@@ -73,11 +73,20 @@ importers:
 
   packages/clock: {}
 
+  packages/control-store:
+    dependencies:
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+
   packages/gateway:
     dependencies:
       '@mate/clock':
         specifier: workspace:*
         version: link:../clock
+      '@mate/control-store':
+        specifier: workspace:*
+        version: link:../control-store
       '@mate/node-protocol':
         specifier: workspace:*
         version: link:../node-protocol
