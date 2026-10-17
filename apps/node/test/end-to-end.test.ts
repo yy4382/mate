@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, onTestFinished } from "vitest";
@@ -132,6 +132,46 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     expect(textOf(resultB), "agent-b gets its own result").toContain("done in agent-b");
     expect(outputs["agent-b"].join("")).toContain("done in agent-b");
     expect(outputs["agent-a"].join(""), "nothing of agent-b's reached agent-a").toBe("");
+  });
+
+  it("browses an Agent's workspace read-only, refusing a link that points out, and refuses as offline once the node stops", async () => {
+    const { gateway, nodeId, workspacesRoot, stopNode } = await gatewayWithNode();
+    const agentId = "agent-browse";
+    await gateway.prepareWorkspace(nodeId, agentId);
+    const workspace = join(workspacesRoot, agentId);
+    writeFileSync(join(workspace, "plan.md"), "ship it");
+    const outside = temporaryDirectory();
+    writeFileSync(join(outside, "secret.txt"), "secret");
+    symlinkSync(outside, join(workspace, "out"));
+
+    expect(await gateway.browse(nodeId, agentId, ".")).toEqual({
+      ok: true,
+      listing: {
+        kind: "directory",
+        path: ".",
+        entries: [
+          { name: "MEMORY.md", kind: "file", size: 0 },
+          { name: "out", kind: "symlink" },
+          { name: "plan.md", kind: "file", size: 7 },
+        ],
+        truncated: false,
+      },
+    });
+    expect(await gateway.browse(nodeId, agentId, "plan.md")).toMatchObject({
+      ok: true,
+      listing: { kind: "file", content: "ship it" },
+    });
+    expect(await gateway.browse(nodeId, agentId, "out/secret.txt")).toMatchObject({
+      ok: false,
+      reason: "outside-workspace",
+    });
+
+    await stopNode();
+    await eventually(() => !gateway.status(nodeId).online, "the node is offline", 8_000);
+    expect(await gateway.browse(nodeId, agentId, ".")).toMatchObject({
+      ok: false,
+      reason: "node-offline",
+    });
   });
 
   it("returns offline once the node stops", async () => {

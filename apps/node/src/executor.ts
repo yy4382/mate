@@ -1,7 +1,14 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Clock } from "@mate/clock";
-import { parseBashArguments, type GatewayRunTool, type ToolResult } from "@mate/node-protocol";
+import {
+  parseBashArguments,
+  type GatewayBrowse,
+  type GatewayRunTool,
+  type NodeBrowseOutcome,
+  type ToolResult,
+} from "@mate/node-protocol";
+import { browseWorkspace } from "./browse.ts";
 import { Commands } from "./commands.ts";
 import { runFileTool } from "./files.ts";
 
@@ -46,6 +53,19 @@ export class Executor {
       onOutput,
       signal,
     );
+  }
+
+  /** Read a path in the Agent's workspace for the owner, changing nothing. */
+  async browse(call: GatewayBrowse): Promise<NodeBrowseOutcome> {
+    const workspace = join(this.#root, call.agentId);
+    if (!isDirectory(workspace)) {
+      return {
+        ok: false,
+        reason: "not-found",
+        message: `The workspace ${workspace} does not exist.`,
+      };
+    }
+    return browseWorkspace(workspace, call.path);
   }
 
   /** Create the Agent's workspace with an empty MEMORY.md; repeating it changes nothing. */

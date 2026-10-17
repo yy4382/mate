@@ -357,7 +357,8 @@ interface NodeGateway {
   createPairingToken(): { pairingToken, expiresAt } // 一次性令牌，只能配对一个新 node
   handleUpgrade(req, socket, head) // 挂到 Web 外壳的 HTTP upgrade 上
   close()
-  // browse(nodeId, agentId, path)：管理界面只读浏览工作区，形状见 4.6，还没有实现
+  // 只读地看工作区里的一个路径，给管理界面用，见下面的"浏览工作区"。离线或回答之前连接断开时立即回答 node-offline
+  browse(nodeId, agentId, path): { ok: true, listing } | { ok: false, reason, message }
 }
 ```
 
@@ -406,7 +407,7 @@ interface NodeGateway {
 **对外接口（给 Web 外壳的 `/api/admin/*` 用）：**
 
 ```ts
-// gateway 只需 nodes、createPairingToken、prepareWorkspace、runTool；以后加上 browse 就能浏览工作区
+// gateway 只需 nodes、createPairingToken、prepareWorkspace、runTool、browse
 openAdmin({ dataDirectory, chat, owner, gateway, clock?, report? }): Admin
 interface Admin {
   // 每个 Agent：显示名和 handle（聊天账号的）、nodeId、state（open | paused | closed）、settings、usage。
@@ -417,7 +418,7 @@ interface Admin {
   configureAgent(id, settings) // 打开或关闭的都可以；打开的从下一次请求起生效
   assistants(id) // 打开的 Agent 的工作助手名字
   watchAgent(id, listener, { assistant? }): { stop(), ended } // 只能看打开的 Agent；暂停、删除或控制面关闭时 ended
-  browseWorkspace(id, path) // 网关还没有 browse，现在一律以 not-implemented 拒绝
+  browseWorkspace(id, path) // 打开或关闭的都可以；返回 node 给的 listing，node 的拒绝原样成为 AdminError 的 reason
   providers(): { provider, name, credentials: { apiKey: "…末四位", baseUrl } | null }[] // 每个提供商一行
   setCredentials(provider, { apiKey, baseUrl? }) / deleteCredentials(provider)
   models() // 已存了 key 的提供商的模型目录，每个模型带它接受的 thinking 级别
@@ -426,13 +427,17 @@ interface Admin {
 }
 ```
 
-拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`not-implemented`），被拒绝的操作什么都不改。
+拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`，以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。
 
 **模型和 API key：** 模型来自 pi-ai 自带的目录（runtime 的 `catalogModels`，Agent 的请求也在这个目录里解析）。首版提供 OpenAI（Responses API）和 DeepSeek 两家；凭据按提供商存 `{ apiKey, baseUrl? }`，`baseUrl` 替换目录里这个提供商所有模型的地址。设置模型时先检查（创建 Agent 时也一样，在任何东西被创建之前）：提供商是这两家之一、已经存了 key、目录里有这个模型、thinking 级别在这个模型接受的级别里。不接受的级别直接拒绝，不降级。runtime 每次模型请求都现读凭据，所以改了 key 从下一次请求起生效，再存一次同样的值不影响任何正在运行的 Agent；删了 key，这个提供商的请求不发出就失败。
 
 **观察：** `watchAgent` 就是 runtime 的 `watchEvents`：Durable 的 agent 事件原样交出去，第一批是快照，之后是流式文字、工具调用和它们的输出、输入、用量。观察只读，不改变 Agent 的任何状态。关闭的 Agent 没有可看的，拒绝为 `agent-closed`。
 
-**浏览工作区（接口已定，网关和 node 一侧还没有实现）：** 网关将提供 `browse(nodeId, agentId, path)`：只读，返回目录的条目（名字、文件或目录、大小）或文件的文字（可能截断）；路径由 node 上的工作区环境解析，和文件工具一样不能逃出工作目录。管理模块按 Agent 文件里的 node ID 调它。
+**浏览工作区：** 管理模块按 Agent 文件里的 node ID 调网关的 `browse(nodeId, agentId, path)`，网关发 `gateway.browse`，node 回 `node.browse.result`。浏览不经过 runtime，所以暂停的 Agent 也能看。
+- **只读，限定在工作区里。** 路径和文件工具一样由 node 上的工作区环境解析：相对于工作目录，或者是指向工作目录内的绝对路径；`..`、指向外部的绝对路径、指向外部的符号链接、悬空的符号链接一律以 `outside-workspace` 拒绝。node 只打开、读取、列目录，不写任何东西；打开文件不阻塞，所以 FIFO 以 `unreadable` 拒绝，而不是一直等。路径或工作目录不存在为 `not-found`，node 不会重建工作目录。
+- **结果（listing，形状在 `@mate/node-protocol` 里定义一次）**，`path` 都是相对于工作目录的路径（工作目录本身是 `.`）：目录给出条目，按名字排序，每条是名字和种类（文件、目录、符号链接），文件带大小；文件给出大小和开头的文字；含 NUL 字节的文件只给大小，种类是 `binary`。
+- **上限：** 文件最多返回开头 128 KiB（`BROWSE_FILE_BYTES`），截在完整字符处并标明 `truncated`；目录最多 500 条（`BROWSE_DIRECTORY_ENTRIES`），超出时标明 `truncated`，列出哪些由文件系统决定。这两个数让任何回答按 JSON 转义后的最坏情况仍在网关 1 MiB 的帧上限以内。
+- **离线：** node 不在线、或者回答之前连接断开，网关立即回答 `node-offline`，不排队等待；之后迟到的回答被丢弃。和工具调用一样，回答只认发出请求的那条连接。
 
 **持久化：** API key 存在 `data/control.sqlite` 里管理模块自己的 `provider_credentials` 表（模块名 `admin`），是唯一一份，runtime 每次请求现读。Agent 自己的配置存在该 Agent 的文件里。
 
@@ -445,7 +450,7 @@ interface Admin {
 - **路由。** 除了 `POST /api/login`（`{ password, next? }`，回 `{ next }`：`next` 是站内 `/app` 下的路径时原样返回，否则是 `/app`）和 `POST /api/logout`，`/api/*` 都要登录，未登录回 401。页面请求：前端目录里存在的文件（脚本、样式、图标）不需要登录；`/` 跳到 `/app`；`/app` 及其下的页面未登录时跳到 `/login?next=<原地址>`；其余页面路径都回前端的 `index.html`，由前端路由。没有前端目录时页面回 404，API 照常工作。
   - `/api/chat/*` 一个路由对应聊天 app 的一个所有者操作，账号固定为所有者。读：`GET snapshot`（可带 `conversation=` 或 `thread=`）、`conversations`、`unread`、`history`（`conversation=`/`thread=`、`before`、`limit`）、`search?q=`。写都带浏览器生成的 `requestId`：`POST read`（读未读，推进所有者的已读位置）、`messages`、`channels`、`dms`、`conversations/:id/join|leave|archive|invite`、`tasks`、`tasks/:id/change`。发送和任务操作总是关闭新鲜度检查（4.1 规则 2），请求里不接受这一项。推送：`GET push/key`（VAPID 公钥）、`POST push/subscribe`、`POST push/unsubscribe`。
   - `/api/admin/*` 一个路由对应管理模块的一个操作：`GET|POST agents`、`POST agents/:id/pause|resume`、`DELETE agents/:id`、`PUT agents/:id/settings`、`GET agents/:id/assistants`、`GET agents/:id/events`（事件流，可带 `assistant=`）、`GET agents/:id/workspace?path=`、`GET providers`、`PUT|DELETE providers/:provider/credentials`、`GET models`、`GET nodes`、`POST pairing-tokens`。
-  - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`owner-only` 为 403；`archived`、`request-conflict`、`handle-taken`、`no-credentials`、`agent-closed` 为 409；`not-implemented` 为 501。创建 Agent 中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做。成功的操作回 200 加结果，没有结果的回 204。
+  - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`owner-only`、`outside-workspace` 为 403；`archived`、`request-conflict`、`handle-taken`、`no-credentials`、`agent-closed` 为 409；`unreadable` 为 422；`node-offline` 为 503。创建 Agent 中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做。成功的操作回 200 加结果，没有结果的回 204。
 - **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, unread }`），SSE 的 id 是这批最后一条的游标，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前都查一次登录会话；会话已过期或已退出登录，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
 - **推送发送器。** VAPID 密钥对在第一次启动时生成，存在外壳的表里，之后不变：浏览器用公钥订阅，换了密钥所有订阅都会失效。`PushSender` 用 `web-push` 发出（加密、VAPID 签名、TTL 一天、请求超时 10 秒），推送服务的回答原样作为状态码交回聊天 app，连不上时抛错。VAPID 的联系地址来自 `MATE_VAPID_SUBJECT`，缺省为 `mailto:owner@mate.invalid`。
 

@@ -256,7 +256,11 @@ node 为每条 `bash` 命令开的会话和进程组（`/bin/sh -c` 以 `detache
 避免：结果未知（那是连接断开时的结果）。
 
 **工作区环境**（WorkspaceEnv）
-node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。
+node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，浏览工作区也用它；每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。
+
+**浏览工作区**（browse）
+所有者在管理界面里只读地看 Agent 工作区里的一个路径：管理模块的 `browseWorkspace` 调网关的 `browse`，网关发 `gateway.browse`，node 回 `node.browse.result`。回答是一个**浏览结果**（`WorkspaceListing`：目录的条目、文件开头的文字，或者不是文字的文件的大小，各有上限并标明截断），或者一个拒绝（`outside-workspace`、`not-found`、`unreadable`，网关再加上 `node-offline`）。不经过 runtime，暂停的 Agent 也能看。
+避免：把它当成工具调用（它不是 `runTool`，没有输出流，也没有停止）。
 
 **MEMORY.md**
 工作区里的一个文件，是 Agent 恢复时读的第一个入口。它只是一个约定，Mate 从不检查它。

@@ -158,6 +158,13 @@ export function connect(
             ...executor.prepareWorkspace(message.agentId),
           });
           return;
+        case "gateway.browse":
+          void executor
+            .browse(message)
+            .then((outcome) =>
+              send({ type: "node.browse.result", requestId: message.requestId, outcome }),
+            );
+          return;
       }
     };
 

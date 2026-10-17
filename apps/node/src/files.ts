@@ -137,7 +137,7 @@ function localApi<D extends JsonValue>(
  * absolute one through `absolutePath` first, so refusing there keeps `..`, absolute paths elsewhere, and symbolic
  * links that point outward from reaching any file operation.
  */
-class WorkspaceEnv extends NodeExecutionEnv {
+export class WorkspaceEnv extends NodeExecutionEnv {
   readonly #root: string;
 
   constructor(root: string) {

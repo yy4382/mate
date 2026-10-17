@@ -6,12 +6,18 @@ import {
   type GatewayMessage,
   type GatewayRefused,
   type NodeRequest,
+  type ToolResult,
 } from "@mate/node-protocol";
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { RawData, WebSocket } from "ws";
 import { z } from "zod";
-import { unknownResult, type PendingCalls } from "./pending-calls.js";
+import {
+  browseOffline,
+  unknownResult,
+  type BrowseOutcome,
+  type PendingCalls,
+} from "./pending-calls.js";
 import {
   isEd25519PublicKey,
   nodePublicKey,
@@ -31,7 +37,8 @@ export const MAX_MESSAGE_BYTES = 1024 * 1024;
 export interface GatewayContext {
   readonly db: DatabaseSync;
   readonly clock: Clock;
-  readonly pending: PendingCalls;
+  readonly pending: PendingCalls<ToolResult>;
+  readonly browsing: PendingCalls<BrowseOutcome>;
   readonly sessions: WeakMap<WebSocket, NodeSession>;
   /** Authenticated connections, one per node. A node is online exactly when it has an entry here. */
   readonly connected: Map<string, WebSocket>;
@@ -188,6 +195,9 @@ function dispatch(
     case "node.tool.result":
       ctx.pending.receiveResult(ws, msg.requestId, { content: msg.content, isError: msg.isError });
       return;
+    case "node.browse.result":
+      ctx.browsing.receiveResult(ws, msg.requestId, msg.outcome);
+      return;
   }
 }
 
@@ -319,6 +329,9 @@ export function closeNodeSocket(ws: WebSocket, ctx: GatewayContext): void {
     ctx.connected.delete(session.nodeId);
   }
   ctx.pending.settleForSocket(ws, unknownResult);
+  ctx.browsing.settleForSocket(ws, () =>
+    browseOffline("Node offline: the node connection was lost before it answered."),
+  );
 }
 
 function messageText(data: RawData): string {

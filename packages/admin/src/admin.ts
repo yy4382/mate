@@ -11,6 +11,7 @@ import {
   type CatalogModel,
   type EventWatch,
 } from "@mate/runtime";
+import { WorkspacePathSchema, type WorkspaceListing } from "@mate/node-protocol";
 import { z } from "zod";
 import { AdminError, parseInput } from "./admin-error.ts";
 import { CredentialStore } from "./credentials.ts";
@@ -44,35 +45,11 @@ const CredentialsInput = z.object({
 
 const AgentId = z.string().min(1);
 
-/** What the admin module needs of the node gateway. `browse` is what workspace browsing will need of it. */
+/** What the admin module needs of the node gateway. */
 export type AdminGateway = Pick<
   NodeGateway,
-  "nodes" | "createPairingToken" | "prepareWorkspace" | "runTool"
-> & {
-  /**
-   * Read `path` in the Agent's workspace on the node, read-only; a path that leaves the workspace is refused there,
-   * as for the file tools. The gateway does not offer this yet.
-   */
-  browse?: (nodeId: string, agentId: string, path: string) => Promise<WorkspaceListing>;
-};
-
-/** A directory's entries or a file's text, at `path` relative to the workspace. */
-export type WorkspaceListing =
-  | {
-      readonly kind: "directory";
-      readonly path: string;
-      readonly entries: readonly {
-        readonly name: string;
-        readonly kind: "file" | "directory" | "other";
-        readonly size: number;
-      }[];
-    }
-  | {
-      readonly kind: "file";
-      readonly path: string;
-      readonly content: string;
-      readonly truncated: boolean;
-    };
+  "nodes" | "createPairingToken" | "prepareWorkspace" | "runTool" | "browse"
+>;
 
 export type AdminOptions = {
   /** The control plane's data directory: the admin tables live in its control store, the Agents in `agents/`. */
@@ -239,13 +216,17 @@ export class Admin {
     return runtime.watchEvents(listener, options);
   }
 
-  /** Read a directory or file in the Agent's workspace, on its node. Refused until the gateway offers browsing. */
+  /**
+   * Read a directory's entries or a file's start in the Agent's workspace, on its node, open or closed. Nothing
+   * changes. The node refuses a path that leaves the workspace; an offline node is refused as `node-offline`.
+   */
   async browseWorkspace(agentId: string, path: string): Promise<WorkspaceListing> {
-    const browse = this.#gateway.browse;
-    if (browse === undefined)
-      throw new AdminError("not-implemented", "the node gateway cannot browse workspaces yet");
-    const { nodeId } = await this.#manager.describe(this.#existing(agentId));
-    return browse(nodeId, agentId, path);
+    const id = this.#existing(agentId);
+    const at = parseInput(WorkspacePathSchema, path);
+    const { nodeId } = await this.#manager.describe(id);
+    const outcome = await this.#gateway.browse(nodeId, id, at);
+    if (!outcome.ok) throw new AdminError(outcome.reason, outcome.message);
+    return outcome.listing;
   }
 
   // ── Providers and models ────────────────────────────────────────────────────

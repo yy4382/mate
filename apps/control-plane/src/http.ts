@@ -42,7 +42,10 @@ const ADMIN_STATUS: Record<AdminErrorReason, number> = {
   "unknown-assistant": 404,
   "no-credentials": 409,
   "agent-closed": 409,
-  "not-implemented": 501,
+  "not-found": 404,
+  "outside-workspace": 403,
+  unreadable: 422,
+  "node-offline": 503,
 };
 
 /**

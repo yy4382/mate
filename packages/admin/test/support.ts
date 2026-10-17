@@ -4,7 +4,12 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { ChatApp } from "@mate/chat";
 import { createNodeGateway } from "@mate/gateway";
-import type { GatewayRunTool, ToolResult } from "@mate/node-protocol";
+import type {
+  GatewayBrowse,
+  GatewayRunTool,
+  NodeBrowseOutcome,
+  ToolResult,
+} from "@mate/node-protocol";
 import { FakeClock, FakeNode, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
 import { onTestFinished } from "vitest";
 import { openAdmin, type Admin, type AgentEvent } from "../src/index.ts";
@@ -39,6 +44,9 @@ export type TestNode = {
   readonly stopped: string[];
   /** How the next tool calls are answered; by default at once with "ok". */
   answer: (call: GatewayRunTool) => Promise<Answer>;
+  readonly browses: GatewayBrowse[];
+  /** How the next browses are answered; by default with an empty directory. */
+  answerBrowse: (browse: GatewayBrowse) => Promise<NodeBrowseOutcome>;
 };
 
 export function ok(text: string): ToolResult {
@@ -126,6 +134,7 @@ export async function environment() {
       const prepared: string[] = [];
       const calls: GatewayRunTool[] = [];
       const stopped: string[] = [];
+      const browses: GatewayBrowse[] = [];
       const node = new FakeNode({
         gatewayUrl,
         ...identity,
@@ -138,6 +147,10 @@ export async function environment() {
           return test.answer(call);
         },
         onStopTool: (requestId) => stopped.push(requestId),
+        onBrowse: (browse) => {
+          browses.push(browse);
+          return test.answerBrowse(browse);
+        },
       });
       nodes.push(node);
       const test: TestNode = {
@@ -147,6 +160,11 @@ export async function environment() {
         calls,
         stopped,
         answer: async () => ({ outputs: [], result: ok("ok") }),
+        browses,
+        answerBrowse: async ({ path }) => ({
+          ok: true,
+          listing: { kind: "directory", path, entries: [], truncated: false },
+        }),
       };
       await node.connect();
       return test;

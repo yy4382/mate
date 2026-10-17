@@ -4,6 +4,7 @@ import {
   type GatewayError,
   type GatewayMessage,
   type JsonValue,
+  type NodeBrowseOutcome,
   type ToolName,
   type ToolResult,
 } from "@mate/node-protocol";
@@ -43,6 +44,7 @@ export class FakeGateway {
   #authenticated = false;
   #authentications = 0;
   readonly #pendingToolCalls = new Map<string, PendingToolCall>();
+  readonly #pendingBrowses = new Map<string, (outcome: NodeBrowseOutcome) => void>();
   readonly #options: FakeGatewayOptions;
 
   constructor(options: FakeGatewayOptions = {}) {
@@ -160,6 +162,14 @@ export class FakeGateway {
     });
   }
 
+  /** Browse a path in an Agent's workspace on the connected node; resolves with the node's answer. */
+  browse(requestId: string, agentId: string, path: string): Promise<NodeBrowseOutcome> {
+    return new Promise((resolve) => {
+      this.#pendingBrowses.set(requestId, resolve);
+      this.#send({ type: "gateway.browse", requestId, agentId, path });
+    });
+  }
+
   /** Drop the current connection abruptly, as a network failure or a gateway restart would. */
   disconnect(): void {
     this.#socket?.terminate();
@@ -237,6 +247,12 @@ export class FakeGateway {
         this.#pendingToolCalls.delete(msg.requestId);
         pending.resolve({ content: msg.content, isError: msg.isError });
       }
+      return;
+    }
+
+    if (msg.type === "node.browse.result") {
+      this.#pendingBrowses.get(msg.requestId)?.(msg.outcome);
+      this.#pendingBrowses.delete(msg.requestId);
       return;
     }
 

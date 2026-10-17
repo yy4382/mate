@@ -1,7 +1,9 @@
 import {
   GatewayMessageSchema,
   NodeRequestSchema,
+  type GatewayBrowse,
   type GatewayRunTool,
+  type NodeBrowseOutcome,
   type NodeRequest,
   type ToolResult,
 } from "@mate/node-protocol";
@@ -25,6 +27,8 @@ export interface FakeNodeOptions {
   onPrepareWorkspace?: (agentId: string) => Promise<void>;
   /** Called with the request ID of a call the gateway stopped. */
   onStopTool?: (requestId: string) => void;
+  /** Answers a browse. Without it, the node never answers one. */
+  onBrowse?: (msg: GatewayBrowse) => Promise<NodeBrowseOutcome>;
 }
 
 /**
@@ -151,6 +155,12 @@ export class FakeNode {
     if (msg.type === "gateway.prepare.workspace") {
       void this.#handlePrepareWorkspace(msg.requestId, msg.agentId);
       return;
+    }
+
+    if (msg.type === "gateway.browse") {
+      const outcome = await this.#options.onBrowse?.(msg);
+      if (outcome !== undefined)
+        this.send({ type: "node.browse.result", requestId: msg.requestId, outcome });
     }
   }
 

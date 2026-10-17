@@ -12,7 +12,10 @@ import type { z } from "zod";
  * - `unsupported-thinking-level`: the model does not accept that thinking level. It is refused, never lowered.
  * - `agent-closed`: the Agent is paused or closed, so there is nothing running to watch.
  * - `unknown-assistant`: the Agent has no work assistant by that name.
- * - `not-implemented`: the node gateway does not offer workspace browsing yet.
+ * - `node-offline`: the Agent's node is not connected, or its connection was lost before it answered.
+ * - `outside-workspace`: the path leaves the Agent's workspace, by `..`, an absolute path, or a symbolic link.
+ * - `not-found`: the path, or the Agent's workspace on its node, does not exist.
+ * - `unreadable`: the node cannot read the path, such as a FIFO or a file without permission.
  */
 export type AdminErrorReason =
   | "invalid-input"
@@ -24,7 +27,10 @@ export type AdminErrorReason =
   | "unsupported-thinking-level"
   | "agent-closed"
   | "unknown-assistant"
-  | "not-implemented";
+  | "node-offline"
+  | "outside-workspace"
+  | "not-found"
+  | "unreadable";
 
 export class AdminError extends Error {
   readonly reason: AdminErrorReason;

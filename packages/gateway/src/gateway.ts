@@ -1,5 +1,6 @@
 import { systemClock, type Clock } from "@mate/clock";
 import {
+  GatewayBrowseSchema,
   GatewayPrepareWorkspaceSchema,
   GatewayRunToolSchema,
   type GatewayPrepareWorkspace,
@@ -20,7 +21,13 @@ import {
   type GatewayContext,
   type NodeSession,
 } from "./connection.js";
-import { offlineResult, PendingCalls, stoppedResult } from "./pending-calls.js";
+import {
+  browseOffline,
+  offlineResult,
+  PendingCalls,
+  stoppedResult,
+  type BrowseOutcome,
+} from "./pending-calls.js";
 import { createPairingToken, listNodes, openGatewayDatabase } from "./storage.js";
 
 const DEFAULT_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -58,6 +65,13 @@ export interface NodeGateway {
   /** Create the Agent's workspace on the node with an empty MEMORY.md; repeating it changes nothing. */
   prepareWorkspace(nodeId: string, agentId: string): Promise<ToolResult>;
 
+  /**
+   * Read `path` in the Agent's workspace on the node without changing anything: a directory's entries or a file's
+   * start. The node refuses a path that leaves the workspace. Answers `node-offline` at once when the node is not
+   * connected, and when its connection is lost before it answers.
+   */
+  browse(nodeId: string, agentId: string, path: string): Promise<BrowseOutcome>;
+
   /** Whether one node is online. */
   status(nodeId: string): NodeStatusResult;
 
@@ -88,7 +102,8 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
   const ctx: GatewayContext = {
     db: openGatewayDatabase(options.dataDirectory),
     clock,
-    pending: new PendingCalls(),
+    pending: new PendingCalls<ToolResult>(),
+    browsing: new PendingCalls<BrowseOutcome>(),
     sessions: new WeakMap<WebSocket, NodeSession>(),
     connected: new Map<string, WebSocket>(),
     unauthenticated: new Set<WebSocket>(),
@@ -154,6 +169,21 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
       const ws = ctx.connected.get(nodeId);
       if (ws === undefined) return offlineResult();
       return request(ws, message, () => {});
+    },
+
+    async browse(nodeId, agentId, path) {
+      const message = GatewayBrowseSchema.parse({
+        type: "gateway.browse",
+        requestId: randomUUID(),
+        agentId,
+        path,
+      });
+      const offline = browseOffline("Node offline: the node is not currently connected.");
+      const ws = ctx.connected.get(nodeId);
+      if (ws === undefined) return offline;
+      const answer = ctx.browsing.add(message.requestId, ws);
+      if (!sendGateway(ws, message)) ctx.browsing.settle(message.requestId, offline);
+      return answer;
     },
 
     status(nodeId) {

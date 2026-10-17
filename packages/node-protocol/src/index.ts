@@ -116,6 +116,64 @@ export const ToolResultSchema = z.object({
 });
 export type ToolResult = z.infer<typeof ToolResultSchema>;
 
+// ── Workspace browsing ───────────────────────────────────────────────────────
+
+/*
+ * The limits keep every answer under the gateway's 1 MiB frame limit however the text escapes in JSON: a file's bytes
+ * at most 6 bytes each (`\u0001`), an entry at most 255 name bytes at 6 each plus its fields.
+ */
+/** Bytes of a file a browse returns: the start. A longer file comes back truncated. */
+export const BROWSE_FILE_BYTES = 128 * 1024;
+/** Entries of a directory a browse returns. A larger directory comes back truncated. */
+export const BROWSE_DIRECTORY_ENTRIES = 500;
+
+/** A path to browse, as the file tools take one: relative to the workspace, or absolute inside it. */
+export const WorkspacePathSchema = z.string().min(1).max(4096);
+
+const DirectoryEntrySchema = z.discriminatedUnion("kind", [
+  z.object({ name: z.string(), kind: z.literal("file"), size: z.number().int().nonnegative() }),
+  z.object({ name: z.string(), kind: z.literal(["directory", "symlink"]) }),
+]);
+
+/**
+ * What a browse found at a path, which is given relative to the workspace (`.` for the workspace itself): a
+ * directory's entries by name, a text file's start, or a file that is not text.
+ */
+export const WorkspaceListingSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("directory"),
+    path: z.string(),
+    entries: z.array(DirectoryEntrySchema).max(BROWSE_DIRECTORY_ENTRIES),
+    /** More entries exist than `BROWSE_DIRECTORY_ENTRIES`; which of them are listed is up to the file system. */
+    truncated: z.boolean(),
+  }),
+  z.object({
+    kind: z.literal("file"),
+    path: z.string(),
+    size: z.number().int().nonnegative(),
+    content: z.string(),
+    /** `content` holds only the first `BROWSE_FILE_BYTES` bytes, ending on a whole character. */
+    truncated: z.boolean(),
+  }),
+  z.object({ kind: z.literal("binary"), path: z.string(), size: z.number().int().nonnegative() }),
+]);
+export type WorkspaceListing = z.infer<typeof WorkspaceListingSchema>;
+
+/**
+ * How a node answers a browse. It refuses a path that leaves the workspace (`outside-workspace`, by `..`, an absolute
+ * path elsewhere, or a symbolic link pointing out), a path or workspace that does not exist (`not-found`), and one it
+ * cannot read, such as a FIFO or a file without permission (`unreadable`).
+ */
+export const NodeBrowseOutcomeSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), listing: WorkspaceListingSchema }),
+  z.object({
+    ok: z.literal(false),
+    reason: z.enum(["outside-workspace", "not-found", "unreadable"]),
+    message: z.string(),
+  }),
+]);
+export type NodeBrowseOutcome = z.infer<typeof NodeBrowseOutcomeSchema>;
+
 // ── Node → Gateway (node sends these) ────────────────────────────────────────
 
 export const NodeAuthenticateSchema = z.object({
@@ -154,12 +212,19 @@ export const NodeToolResultSchema = ToolResultSchema.extend({
   requestId,
 });
 
+export const NodeBrowseResultSchema = z.object({
+  type: z.literal("node.browse.result"),
+  requestId,
+  outcome: NodeBrowseOutcomeSchema,
+});
+
 export const NodeRequestSchema = z.discriminatedUnion("type", [
   NodeAuthenticateSchema,
   NodePairSchema,
   NodePingSchema,
   NodeToolOutputSchema,
   NodeToolResultSchema,
+  NodeBrowseResultSchema,
 ]);
 
 export type NodeRequest = z.infer<typeof NodeRequestSchema>;
@@ -168,6 +233,7 @@ export type NodePair = z.infer<typeof NodePairSchema>;
 export type NodePing = z.infer<typeof NodePingSchema>;
 export type NodeToolOutput = z.infer<typeof NodeToolOutputSchema>;
 export type NodeToolResult = z.infer<typeof NodeToolResultSchema>;
+export type NodeBrowseResult = z.infer<typeof NodeBrowseResultSchema>;
 
 // ── Gateway → Node (gateway sends these) ─────────────────────────────────────
 
@@ -243,6 +309,14 @@ export const GatewayPrepareWorkspaceSchema = z.object({
   agentId,
 });
 
+/** Read a path in an Agent's workspace without changing anything; the node answers with `node.browse.result`. */
+export const GatewayBrowseSchema = z.object({
+  type: z.literal("gateway.browse"),
+  requestId,
+  agentId,
+  path: WorkspacePathSchema,
+});
+
 export const GatewayMessageSchema = z.discriminatedUnion("type", [
   GatewayChallengeSchema,
   GatewayAuthenticatedSchema,
@@ -253,6 +327,7 @@ export const GatewayMessageSchema = z.discriminatedUnion("type", [
   GatewayRunToolSchema,
   GatewayStopToolSchema,
   GatewayPrepareWorkspaceSchema,
+  GatewayBrowseSchema,
 ]);
 
 export type GatewayMessage = z.infer<typeof GatewayMessageSchema>;
@@ -265,3 +340,4 @@ export type GatewayPong = z.infer<typeof GatewayPongSchema>;
 export type GatewayRunTool = z.infer<typeof GatewayRunToolSchema>;
 export type GatewayStopTool = z.infer<typeof GatewayStopToolSchema>;
 export type GatewayPrepareWorkspace = z.infer<typeof GatewayPrepareWorkspaceSchema>;
+export type GatewayBrowse = z.infer<typeof GatewayBrowseSchema>;
