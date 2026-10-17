@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run the Linux-only test suites (apps/node by default) in a Linux container, as the non-root
+# Run the Linux-only test suites (apps/node and the system scenarios by default) in a Linux container, as the non-root
 # `node` account. Arguments go to vitest, e.g. `pnpm test:linux apps/node/test/commands.test.ts`.
 # The repo is mounted read-only and copied into a container volume, where dependencies are
 # installed for Linux; the host's node_modules are never used.
@@ -13,7 +13,7 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 image=mate-test-linux
 docker build --quiet --tag "$image" --file "$root/scripts/linux-test.Dockerfile" "$root/scripts" >/dev/null
-[ "$#" -gt 0 ] || set -- apps/node
+[ "$#" -gt 0 ] || set -- apps/node tests/system
 volumes="--volume mate-test-linux-work:/work --volume mate-test-linux-store:/home/node/.pnpm-store"
 # shellcheck disable=SC2086
 docker run --rm --init --volume "$root:/src:ro" $volumes "$image" sh -ec '

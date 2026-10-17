@@ -4,5 +4,5 @@ export {
   type NodeGatewayOptions,
   type NodeStatusResult,
   type RunToolRequest,
-} from "./gateway.js";
-export type { BrowseOutcome } from "./pending-calls.js";
+} from "./gateway.ts";
+export type { BrowseOutcome } from "./pending-calls.ts";

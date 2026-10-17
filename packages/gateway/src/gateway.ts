@@ -20,15 +20,15 @@ import {
   sendGateway,
   type GatewayContext,
   type NodeSession,
-} from "./connection.js";
+} from "./connection.ts";
 import {
   browseOffline,
   offlineResult,
   PendingCalls,
   stoppedResult,
   type BrowseOutcome,
-} from "./pending-calls.js";
-import { createPairingToken, listNodes, openGatewayDatabase } from "./storage.js";
+} from "./pending-calls.ts";
+import { createPairingToken, listNodes, openGatewayDatabase } from "./storage.ts";
 
 const DEFAULT_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_UNAUTHENTICATED = 32;

@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "tests/*"
 useNodeVersion: 24.21.0
 nodeVersion: 24.21.0
 engineStrict: true

@@ -7,7 +7,7 @@ export default defineConfig({
   resolve: { conditions },
   ssr: { resolve: { conditions } },
   test: {
-    include: ["{apps,packages}/*/test/**/*.test.ts"],
+    include: ["{apps,packages,tests}/*/test/**/*.test.ts"],
     testTimeout: 20_000,
   },
 });

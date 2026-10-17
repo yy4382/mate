@@ -288,6 +288,12 @@ importers:
         specifier: 8.18.1
         version: 8.18.1
 
+  tests/system:
+    devDependencies:
+      '@mate/testkit':
+        specifier: workspace:*
+        version: link:../../packages/testkit
+
 packages:
 
   '@anthropic-ai/sdk@0.129.0':

@@ -17,14 +17,14 @@ import {
   unknownResult,
   type BrowseOutcome,
   type PendingCalls,
-} from "./pending-calls.js";
+} from "./pending-calls.ts";
 import {
   isEd25519PublicKey,
   nodePublicKey,
   pairNode,
   touchNodeConnection,
   verifyEd25519,
-} from "./storage.js";
+} from "./storage.ts";
 
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 /**

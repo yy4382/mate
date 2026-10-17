@@ -298,3 +298,13 @@ node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 
 
 **网络代理**（NetworkProxy）
 `@mate/testkit` 里夹在 node 和网关之间的本地 TCP 代理，由测试切换三种模式：转发（`forward`）、黑洞（`blackhole`，连接不断但两个方向的数据都被吞掉）、断开（`disconnect`，断掉现有连接，新连接一到就断）。
+
+**所有者浏览器**（OwnerBrowser）
+`@mate/testkit` 里扮演所有者浏览器的 HTTP 客户端：保存服务器设的会话 cookie，请求体按 JSON 发，可以打开 SSE 事件流（`EventReader`）。控制面的测试和系统场景共用它。
+
+**系统场景**（system scenario）
+`tests/system` 里的端到端测试：控制面和 node 以真实子进程启动（**进程夹具**），模型是脚本化提供商，所有者的操作经 HTTP 发出。只证明模块接在了一起，边界情况归各模块的测试。
+避免：集成测试（那个词留给用真实提供商或真实 VPS 的检查）。
+
+**进程夹具**
+`tests/system/test/support.ts` 的 `startSystem()`：在临时目录里启动控制面（`main.ts`）、用配对令牌配对的 node（`mate node run`，HOME 是临时目录）和脚本化提供商；控制面能被 SIGKILL，并在同一个数据目录和同一个端口上重启，node 可以经网络代理连到控制面。
