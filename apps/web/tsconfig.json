@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM", "DOM.Iterable", "WebWorker.ImportScripts"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": ".",
+    "types": ["vite/client", "node"],
+    "jsx": "react-jsx"
+  },
+  "include": ["src", "vite.config.ts"]
+}

@@ -13,7 +13,7 @@
 | node 网关与 node 进程 | M4 | 已完成，并在 Linux 容器里测试；网关挂在控制面 HTTP 服务器的 `/api/nodes/connect` 上 |
 | 历史工具、上下文压缩 | M5 | 未完成。压缩由 Durable 提供，但 Mate 还没有配置和测试它；读取被压缩掉的早期记录的历史工具还没写 |
 | 登录、HTTP 路由、实时事件流、推送、管理模块 | M6 | 后端已实现（`apps/control-plane`），以真实 HTTP 测试；还没有经过独立审查。没有前端，只能用 HTTP 客户端操作 |
-| 网页前端 | M7 | 未开始 |
+| 网页前端 | M7 | 已实现（`apps/web`），以真实控制面加无头 Chromium 测试；还没有经过独立审查 |
 | node 发布包、`mate node` CLI | M8 | 已完成：`pnpm bundle:node` 构建 linux-x64/arm64 发布包；CLI 在临时 HOME 加假 systemd 下测试，真包在 Debian 13、Ubuntu 24.04 容器里冒烟 |
 | 控制面 Docker 镜像 | M8 | 镜像、两个 Compose 文件和部署冒烟（`pnpm smoke:deploy`）已写好，冒烟在 Docker 里跑通控制面加 node 的整条链路；网页前端打进镜像要等 M7 |
 | 起真实进程的端到端场景 | M9 | 未开始 |
@@ -238,13 +238,17 @@ pnpm check          # 格式、类型检查、全部测试（macOS 上会跳过�
 pnpm test:linux     # 在非 root 的 Linux 容器里跑 node 的测试套件（以子进程启动 node，真实的进程组与文件系统）
 ```
 
-控制面可以在本机启动，但还没有前端（M7），只能用 `curl` 之类的 HTTP 客户端操作：
+控制面可以在本机启动，前端要先构建，再用 `MATE_WEB_DIRECTORY` 指给它：
 
 ```sh
 pnpm --filter "@mate/control-plane..." build
+pnpm --filter @mate/web build     # 产物在 apps/web/dist
 mkdir -m 700 -p ~/mate-dev && printf '%s\n' '一个至少十二字节的密码' > ~/mate-dev/password
 MATE_DATA_DIRECTORY=~/mate-dev/data MATE_INITIAL_PASSWORD_FILE=~/mate-dev/password \
-  node apps/control-plane/dist/src/main.js
+  MATE_WEB_DIRECTORY=apps/web/dist node apps/control-plane/dist/src/main.js
+# 浏览器打开 http://localhost:8787 。登录 cookie 带 Secure，只有 localhost 和 HTTPS 上浏览器才保留它，所以不要用局域网 IP。
+# 改前端时可以另开 `pnpm --filter @mate/web dev`（Vite 开发服务器，/api 代理到 8787）。
+# 也可以直接用 HTTP 客户端：
 curl -i -X POST localhost:8787/api/login -d '{"password":"一个至少十二字节的密码"}'
 ```
 

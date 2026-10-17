@@ -24,6 +24,8 @@ jobs:
           node-version: "24"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The page tests (apps/web) drive headless Chromium.
+      - run: pnpm --filter @mate/web exec playwright install --with-deps chromium-headless-shell
       - run: pnpm check
 
   test-linux:
