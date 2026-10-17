@@ -141,6 +141,17 @@ describe("compaction", () => {
     const input = await first.runtime.submit("what exactly failed?", { requestId: "m2" });
 
     expect(await input.settled()).toBe("done");
+    expect(
+      agent.provider.requests.map(({ step }) => step),
+      "one rejected request, one summary, and exactly one retry",
+    ).toEqual([
+      "reads the build log",
+      "reads the test log",
+      "answers",
+      "too long",
+      "summary",
+      "retried from the summary",
+    ]);
     agent.provider.assertComplete();
   });
 

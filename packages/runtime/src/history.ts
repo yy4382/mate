@@ -38,16 +38,40 @@ const recordKinds: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Characters one read returns. A page of Chinese text, three bytes a character, then stays under Durable's 50 KB
- * bound on a tool result.
+ * Bytes of serialized JSON one history result takes, under Durable's 50 KB (51,200 byte) bound on a tool result, which
+ * truncates a longer one into invalid JSON. Counted on the whole serialized result, so the JSON around the text and
+ * the escaping of it are paid for too.
  */
-const READ_BUDGET = 12_000;
+const RESULT_BUDGET = 40_000;
 const SEARCH_LIMIT = 20;
 const EXCERPT = 400;
 
 const reply = (value: unknown) => ({
   content: [{ type: "text" as const, text: JSON.stringify(value) }],
 });
+
+const bytesOf = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
+
+/**
+ * The longest prefix of `candidates` whose result, `wrap`ped, serializes within `RESULT_BUDGET` bytes. The first
+ * candidate is always kept, its text cut if it alone does not fit.
+ */
+function fit(
+  candidates: readonly HistoryRecord[],
+  wrap: (records: readonly HistoryRecord[]) => object,
+): HistoryRecord[] {
+  const room = RESULT_BUDGET - bytesOf(wrap([]));
+  const kept: HistoryRecord[] = [];
+  let spent = 0;
+  for (const record of candidates) {
+    const cost = bytesOf(record) + 1;
+    if (kept.length === 0 && cost > room) return [cut(record, room - 1)];
+    if (spent + cost > room) break;
+    kept.push(record);
+    spent += cost;
+  }
+  return kept;
+}
 
 const tools = [
   defineTool({
@@ -65,11 +89,17 @@ const tools = [
         const at = record.text.toLowerCase().indexOf(needle);
         return at === -1 ? [] : [{ ...record, text: excerpt(record.text, at) }];
       });
+      const newest = fit(matches.slice(-SEARCH_LIMIT).reverse(), (kept) => ({
+        total: records.length,
+        inContextFrom,
+        matched: matches.length,
+        records: kept,
+      }));
       return reply({
         total: records.length,
         inContextFrom,
         matched: matches.length,
-        records: matches.slice(-SEARCH_LIMIT),
+        records: newest.reverse(),
       });
     },
   }),
@@ -77,19 +107,17 @@ const tools = [
     name: "history_read",
     description:
       "Read the records of this conversation in order, starting at record number `from`, as many as fit " +
-      `${READ_BUDGET} characters; a longer record is cut. Records from inContextFrom on are still in your context; ` +
+      `${RESULT_BUDGET / 1000} KB; a longer record is cut. Records from inContextFrom on are still in your context; ` +
       "earlier ones were compacted into the summary you see. Continue after the last record returned.",
     parameters: Type.Object({ from: Type.Integer({ minimum: 1 }) }),
     replay: "safe",
     async execute({ from }, api, context) {
       const { records, inContextFrom } = await readHistory(api, context);
-      const page: HistoryRecord[] = [];
-      let spent = 0;
-      for (const record of records.slice(from - 1)) {
-        if (page.length > 0 && spent + record.text.length > READ_BUDGET) break;
-        page.push(cut(record));
-        spent += record.text.length;
-      }
+      const page = fit(records.slice(from - 1), (kept) => ({
+        total: records.length,
+        inContextFrom,
+        records: kept,
+      }));
       return reply({ total: records.length, inContextFrom, records: page });
     },
   }),
@@ -187,12 +215,20 @@ function excerpt(text: string, at: number): string {
   return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
 }
 
-/** `record`, its text cut to the read budget. */
-function cut(record: HistoryRecord): HistoryRecord {
-  if (record.text.length <= READ_BUDGET) return record;
-  const hidden = record.text.length - READ_BUDGET;
-  return {
+/** `record` with its text cut so the serialized record takes at most `room` bytes, and says how much was cut. */
+function cut(record: HistoryRecord, room: number): HistoryRecord {
+  const cutAt = (kept: number): HistoryRecord => ({
     ...record,
-    text: `${record.text.slice(0, READ_BUDGET)}\n[${hidden} more characters not shown]`,
-  };
+    text: `${record.text.slice(0, kept)}\n[${record.text.length - kept} more characters not shown]`,
+  });
+  if (bytesOf(record) <= room) return record;
+  let low = 0;
+  let high = record.text.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (bytesOf(cutAt(middle)) <= room) low = middle;
+    else high = middle - 1;
+  }
+  const lastKept = record.text.charCodeAt(low - 1);
+  return cutAt(lastKept >= 0xd800 && lastKept <= 0xdbff ? low - 1 : low);
 }

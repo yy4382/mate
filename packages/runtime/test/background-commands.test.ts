@@ -154,6 +154,13 @@ describe("background commands", () => {
         request.userTexts().join("\n"),
         "the dead process's late result is not reported",
       ).not.toContain("deployed");
+      expect(
+        request.userTexts().join("\n"),
+        "the report does not claim the command was stopped: it had finished",
+      ).not.toMatch(/which stopped it/);
+      expect(request.userTexts().join("\n"), "it admits the command may have finished").toContain(
+        "may have finished",
+      );
       request.text("I will check whether the deploy happened");
       finished.resolve();
     });
@@ -243,8 +250,8 @@ describe("background commands", () => {
     let stops: string[] = [];
     let id = 0;
     agent.provider
-      .step("starts the build", (request) => {
-        started = request.call([background("make")]);
+      .step("starts the build and a server", (request) => {
+        started = request.call([background("make"), background("serve")]);
       })
       .step("acknowledges", (request) => {
         id = commandId(request, started[0]);
@@ -267,10 +274,15 @@ describe("background commands", () => {
     const { runtime } = await agent.open();
 
     await (await runtime.submit("build it", { requestId: "m1" })).settled();
-    (await agent.workspace.nextCall()).resolve(text("built"));
+    const calls = [await agent.workspace.nextCall(), await agent.workspace.nextCall()];
+    const build = calls.find(({ request }) => request.arguments["command"] === "make");
+    const serve = calls.find(({ request }) => request.arguments["command"] === "serve");
+    build?.resolve(text("built"));
     await finished.promise;
     await runtime.idle();
 
+    expect(serve?.signal.aborted, "neither stop touched the command still running").toBe(false);
+    expect(agent.workspace.calls, "nothing was started again").toHaveLength(2);
     agent.provider.assertComplete();
   });
 

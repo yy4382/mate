@@ -57,7 +57,7 @@ export type WithdrawResult = "withdrawn" | "already_placed" | "settled" | "not_f
 export type EventWatch = {
   /** Stop delivering events. */
   stop(): Promise<void>;
-  /** Resolves once no more events will come: after `stop()`, or when the runtime closes. */
+  /** Resolves once no more events will come: after `stop()`, when the runtime closes, or when its storage fails. */
   readonly ended: Promise<void>;
 };
 
@@ -261,7 +261,7 @@ export class AgentRuntime {
    * Watch the primary conversation's agent events, or with `assistant` that assistant's: streamed text, tool calls and
    * their output, inputs, usage. The first batch is a snapshot of the conversation as it is; a listener that falls far
    * behind gets a fresh snapshot instead of the batches it missed. Watching writes nothing. The watch ends when it is
-   * stopped or the runtime closes.
+   * stopped, the runtime closes, or the runtime dies from a storage failure.
    */
   async watchEvents(
     listener: (events: readonly AgentEvent[]) => void | Promise<void>,
@@ -283,11 +283,13 @@ export class AgentRuntime {
       throw error;
     }
     stream.start(async (events) => listener(events));
+    // A dead runtime's stream never closes by itself, so a storage failure ends the watch here.
+    const ended = Promise.race([stream.closed, this.#lifetime.failed]).then(() => undefined);
     return {
       stop: async () => {
-        await stream.stop();
+        await Promise.race([stream.stop(), ended]);
       },
-      ended: stream.closed.then(() => undefined),
+      ended,
     };
   }
 

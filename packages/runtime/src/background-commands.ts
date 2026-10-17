@@ -66,8 +66,8 @@ export function backgroundCommands(
         report(
           command.id,
           `[background command ${command.id} interrupted] ${command.input.command}\n` +
-            "The Agent was paused or restarted while this command ran, which stopped it. It was not rerun; how far it " +
-            "got is unknown.",
+            "The Agent was paused or restarted before this command's result was recorded. The command may have been " +
+            "stopped midway or may have finished unseen. It was not rerun; how far it got is unknown.",
           runtime,
           context,
         ),
