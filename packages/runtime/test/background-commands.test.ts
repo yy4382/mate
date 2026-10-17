@@ -278,6 +278,7 @@ describe("background commands", () => {
     const agent = await testAgent();
     const assistantDone = Promise.withResolvers<void>();
     const primaryRead = Promise.withResolvers<void>();
+    const primaryDone = Promise.withResolvers<void>();
     let started: string[] = [];
     let stops: string[] = [];
     let id = 0;
@@ -300,6 +301,10 @@ describe("background commands", () => {
         );
         request.text("noted");
         primaryRead.resolve();
+      })
+      .step("primary reads the assistant's answer to the report", (request) => {
+        request.text("good");
+        primaryDone.resolve();
       });
     agent.provider
       .lane("builder", openedWith("build it"))
@@ -323,6 +328,7 @@ describe("background commands", () => {
     expect(build.signal.aborted, "the assistant's command still runs").toBe(false);
     build.resolve(text("built"));
     await assistantDone.promise;
+    await primaryDone.promise;
     await runtime.idle();
 
     const primary = agent.provider.requests.filter((request) => request.lane === "default");
@@ -333,6 +339,121 @@ describe("background commands", () => {
       "the primary conversation never sees the report",
     ).toEqual([]);
     expect(await runtime.withdraw(`command:${id}`), "nor is it admitted there").toBe("not_found");
+    agent.provider.assertComplete();
+  });
+  it("reports an assistant's answer to its background command's result to the primary conversation once", async () => {
+    const agent = await testAgent();
+    const finished = Promise.withResolvers<void>();
+    let started: string[] = [];
+    let id = 0;
+    agent.provider
+      .step("primary spawns", (request) => {
+        request.call([
+          {
+            name: "assistant",
+            arguments: { action: "spawn", name: "builder", message: "build it" },
+          },
+        ]);
+      })
+      .step("primary acknowledges", (request) => request.text("asked the builder"))
+      .step("primary reads that the build started", (request) => {
+        expect(request.userTexts()).toContain(
+          `[assistant builder answered] build started as command ${id}`,
+        );
+        request.text("waiting");
+      })
+      .step("primary reads the assistant's answer to the result", (request) => {
+        const answers = request
+          .userTexts()
+          .filter((value) => value === "[assistant builder answered] built 3 targets");
+        expect(answers, "the answer to the command's result is reported once").toHaveLength(1);
+        request.text("the build is done");
+        finished.resolve();
+      });
+    agent.provider
+      .lane("builder", openedWith("build it"))
+      .step("assistant starts the build", (request) => {
+        started = request.call([background("make")]);
+      })
+      .step("assistant answers", (request) => {
+        id = commandId(request, started[0]);
+        request.text(`build started as command ${id}`);
+      })
+      .step("assistant answers the result", (request) => {
+        expect(reports(request, id), "the assistant gets the report once").toBe(1);
+        request.text("built 3 targets");
+      });
+    const { runtime } = await agent.open();
+
+    await runtime.submit("get it built", { requestId: "m1" });
+    const build = await agent.workspace.nextCall();
+    await agent.provider.received(5);
+    build.resolve(text("built 3 targets"));
+    await finished.promise;
+    await runtime.idle();
+
+    agent.provider.assertComplete();
+  });
+  it("reports an assistant's answer to its background command's result once when the process dies while the assistant reads the result", async () => {
+    const agent = await testAgent();
+    const first = await agent.open();
+    const primaryWaits = Promise.withResolvers<void>();
+    let started: string[] = [];
+    let id = 0;
+    agent.provider
+      .step("primary spawns", (request) => {
+        request.call([
+          {
+            name: "assistant",
+            arguments: { action: "spawn", name: "builder", message: "build it" },
+          },
+        ]);
+      })
+      .step("primary acknowledges", (request) => request.text("asked the builder"))
+      .step("primary reads that the build started", (request) => {
+        request.text("waiting");
+        primaryWaits.resolve();
+      });
+    const builder = agent.provider.lane("builder", openedWith("build it"));
+    builder
+      .step("assistant starts the build", (request) => {
+        started = request.call([background("make")]);
+      })
+      .step("assistant answers", (request) => {
+        id = commandId(request, started[0]);
+        request.text(`build started as command ${id}`);
+      })
+      .step("assistant reads the result as the process dies", (request) => {
+        first.database().freeze();
+        void request.hang();
+      });
+    await first.runtime.submit("get it built", { requestId: "m1" });
+    const build = await agent.workspace.nextCall();
+    await primaryWaits.promise;
+    await first.runtime.idle();
+    build.resolve(text("built 3 targets"));
+    await builder.received(3);
+    // A dead process drops its open requests.
+    await first.runtime.close().catch(() => undefined);
+
+    const finished = Promise.withResolvers<void>();
+    builder.step("assistant answers the result after the restart", (request) => {
+      expect(reports(request, id), "the assistant gets the report once").toBe(1);
+      request.text("built 3 targets");
+    });
+    agent.provider.step("primary reads the assistant's answer to the result", (request) => {
+      const answers = request
+        .userTexts()
+        .filter((value) => value === "[assistant builder answered] built 3 targets");
+      expect(answers, "the answer is neither lost nor repeated").toHaveLength(1);
+      request.text("the build is done");
+      finished.resolve();
+    });
+    const second = await agent.open();
+    await finished.promise;
+    await second.runtime.idle();
+
+    expect(agent.workspace.calls, "the command ran once").toHaveLength(1);
     agent.provider.assertComplete();
   });
 });

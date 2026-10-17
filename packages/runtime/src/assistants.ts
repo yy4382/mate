@@ -11,6 +11,7 @@ import {
   type ConversationId,
   type EntryId,
   type Extension,
+  type Tx,
 } from "@earendil-works/pi-durable";
 
 type Assistant = {
@@ -29,14 +30,19 @@ export const AssistantsDoc = defineDoc<{ assistants: Record<string, Assistant> }
   initial: () => ({ assistants: {} }),
 });
 
-/** In an assistant's own conversation: its name, so its prompt can say who it is. */
-const AssistantIdentityDoc = defineDoc<{ name: string }>({
+/**
+ * In an assistant's own conversation: its name, so its prompt can say who it is, and the primary conversation its
+ * answers are reported to. `null` in the primary conversation.
+ */
+const AssistantIdentityDoc = defineDoc<{
+  assistant: { name: string; primary: ConversationId } | null;
+}>({
   kind: "mate.assistant-identity",
   version: 1,
   scope: "conversation",
   history: "latest",
   fork: "initial",
-  initial: () => ({ name: "" }),
+  initial: () => ({ assistant: null }),
 });
 
 /**
@@ -58,41 +64,50 @@ const Anchor = defineTask<null, { phase: "done" }, null>({
     runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context),
 });
 
-type ReporterInput = {
-  name: string;
+type Delivery = {
+  /** The conversation the input is for: the primary conversation or one of its assistants. */
   conversationId: ConversationId;
-  message: string;
-  followUp: boolean;
+  content: string;
+  whenBusy: "steer" | "followUp";
+  /** Defaults to `assistant:<task ID>`. */
+  requestId?: string;
 };
-type ReporterState = { phase: "deliver" } | { phase: "report"; report?: string };
+/** A delivery as its task stores it: with the target assistant's name, or `null` for the primary conversation. */
+type DelivererInput = Delivery & { assistant: string | null };
+type DelivererState = { phase: "deliver" } | { phase: "report"; report?: string };
 
 /**
- * Delivers one message to an assistant, waits for its answer, and reports the answer to the primary conversation as a
- * follow-up input. Each step is checkpointed and each submission carries a request ID, so after a restart the
- * assistant gets the message once and the Agent gets the report once.
+ * Delivers one input to a conversation of this Agent. When that conversation is an assistant, it waits for the
+ * answer and reports it to the primary conversation as a follow-up input. It runs in the primary conversation. Each
+ * step is checkpointed and each submission carries a request ID, so after a restart the conversation gets the input
+ * once and the primary conversation gets the report once.
  */
-const Reporter = defineTask<ReporterInput, ReporterState, null>({
-  name: "mate.assistant-reporter",
+const Deliverer = defineTask<DelivererInput, DelivererState, null>({
+  name: "mate.input-delivery",
   version: 1,
   initial: () => ({ phase: "deliver" }),
   phases: {
-    deliver: async (reporter, runtime, context) => {
-      const { name, conversationId, message, followUp } = reporter.input;
-      const assistant = await runtime.conversation(conversationId, context);
-      if (assistant === undefined)
-        throw new Error(`assistant conversation ${conversationId} is missing`);
-      const submission = await assistant.submit(
+    deliver: async (delivery, runtime, context) => {
+      const { conversationId, content, whenBusy, requestId, assistant: name } = delivery.input;
+      const target = await runtime.conversation(conversationId, context);
+      if (target === undefined) throw new Error(`conversation ${conversationId} is missing`);
+      const submission = await target.submit(
         {
           type: "input",
-          content: message,
-          whenBusy: followUp ? "followUp" : "steer",
-          requestId: `assistant:${reporter.id}`,
+          content,
+          whenBusy,
+          requestId: requestId ?? `assistant:${delivery.id}`,
         },
         context,
       );
+      if (name === null)
+        return runtime.commit(
+          () => ({ status: "terminal", outcome: { status: "completed", result: null } }),
+          context,
+        );
       const settled = await submission.wait(context);
       await runtime.commit(async (tx) => {
-        type Running = { readonly status: "running"; readonly checkpoint: ReporterState };
+        type Running = { readonly status: "running"; readonly checkpoint: DelivererState };
         const idle = (): Running => ({ status: "running", checkpoint: { phase: "report" } });
         const withReport = (report: string): Running => ({
           status: "running",
@@ -111,8 +126,8 @@ const Reporter = defineTask<ReporterInput, ReporterState, null>({
         return withReport(`[assistant ${name} answered] ${textOf(answer)}`);
       }, context);
     },
-    report: async (reporter, runtime, context) => {
-      const { report } = reporter.state.checkpoint;
+    report: async (delivery, runtime, context) => {
+      const { report } = delivery.state.checkpoint;
       if (report !== undefined) {
         const primary = await runtime.conversation(runtime.conversationId, context);
         if (primary === undefined) throw new Error("primary conversation is missing");
@@ -121,7 +136,7 @@ const Reporter = defineTask<ReporterInput, ReporterState, null>({
             type: "input",
             content: report,
             whenBusy: "followUp",
-            requestId: `assistant-report:${reporter.id}`,
+            requestId: `assistant-report:${delivery.id}`,
           },
           context,
         );
@@ -132,9 +147,26 @@ const Reporter = defineTask<ReporterInput, ReporterState, null>({
       );
     },
   },
-  abort: (_reporter, runtime, context) =>
+  abort: (_delivery, runtime, context) =>
     runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context),
 });
+
+/**
+ * Deliver `delivery` to its conversation, in the commit of `tx`. This is the only way an input enters an assistant's
+ * conversation, so every answer an assistant gives is reported to the primary conversation, whatever the input.
+ */
+export async function deliverInput(tx: Tx, delivery: Delivery): Promise<void> {
+  const { assistant } = await tx.doc(AssistantIdentityDoc, delivery.conversationId);
+  await tx.createTask(
+    Deliverer,
+    { ...delivery, assistant: assistant?.name ?? null },
+    {
+      ownership: { kind: "conversation" },
+      conversationId: assistant?.primary ?? delivery.conversationId,
+      background: true,
+    },
+  );
+}
 
 function textOf(message: unknown): string {
   if (
@@ -224,16 +256,19 @@ export function assistants(primaryOnly: () => readonly Extension[]) {
             ownership: { kind: "task", taskId: anchor },
           });
           await configure(tx, child.id, { extensions: { remove: [...primaryOnly()] } });
-          (await tx.doc(AssistantIdentityDoc, child.id)).name = name;
+          (await tx.doc(AssistantIdentityDoc, child.id)).assistant = {
+            name,
+            primary: api.conversationId,
+          };
           current.assistants[name] = { conversationId: child.id, reported: [] };
         }
         const conversationId = current.assistants[name]?.conversationId;
         if (conversationId === undefined) return `No assistant named ${name}.`;
-        await tx.createTask(
-          Reporter,
-          { name, conversationId, message, followUp: action === "send" && followUp === true },
-          background,
-        );
+        await deliverInput(tx, {
+          conversationId,
+          content: message,
+          whenBusy: action === "send" && followUp === true ? "followUp" : "steer",
+        });
         return action === "spawn" ? `Started ${name}.` : `Sent to ${name}.`;
       }, context);
       return reply(result);
@@ -242,15 +277,15 @@ export function assistants(primaryOnly: () => readonly Extension[]) {
 
   const identity = section("assistant", async (input, context) => {
     const name = (await input.read.snapshot(AssistantIdentityDoc, input.conversationId, context))
-      ?.name;
-    return name === undefined || name === ""
+      ?.assistant?.name;
+    return name === undefined
       ? undefined
       : `You are the work assistant "${name}" of this Agent. Work on what the Agent asks of you. Your final answer is ` +
           "reported back to the Agent; you have no chat tools and speak to no one else.";
   });
 
   return {
-    primary: defineExtension({ name: "assistants", tools: [tool], tasks: [Anchor, Reporter] }),
+    primary: defineExtension({ name: "assistants", tools: [tool], tasks: [Anchor, Deliverer] }),
     /** Installed for every conversation: tells an assistant who it is, and says nothing in the primary conversation. */
     identity: defineExtension({ name: "assistant-identity", sections: [identity] }),
   };

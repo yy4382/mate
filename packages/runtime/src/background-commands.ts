@@ -9,13 +9,13 @@ import {
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
 import type { BashArguments } from "@mate/node-protocol";
+import { deliverInput } from "./assistants.ts";
 import type { WorkspacePort, WorkspaceToolResult } from "./workspace-tools.ts";
 
 type CommandState =
   | { phase: "start" }
   /** The command was handed to the node. Finding the task here means its process stopped before the command ended. */
-  | { phase: "interrupted" }
-  | { phase: "report"; report: string };
+  | { phase: "interrupted" };
 
 type CommandRuntime = TaskRuntime<BashArguments, CommandState, null, object>;
 
@@ -27,8 +27,9 @@ const reply = (text: string, isError = false) => ({
 /**
  * Background commands: `bash` calls with `background: true`. Each runs in a background task of the conversation that
  * started it, so it neither keeps that conversation busy nor ends with its run, and its ID is the command's ID. When
- * the command ends, the task reports its result to that conversation as an input with request ID `command:<ID>`, so a
- * restart never reports it twice. A command interrupted by a close or crash is reported interrupted, never rerun.
+ * the command ends, the task ends in the same commit that hands its result to `deliverInput` for that conversation,
+ * with request ID `command:<ID>`, so a restart never reports it twice and an assistant's answer to it reaches the
+ * primary conversation. A command interrupted by a close or crash is reported interrupted, never rerun.
  */
 export function backgroundCommands(
   node: WorkspacePort,
@@ -51,47 +52,28 @@ export function backgroundCommands(
           () => undefined,
           signal,
         );
-        const report = `[background command ${command.id} ${result.isError ? "failed" : "finished"}] ${command.input.command}\n${textOf(result)}`;
+        const outcome = result.isError ? "failed" : "finished";
         // Durable refuses this commit after bash_stop or a close, so a stopped command never reports from here: its
         // abort handler ends it, or the reopened runtime finds it interrupted.
-        await runtime.commit(
-          () => ({ status: "running", checkpoint: { phase: "report", report } }),
+        await report(
+          command.id,
+          `[background command ${command.id} ${outcome}] ${command.input.command}\n${textOf(result)}`,
+          runtime,
           context,
         );
       },
-      interrupted: (command, runtime, context) => {
-        const report =
+      interrupted: (command, runtime, context) =>
+        report(
+          command.id,
           `[background command ${command.id} interrupted] ${command.input.command}\n` +
-          "The Agent was paused or restarted while this command ran, which stopped it. It was not rerun; how far it " +
-          "got is unknown.";
-        return runtime.commit(
-          () => ({ status: "running", checkpoint: { phase: "report", report } }),
+            "The Agent was paused or restarted while this command ran, which stopped it. It was not rerun; how far it " +
+            "got is unknown.",
+          runtime,
           context,
-        );
-      },
-      report: async (command, runtime, context) => {
-        await deliver(command.id, command.state.checkpoint.report, runtime, context);
-        await runtime.commit(
-          () => ({ status: "terminal", outcome: { status: "completed", result: null } }),
-          context,
-        );
-      },
+        ),
     },
-    abort: async (command, runtime, context) => {
-      const { checkpoint } = command.state;
-      // A command that ended before the stop arrived keeps its result, which is still owed to the conversation.
-      if (checkpoint.phase === "report") {
-        await deliver(command.id, checkpoint.report, runtime, context);
-        return runtime.commit(
-          () => ({ status: "terminal", outcome: { status: "completed", result: null } }),
-          context,
-        );
-      }
-      return runtime.commit(
-        () => ({ status: "terminal", outcome: { status: "aborted" } }),
-        context,
-      );
-    },
+    abort: (_command, runtime, context) =>
+      runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context),
   });
 
   /** Start `call` as a background command of the calling conversation and say how its result will arrive. */
@@ -140,19 +122,22 @@ export function backgroundCommands(
   return { start, stop, task: BackgroundCommand };
 }
 
-async function deliver(
+/** End the command and hand its report to its conversation, in one commit. */
+function report(
   id: TaskId,
-  report: string,
-  runtime: Pick<CommandRuntime, "conversationId" | "conversation">,
+  content: string,
+  runtime: CommandRuntime,
   context: Context,
 ): Promise<void> {
-  const conversation = await runtime.conversation(runtime.conversationId, context);
-  if (conversation === undefined)
-    throw new Error(`conversation ${runtime.conversationId} is missing`);
-  await conversation.submit(
-    { type: "input", content: report, whenBusy: "steer", requestId: `command:${id}` },
-    context,
-  );
+  return runtime.commit(async (tx) => {
+    await deliverInput(tx, {
+      conversationId: runtime.conversationId,
+      content,
+      whenBusy: "steer",
+      requestId: `command:${id}`,
+    });
+    return { status: "terminal", outcome: { status: "completed", result: null } };
+  }, context);
 }
 
 function textOf(result: WorkspaceToolResult): string {
