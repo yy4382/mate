@@ -1,0 +1,75 @@
+@layer theme, base, legacy, components, utilities;
+@import "tailwindcss";
+@import "./style.css" layer(legacy);
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@theme {
+  --font-sans: "Geist Variable", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "Geist Mono Variable", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", monospace;
+
+  --color-background: #ffffff;
+  --color-subtle: #fafafa;
+  --color-foreground: #171717;
+  --color-muted: #666666;
+  --color-border: #eaeaea;
+  --color-border-strong: #d4d4d4;
+  --color-accent: #0070f3;
+  --color-accent-soft: #e8f2ff;
+  --color-success: #18794e;
+  --color-success-soft: #e6f4ec;
+  --color-warning: #b45309;
+  --color-warning-soft: #fdf1dc;
+  --color-danger: #d93036;
+  --color-danger-soft: #fdecec;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-background: #0a0a0a;
+    --color-subtle: #111111;
+    --color-foreground: #ededed;
+    --color-muted: #a1a1a1;
+    --color-border: #262626;
+    --color-border-strong: #3a3a3a;
+    --color-accent: #3b9eff;
+    --color-accent-soft: #0b2a4f;
+    --color-success: #3dd68c;
+    --color-success-soft: #0f2e20;
+    --color-warning: #f5a524;
+    --color-warning-soft: #3a2a0c;
+    --color-danger: #ff6166;
+    --color-danger-soft: #3a1517;
+  }
+}
+
+@layer base {
+  :root {
+    color-scheme: light dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  #root {
+    isolation: isolate;
+  }
+
+  body {
+    @apply bg-background font-sans text-sm text-foreground antialiased;
+  }
+
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-border);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}

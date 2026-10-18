@@ -21,7 +21,7 @@ async function current(): Promise<PushSubscription | null> {
 }
 
 /** Turning notifications on registers the service worker and subscribes this browser with the control plane's key. */
-export function PushToggle() {
+export function usePush() {
   const [state, setState] = useState<PushState>(supported() ? "off" : "unsupported");
   const [problem, setProblem] = useState<string | null>(null);
   useEffect(() => {
@@ -70,20 +70,12 @@ export function PushToggle() {
     }
   };
 
-  if (state === "unsupported") return null;
-  return (
-    <div className="push">
-      <button
-        type="button"
-        className={state === "on" ? "rail-item active" : "rail-item"}
-        disabled={state === "working" || state === "denied"}
-        aria-pressed={state === "on"}
-        title={problem ?? (state === "denied" ? "浏览器已禁止通知" : "")}
-        onClick={() => void (state === "on" ? disable() : enable())}
-      >
-        <span aria-hidden>{state === "on" ? "🔔" : "🔕"}</span>
-        <span>{state === "denied" ? "通知被禁" : state === "on" ? "通知已开" : "开启通知"}</span>
-      </button>
-    </div>
-  );
+  return {
+    supported: state !== "unsupported",
+    /** The menu item's text: the action it would take. */
+    label: state === "denied" ? "浏览器已禁止通知" : state === "on" ? "关闭通知" : "开启通知",
+    disabled: state === "working" || state === "denied",
+    problem,
+    toggle: () => void (state === "on" ? disable() : enable()),
+  };
 }

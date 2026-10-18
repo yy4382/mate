@@ -1,10 +1,11 @@
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 // Pages live at /app/... and /login, so every asset is addressed from the site root, never relative to the page.
 export default defineConfig({
   base: "/",
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   build: { outDir: "dist", emptyOutDir: true },
   server: {
     host: "127.0.0.1",

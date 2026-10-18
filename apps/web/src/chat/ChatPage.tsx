@@ -4,182 +4,9 @@ import { post } from "../shell/api.ts";
 import { Link, chatPath, navigate, useRoute } from "../shell/router.tsx";
 import { ConfirmButton, Dialog, ErrorLine } from "../shell/ui.tsx";
 import { keys } from "./cache.ts";
-import { conversationLabel, ownerOf, useAccounts, useConversations, useUnread } from "./data.ts";
+import { conversationLabel, useAccounts, useConversations } from "./data.ts";
 import { Timeline } from "./Timeline.tsx";
 import type { ConversationView } from "./types.ts";
-
-function ConversationList({ activeId }: { activeId: number | null }) {
-  const accounts = useAccounts().data ?? [];
-  const conversations = useConversations().data ?? [];
-  const unread = useUnread().data;
-  const [creating, setCreating] = useState(false);
-  const row = (conversation: ConversationView) => {
-    const mine =
-      unread?.timelines.filter((t) => t.conversationId === conversation.conversationId) ?? [];
-    const count = mine.reduce((sum, t) => sum + t.unread, 0);
-    const mentioned = mine.some((t) => t.mentioned);
-    return (
-      <li key={conversation.conversationId}>
-        <Link
-          to={chatPath(conversation.conversationId)}
-          className={[
-            "conversation-row",
-            conversation.conversationId === activeId ? "active" : "",
-            conversation.member ? "" : "outsider",
-          ].join(" ")}
-        >
-          <span className="glyph" aria-hidden>
-            {conversation.kind === "dm" ? "@" : conversation.kind === "private" ? "🔒" : "#"}
-          </span>
-          <span className="conversation-name">{conversationLabel(conversation, accounts)}</span>
-          {conversation.archived ? <span className="tag">已归档</span> : null}
-          {count > 0 ? (
-            <span className={mentioned ? "badge mention" : "badge"} aria-label={`${count} 条未读`}>
-              {count}
-            </span>
-          ) : null}
-        </Link>
-      </li>
-    );
-  };
-  const channels = conversations.filter((c) => c.kind !== "dm");
-  const dms = conversations.filter((c) => c.kind === "dm");
-  return (
-    <nav className="sidebar" aria-label="会话">
-      <div className="sidebar-heading">
-        <h1>聊天</h1>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="新建会话"
-          onClick={() => setCreating(true)}
-        >
-          +
-        </button>
-      </div>
-      <form
-        className="search-box"
-        role="search"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const query = new FormData(event.currentTarget).get("q");
-          if (typeof query === "string" && query.trim() !== "")
-            navigate(`/app/search?q=${encodeURIComponent(query.trim())}`);
-        }}
-      >
-        <input name="q" type="search" aria-label="搜索消息" placeholder="搜索消息" />
-      </form>
-      <div className="conversation-list">
-        <h2>频道</h2>
-        <ul>{channels.map(row)}</ul>
-        <h2>私信</h2>
-        <ul>{dms.map(row)}</ul>
-      </div>
-      {creating ? <NewConversation onClose={() => setCreating(false)} /> : null}
-    </nav>
-  );
-}
-
-function NewConversation({ onClose }: { onClose: () => void }) {
-  const qc = useQueryClient();
-  const accounts = useAccounts().data ?? [];
-  const owner = ownerOf(accounts);
-  const [mode, setMode] = useState<"channel" | "dm">("channel");
-  const [name, setName] = useState("");
-  const [visibility, setVisibility] = useState<"public" | "private">("public");
-  const [other, setOther] = useState("");
-  const [error, setError] = useState<unknown>(null);
-  const open = async () => {
-    try {
-      const conversation =
-        mode === "channel"
-          ? await post<ConversationView>("/api/chat/channels", {
-              requestId: crypto.randomUUID(),
-              name,
-              visibility,
-            })
-          : await post<ConversationView>("/api/chat/dms", {
-              requestId: crypto.randomUUID(),
-              other: Number(other),
-            });
-      qc.setQueryData<ConversationView[]>(keys.conversations, (old = []) =>
-        old.some((c) => c.conversationId === conversation.conversationId)
-          ? old
-          : [...old, conversation],
-      );
-      onClose();
-      navigate(chatPath(conversation.conversationId));
-    } catch (cause) {
-      setError(cause);
-    }
-  };
-  return (
-    <Dialog title="新建会话" onClose={onClose}>
-      <form
-        className="form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void open();
-        }}
-      >
-        <div className="segmented" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "channel"}
-            onClick={() => setMode("channel")}
-          >
-            频道
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === "dm"}
-            onClick={() => setMode("dm")}
-          >
-            私信
-          </button>
-        </div>
-        {mode === "channel" ? (
-          <>
-            <label>
-              频道名称
-              <input value={name} onChange={(event) => setName(event.target.value)} required />
-            </label>
-            <label>
-              可见性
-              <select
-                value={visibility}
-                onChange={(event) => setVisibility(event.target.value as "public" | "private")}
-              >
-                <option value="public">公开</option>
-                <option value="private">私有</option>
-              </select>
-            </label>
-          </>
-        ) : (
-          <label>
-            对方
-            <select value={other} onChange={(event) => setOther(event.target.value)} required>
-              <option value="">选择…</option>
-              {accounts
-                .filter((a) => a.active && a.accountId !== owner?.accountId)
-                .map((a) => (
-                  <option key={a.accountId} value={a.accountId}>
-                    {a.displayName}（@{a.handle}）
-                  </option>
-                ))}
-            </select>
-          </label>
-        )}
-        <ErrorLine error={error} />
-        <button type="submit" className="button primary">
-          {mode === "channel" ? "创建频道" : "打开私信"}
-        </button>
-      </form>
-    </Dialog>
-  );
-}
 
 function Invite({
   conversation,
@@ -247,7 +74,11 @@ function Header({ conversation }: { conversation: ConversationView }) {
   const channel = conversation.kind !== "dm";
   return (
     <header className="conversation-header">
-      <Link to="/app" className="back" aria-label="返回会话列表">
+      <Link
+        to="/app"
+        className="text-3xl leading-none no-underline md:hidden"
+        aria-label="返回会话列表"
+      >
         ‹
       </Link>
       <div className="title">
@@ -363,11 +194,9 @@ function OpenDirectMessage({ handle }: { handle: string }) {
 export function ChatPage() {
   const route = useRoute();
   if (route.page !== "chat") return null;
-  const hasConversation = route.conversation !== null;
   return (
-    <div className={hasConversation ? "chat chat-open" : "chat"}>
-      <ConversationList activeId={route.conversation} />
-      <main className="chat-main">
+    <div className="h-full">
+      <main className="chat-main h-full">
         {route.dm !== null ? (
           <OpenDirectMessage handle={route.dm} />
         ) : route.conversation === null ? (

@@ -90,6 +90,7 @@ export function Link(props: {
   children: ReactNode;
   title?: string;
   "aria-label"?: string;
+  "aria-current"?: "page" | undefined;
 }) {
   const { to, children, ...rest } = props;
   const click = (event: MouseEvent<HTMLAnchorElement>) => {
