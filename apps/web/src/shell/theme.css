@@ -10,6 +10,7 @@
   --color-subtle: #fafafa;
   --color-foreground: #171717;
   --color-muted: #666666;
+  --color-backdrop: rgb(0 0 0 / 0.4);
   --color-border: #eaeaea;
   --color-border-strong: #d4d4d4;
   --color-accent: #0070f3;
@@ -28,6 +29,7 @@
     --color-subtle: #111111;
     --color-foreground: #ededed;
     --color-muted: #a1a1a1;
+    --color-backdrop: rgb(0 0 0 / 0.65);
     --color-border: #262626;
     --color-border-strong: #3a3a3a;
     --color-accent: #3b9eff;

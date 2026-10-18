@@ -158,24 +158,26 @@ function Header({
                 >
                   <UserPlus aria-hidden />
                 </Button>
-                <Menu label="更多">
-                  <MenuItem icon={<LogOut aria-hidden />} onClick={() => setConfirming("leave")}>
-                    离开频道
-                  </MenuItem>
-                  <MenuItem
-                    icon={<Archive aria-hidden />}
-                    tone="danger"
-                    onClick={() => setConfirming("archive")}
-                  >
-                    归档频道
-                  </MenuItem>
-                </Menu>
               </>
             ) : (
-              <Button variant="primary" size="sm" onClick={() => void act("join")}>
+              <Button variant="secondary" size="sm" onClick={() => void act("join")}>
                 加入
               </Button>
             )}
+            <Menu label="更多">
+              {conversation.member ? (
+                <MenuItem icon={<LogOut aria-hidden />} onClick={() => setConfirming("leave")}>
+                  离开频道
+                </MenuItem>
+              ) : null}
+              <MenuItem
+                icon={<Archive aria-hidden />}
+                tone="danger"
+                onClick={() => setConfirming("archive")}
+              >
+                归档频道
+              </MenuItem>
+            </Menu>
           </div>
         ) : null}
       </header>

@@ -105,22 +105,42 @@ export function settingsBody(value: {
   };
 }
 
-function CreateAgent({ onDone }: { onDone: () => void }) {
+/** What the create form holds. It lives in `Agents`, so closing the dialog keeps it; only a successful create clears it. */
+type Draft = {
+  displayName: string;
+  handle: string;
+  nodeId: string;
+  settings: { model: string; thinking: string; instructions: string };
+  /** The agentId of a create that stopped part way; sending it back finishes that create. */
+  unfinished: string | null;
+};
+
+const emptyDraft: Draft = {
+  displayName: "",
+  handle: "",
+  nodeId: "",
+  settings: { model: "", thinking: "", instructions: "" },
+  unfinished: null,
+};
+
+function CreateAgent(props: {
+  draft: Draft;
+  onDraft: (update: (draft: Draft) => Draft) => void;
+  onDone: () => void;
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const nodes = useNodes().data ?? [];
   const models = useModels().data ?? [];
-  const [displayName, setDisplayName] = useState("");
-  const [handle, setHandle] = useState("");
-  const [nodeId, setNodeId] = useState("");
-  const [settings, setSettings] = useState({ model: "", thinking: "", instructions: "" });
   const [error, setError] = useState<unknown>(null);
-  const [unfinished, setUnfinished] = useState<string | null>(null);
+  const { draft, onDraft } = props;
+  const { displayName, handle, nodeId, settings, unfinished } = draft;
   const node = nodes.length === 1 ? nodes[0]?.nodeId : nodeId;
   return (
     <Dialog
       title="创建 Agent"
       description="给它起个名字，选好模型，它就会在聊天里上线。"
-      onClose={onDone}
+      onClose={props.onClose}
     >
       <form
         className="grid gap-4"
@@ -137,11 +157,11 @@ function CreateAgent({ onDone }: { onDone: () => void }) {
             });
             await qc.invalidateQueries({ queryKey: ["admin"] });
             await qc.invalidateQueries({ queryKey: ["chat", "accounts"] });
-            onDone();
+            props.onDone();
           } catch (cause) {
             // A create that stopped part way is finished by sending its agentId back.
             if (cause instanceof ApiError && typeof cause.body.agentId === "string")
-              setUnfinished(cause.body.agentId);
+              onDraft((d) => ({ ...d, unfinished: cause.body.agentId as string }));
             setError(cause);
           }
         }}
@@ -149,14 +169,14 @@ function CreateAgent({ onDone }: { onDone: () => void }) {
         <Field label="显示名">
           <Input
             value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
+            onChange={(event) => onDraft((d) => ({ ...d, displayName: event.target.value }))}
             required
           />
         </Field>
         <Field label="Handle">
           <Input
             value={handle}
-            onChange={(event) => setHandle(event.target.value)}
+            onChange={(event) => onDraft((d) => ({ ...d, handle: event.target.value }))}
             pattern="[\p{L}\p{N}][\p{L}\p{N}_.\-]*"
             required
           />
@@ -176,7 +196,11 @@ function CreateAgent({ onDone }: { onDone: () => void }) {
           </div>
         ) : (
           <Field label="Node">
-            <Select value={nodeId} onChange={(event) => setNodeId(event.target.value)} required>
+            <Select
+              value={nodeId}
+              onChange={(event) => onDraft((d) => ({ ...d, nodeId: event.target.value }))}
+              required
+            >
               <option value="">选择…</option>
               {nodes.map((n) => (
                 <option key={n.nodeId} value={n.nodeId}>
@@ -195,7 +219,11 @@ function CreateAgent({ onDone }: { onDone: () => void }) {
             里保存 API key。
           </Notice>
         ) : (
-          <SettingsFields models={models} value={settings} onChange={setSettings} />
+          <SettingsFields
+            models={models}
+            value={settings}
+            onChange={(value) => onDraft((d) => ({ ...d, settings: value }))}
+          />
         )}
         <ErrorLine error={error} />
         <div className="flex justify-end">
@@ -270,6 +298,7 @@ function AgentRow({ agent }: { agent: AgentView }) {
 export function Agents() {
   const agents = useAgents();
   const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState(emptyDraft);
   const create = (
     <Button variant="primary" onClick={() => setCreating(true)}>
       <Plus aria-hidden />
@@ -297,7 +326,17 @@ export function Agents() {
           ))}
         </ul>
       )}
-      {creating ? <CreateAgent onDone={() => setCreating(false)} /> : null}
+      {creating ? (
+        <CreateAgent
+          draft={draft}
+          onDraft={(update) => setDraft(update)}
+          onDone={() => {
+            setDraft(emptyDraft);
+            setCreating(false);
+          }}
+          onClose={() => setCreating(false)}
+        />
+      ) : null}
     </>
   );
 }

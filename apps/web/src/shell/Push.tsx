@@ -57,6 +57,7 @@ export function usePush() {
 
   const disable = async () => {
     setState("working");
+    setProblem(null);
     try {
       const subscription = await current();
       if (subscription !== null) {

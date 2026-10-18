@@ -96,6 +96,7 @@ export function ConversationList() {
       <form
         className="relative"
         role="search"
+        aria-label="搜索消息"
         onSubmit={(event) => {
           event.preventDefault();
           const query = new FormData(event.currentTarget).get("q");

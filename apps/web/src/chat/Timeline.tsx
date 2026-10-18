@@ -14,6 +14,7 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { describe, post } from "../shell/api.ts";
 import { Link, chatPath } from "../shell/router.tsx";
@@ -256,14 +257,16 @@ function MessageRow(props: {
       {...(props.highlighted ? { "data-highlighted": "" } : {})}
     >
       {props.grouped ? (
-        <time className="hidden select-none whitespace-nowrap text-right text-xs leading-6 text-muted group-hover:block">
+        <time className="hidden select-none whitespace-nowrap text-right text-xs leading-6 text-muted group-focus-within:block group-hover:block">
           {clockLabel(entry.at)}
         </time>
       ) : (
         <Avatar name={name} />
       )}
       <div className="min-w-0">
-        {props.grouped ? null : (
+        {props.grouped ? (
+          <span className="sr-only">{name}</span>
+        ) : (
           <div className="flex items-baseline gap-2 leading-6">
             <strong className="text-sm font-semibold">{name}</strong>
             <span className="text-xs text-muted">@{author?.handle ?? "?"}</span>
@@ -357,7 +360,12 @@ function useMarkRead(ref: TimelineRef, newest: number) {
 }
 
 /** Show the message at `seq`: load back to it if it is older than what is loaded. */
-function useJump(ref: TimelineRef, seq: number | null, entries: readonly Entry[] | undefined) {
+function useJump(
+  ref: TimelineRef,
+  seq: number | null,
+  entries: readonly Entry[] | undefined,
+  scroller: RefObject<HTMLElement | null>,
+) {
   const qc = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
   const [target, setTarget] = useState<number | null>(null);
@@ -383,18 +391,24 @@ function useJump(ref: TimelineRef, seq: number | null, entries: readonly Entry[]
   }, [seq, loaded, newest, oldest, jumpKey, qc, ref]);
   useEffect(() => {
     if (target === null) return;
-    document.querySelector(`[data-seq="${target}"]`)?.scrollIntoView({ block: "center" });
-  }, [target, entries]);
+    scroller.current?.querySelector(`[data-seq="${target}"]`)?.scrollIntoView({ block: "center" });
+  }, [target, entries, scroller]);
   return { notice, target };
 }
 
-/** The message a thread replies to, shown above the replies. It lives in the conversation's timeline, so it shows once that is loaded and holds it. */
-function ThreadRoot(props: { conversation: number; thread: number; replies: number }) {
-  const accounts = useAccounts().data ?? [];
-  const entry = useTimeline({ conversation: props.conversation }).data?.entries.find(
-    (e): e is MessageEntry => e.kind === "message" && e.messageId === props.thread,
+/** The message a thread replies to. It lives in the conversation's timeline, so it is there once that is loaded and holds it. */
+function useThreadRoot(ref: TimelineRef, conversation: number): MessageEntry | undefined {
+  const entries = useTimeline({ conversation }).data?.entries;
+  if (!("thread" in ref)) return undefined;
+  return entries?.find(
+    (e): e is MessageEntry => e.kind === "message" && e.messageId === ref.thread,
   );
-  if (entry === undefined) return null;
+}
+
+/** The root message shown above a thread's replies. */
+function ThreadRoot(props: { entry: MessageEntry; replies: number }) {
+  const accounts = useAccounts().data ?? [];
+  const { entry } = props;
   const author = accounts.find((a) => a.accountId === entry.author);
   const name = author?.displayName ?? `#${entry.author}`;
   return (
@@ -429,10 +443,11 @@ function MessageList(props: {
   const accounts = useAccounts().data ?? [];
   const timeline = useTimeline(ref);
   const entries = timeline.data?.entries;
-  const { notice, target } = useJump(ref, props.seq, entries);
+  const scroller = useRef<HTMLDivElement>(null);
+  const { notice, target } = useJump(ref, props.seq, entries, scroller);
+  const root = useThreadRoot(ref, props.conversation);
   useMarkRead(ref, entries?.at(-1)?.seq ?? 0);
   const [older, setOlder] = useState<"idle" | "loading" | "failed">("idle");
-  const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const before = useRef<number | null>(null);
 
@@ -490,14 +505,10 @@ function MessageList(props: {
           </Button>
         </div>
       ) : null}
-      {"thread" in ref ? (
-        <ThreadRoot
-          conversation={props.conversation}
-          thread={ref.thread}
-          replies={entries.filter((e) => e.kind === "message").length}
-        />
-      ) : null}
-      {entries.length === 0 && !("thread" in ref) ? (
+      {root === undefined ? null : (
+        <ThreadRoot entry={root} replies={entries.filter((e) => e.kind === "message").length} />
+      )}
+      {entries.length === 0 && root === undefined ? (
         <div className="px-4 md:px-6">
           <EmptyState icon={<MessageSquare />} title="还没有消息">
             在下面说点什么，开始这段对话。

@@ -210,7 +210,7 @@ export function StatusDot({ tone = "neutral", label }: { tone?: Tone; label?: st
 export type AvatarSize = "xs" | "sm" | "md" | "lg";
 
 const avatarSizes: Record<AvatarSize, string> = {
-  xs: "size-5 text-[10px]",
+  xs: "size-5 text-xs",
   sm: "size-6 text-xs",
   md: "size-8 text-sm",
   lg: "size-10 text-base",
@@ -233,7 +233,7 @@ export function Avatar({ name, size = "md" }: { name: string; size?: AvatarSize 
 
 // Dialogs
 
-const backdropClass = "fixed inset-0 z-40 bg-black/40";
+const backdropClass = "fixed inset-0 z-40 bg-backdrop";
 const dialogPopupClass =
   "fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-xl border border-border bg-background p-6 shadow-lg outline-none";
 
@@ -371,7 +371,6 @@ export function MenuItem({
   tone?: keyof typeof menuItemTones;
   children: ReactNode;
   disabled?: boolean;
-  title?: string;
   onClick?: () => void;
 }) {
   return (

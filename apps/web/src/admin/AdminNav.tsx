@@ -26,7 +26,7 @@ export function AdminNav() {
           to={`/app/admin/${item.section}`}
           {...(item.section === current ? { "aria-current": "page" as const } : {})}
           className={cx(
-            "-mb-px inline-flex h-11 shrink-0 items-center gap-2 border-b-2 border-transparent px-3 text-sm text-muted no-underline hover:text-foreground aria-[current=page]:border-foreground aria-[current=page]:text-foreground",
+            "-mb-px inline-flex h-9 shrink-0 items-center gap-2 border-b-2 border-transparent px-3 text-sm text-muted no-underline hover:text-foreground aria-[current=page]:border-foreground aria-[current=page]:text-foreground",
             "md:mb-0 md:h-9 md:border-0 md:px-2 md:text-foreground md:hover:bg-border/50 md:aria-[current=page]:bg-border/60 md:aria-[current=page]:font-medium",
             "[&_svg]:size-4 [&_svg]:shrink-0",
           )}

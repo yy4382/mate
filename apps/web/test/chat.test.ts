@@ -229,11 +229,16 @@ describe("the chat page", () => {
     await site.owner.say(general, "first answer", root.messageId);
     const second = await site.owner.say(general, "second answer", root.messageId);
     const { page } = await openApp(site, `/app/c/${general}/t/${root.messageId}?seq=${second.seq}`);
-    await page
-      .getByRole("complementary", { name: "讨论串" })
-      .locator(`[data-seq="${second.seq}"][data-highlighted]`)
-      .waitFor();
+    const pane = page.getByRole("complementary", { name: "讨论串" });
+    const target = pane.locator(`[data-seq="${second.seq}"][data-highlighted]`);
+    await target.waitFor();
     await messages(page, "first answer").waitFor();
+    const inside = await Promise.all([target.boundingBox(), pane.boundingBox()]);
+    const [t, p] = inside;
+    expect(
+      t !== null && p !== null && t.y >= p.y && t.y + t.height <= p.y + p.height,
+      "the highlighted reply is in the thread pane's viewport",
+    ).toBe(true);
   });
 
   it("works at a phone's width: the list, a conversation, sending, and back", async () => {
@@ -313,6 +318,22 @@ describe("conversations", () => {
     expect(await composer(page).count()).toBe(0);
   });
 
+  it("the owner archives a channel they are not a member of", async () => {
+    const site = await startSite();
+    const general = await site.owner.channel("general");
+    const { page } = await openApp(site, `/app/c/${general}`);
+    await page.getByRole("button", { name: "更多" }).click();
+    await page.getByRole("menuitem", { name: "离开频道" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "离开", exact: true }).click();
+    await page.getByText("你还没有加入这个频道").waitFor();
+    await page.getByRole("button", { name: "更多" }).click();
+    expect(await page.getByRole("menuitem", { name: "离开频道" }).count()).toBe(0);
+    await page.getByRole("menuitem", { name: "归档频道" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "归档", exact: true }).click();
+    await page.getByText("这个频道已归档，只能阅读。").waitFor();
+    await page.getByText("已归档", { exact: false }).first().waitFor();
+  });
+
   it("the owner invites an Agent into a channel and opens a direct message with it", async () => {
     const site = await startSite();
     const general = await site.owner.channel("general");
@@ -336,8 +357,8 @@ describe("conversations", () => {
     await site.owner.say(general, "the needle is here");
     await site.owner.say(general, "only hay here");
     const { page } = await openApp(site);
-    await page.getByLabel("搜索消息").fill("needle");
-    await page.getByLabel("搜索消息").press("Enter");
+    await page.getByRole("searchbox", { name: "搜索消息" }).fill("needle");
+    await page.getByRole("searchbox", { name: "搜索消息" }).press("Enter");
     await page.getByText("the needle is here").waitFor();
     expect(await page.getByText("only hay here").count()).toBe(0);
   });

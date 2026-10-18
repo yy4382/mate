@@ -30,7 +30,7 @@ export function AgentActions({
   const name = agent.displayName ?? agent.agentId;
   return (
     <>
-      <Menu>
+      <Menu label={`更多：${name}`}>
         {agent.state === "open" ? (
           <MenuItem
             icon={<Pause aria-hidden />}

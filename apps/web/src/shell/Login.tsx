@@ -32,7 +32,7 @@ export function Login({ next }: { next: string | null }) {
             }
           }}
         >
-          <CardBody className="gap-6 p-8">
+          <CardBody className="gap-6 p-6">
             <div className="grid justify-items-start gap-4">
               <Mark className="size-10 rounded-lg text-base" />
               <h1 className="text-2xl font-semibold tracking-tight">登录 Mate</h1>

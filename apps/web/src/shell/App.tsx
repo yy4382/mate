@@ -94,9 +94,9 @@ function MainNav() {
 function AccountMenu() {
   const push = usePush();
   return (
-    <div className={cx(bar, "col-start-2 row-start-3 flex md:p-2")}>
+    <div className={cx(bar, "col-start-2 row-start-3 flex md:flex-col md:p-2")}>
       <Menu
-        label="账号"
+        label="所有者"
         side="top"
         align="start"
         triggerClassName={cx(navItem, "cursor-pointer data-popup-open:text-foreground")}
@@ -104,14 +104,24 @@ function AccountMenu() {
           <>
             <CircleUser aria-hidden />
             所有者
+            {push.problem === null ? null : (
+              <span
+                aria-hidden
+                className="absolute right-1/4 top-2 size-2 rounded-full bg-danger md:hidden"
+              />
+            )}
           </>
         }
       >
+        {push.problem === null ? null : (
+          <MenuItem tone="danger" disabled>
+            {push.problem}
+          </MenuItem>
+        )}
         {push.supported ? (
           <MenuItem
             icon={push.label === "关闭通知" ? <BellOff aria-hidden /> : <Bell aria-hidden />}
             disabled={push.disabled}
-            {...(push.problem === null ? {} : { title: push.problem })}
             onClick={push.toggle}
           >
             {push.label}
@@ -127,6 +137,11 @@ function AccountMenu() {
           退出
         </MenuItem>
       </Menu>
+      {push.problem === null ? null : (
+        <p role="alert" className="break-words px-2 pt-1 text-xs text-danger max-md:hidden">
+          {push.problem}
+        </p>
+      )}
     </div>
   );
 }

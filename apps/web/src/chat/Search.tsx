@@ -51,6 +51,7 @@ export function SearchPage() {
         <form
           key={query}
           role="search"
+          aria-label="搜索结果页搜索"
           onSubmit={(event) => {
             event.preventDefault();
             const next = String(new FormData(event.currentTarget).get("q") ?? "").trim();
