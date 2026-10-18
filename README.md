@@ -23,5 +23,6 @@ Mate 不替你创建账号，也不提升权限。Agent 自己在命令里写了
 
 - [架构](docs/ARCHITECTURE.md)：模块划分、接口，以及设计为什么这样做。
 - [模块边界测试](docs/MODULE_TESTS.md)：每个模块要验证哪些行为。
+- [界面规范](docs/DESIGN.md)：网页界面的设计变量、间距、布局和交互规则。
 - [部署指南](docs/DEPLOYMENT.md)：怎样装到一台 VPS 上，以及日常运维。
 - [术语表](GLOSSARY.md)：文档和代码里统一使用的词。

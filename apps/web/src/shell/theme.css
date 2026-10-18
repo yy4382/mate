@@ -1,6 +1,4 @@
-@layer theme, base, legacy, components, utilities;
 @import "tailwindcss";
-@import "./style.css" layer(legacy);
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 

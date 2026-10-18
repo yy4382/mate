@@ -1,6 +1,6 @@
 # Mate
 
-- Read `docs/ARCHITECTURE.md` before any design or code change, and `docs/MODULE_TESTS.md` before writing tests.
+- Read `docs/ARCHITECTURE.md` before any design or code change, and `docs/MODULE_TESTS.md` before writing tests, and `docs/DESIGN.md` before changing the web UI.
 - Work through the pstack plugin's `/pstack:poteto-mode`.
 - Name things with the terms in `GLOSSARY.md`; add a term there when you introduce a new concept.
 - Tests drive a module only through its public interface and assert only what that interface exposes. Unit tests are out of scope.

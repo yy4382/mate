@@ -61,14 +61,14 @@ export function Button({
 // Form controls
 
 const controlClass =
-  "h-9 min-h-0 w-full rounded-md border border-border-strong bg-background px-3 py-0 text-sm font-normal text-foreground placeholder:text-muted focus-visible:border-accent focus-visible:outline-offset-0 disabled:opacity-50";
+  "h-9 w-full rounded-md border border-border-strong bg-background px-3 text-sm font-normal text-foreground placeholder:text-muted focus-visible:border-accent focus-visible:outline-offset-0 disabled:opacity-50";
 
 export function Input({ className, ...rest }: ComponentProps<"input">) {
   return <input className={cx(controlClass, className)} {...rest} />;
 }
 
 const bareTextareaClass =
-  "block min-h-0 w-full resize-none rounded-none border-0 bg-transparent px-3 py-2 text-sm leading-6 text-foreground placeholder:text-muted focus-visible:outline-none disabled:opacity-50";
+  "block w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-foreground placeholder:text-muted focus-visible:outline-none disabled:opacity-50";
 
 /** `bare` drops the border and focus styling, for a textarea that sits inside a bordered box that owns them (the composer). */
 export function Textarea({
@@ -498,43 +498,6 @@ export function ErrorLine({ error }: { error: unknown }) {
     <p className="text-sm text-danger" role="alert">
       {describe(error)}
     </p>
-  );
-}
-
-/** A button whose first click asks "sure?" and whose second click acts. Replaced by `ConfirmDialog` as pages migrate. */
-export function ConfirmButton(props: {
-  label: string;
-  confirm?: string;
-  danger?: boolean;
-  disabled?: boolean;
-  onConfirm: () => void;
-}) {
-  const [asking, setAsking] = useState(false);
-  return asking ? (
-    <span className="inline-flex gap-1.5">
-      <Button
-        variant="danger"
-        size="sm"
-        onClick={() => {
-          setAsking(false);
-          props.onConfirm();
-        }}
-      >
-        {props.confirm ?? `确认${props.label}`}
-      </Button>
-      <Button size="sm" onClick={() => setAsking(false)}>
-        取消
-      </Button>
-    </span>
-  ) : (
-    <Button
-      size="sm"
-      className={props.danger ? "text-danger" : undefined}
-      disabled={props.disabled}
-      onClick={() => setAsking(true)}
-    >
-      {props.label}
-    </Button>
   );
 }
 

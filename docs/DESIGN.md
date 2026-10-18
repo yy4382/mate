@@ -11,6 +11,7 @@
 - **图标：lucide-react。** 界面上不出现 emoji。只有图标没有文字的按钮必须带 `aria-label`。
 - **字体：Geist 和 Geist Mono**（`@fontsource-variable`），中文回落到系统字体（PingFang SC、Noto Sans SC、微软雅黑）。
 - **原语集中在 `src/shell/ui.tsx`。** 按钮、输入框、卡片、徽章、对话框、菜单、标签页等都从这里引入。页面里不直接拼按钮或输入框的样式，需要新变体就加到原语里。
+- **类名用 `cx` 拼。** 它经过 tailwind-merge，所以传给原语的 `className` 一定覆盖原语自己的同类样式（颜色、高度、内边距），不需要 `!important`。
 - 下拉选择用原生 `<select>`，套统一样式。手机上弹出系统自带的选择器，比自绘的好用。
 
 ## 2. 设计变量
@@ -56,3 +57,13 @@
 - **反馈就地出现**：保存成功、出错的提示放在触发它的按钮旁或表单底栏，不弹全局通知。
 - **空状态**要说明这里会出现什么、下一步做什么，并给出那个操作的按钮。
 - 焦点环统一 `accent` 色 2px，键盘可以走完所有操作。
+
+## 6. 检查外观
+
+改完界面后截图看一遍，桌面、暗色和手机三种视图都要看：
+
+```sh
+MATE_SCREENS=/tmp/mate-screens pnpm vitest run apps/web/test/screens.test.ts
+```
+
+它起一个带示例数据的控制面，把每个页面截成 PNG 放进那个目录。不设 `MATE_SCREENS` 时这个文件跳过，不影响 `pnpm test`。
