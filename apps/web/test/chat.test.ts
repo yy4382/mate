@@ -3,7 +3,7 @@ import type { Page } from "playwright";
 import { DAY_MS, newPage, openApp, signIn, startSite } from "./support.ts";
 
 const composer = (page: Page) => page.getByLabel("消息", { exact: true });
-const messages = (page: Page, text: string) => page.locator("article.message", { hasText: text });
+const messages = (page: Page, text: string) => page.getByRole("article").filter({ hasText: text });
 const settle = (ms = 300) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Makes the browser deliver every live batch twice, as a reconnect that replays events would. */
@@ -214,7 +214,7 @@ describe("the chat page", () => {
     const general = await site.owner.channel("general");
     for (let n = 1; n <= 120; n += 1) await site.owner.say(general, `numbered ${n}`);
     const { page } = await openApp(site, `/app/c/${general}?seq=7`);
-    await page.locator('[data-seq="7"].highlighted').waitFor();
+    await page.locator('[data-seq="7"][data-highlighted]').waitFor();
     expect(await page.locator('[data-seq="7"]').textContent()).toContain("numbered 7");
 
     await page.goto(`${site.origin}/app/c/${general}?seq=9999`);
@@ -229,7 +229,10 @@ describe("the chat page", () => {
     await site.owner.say(general, "first answer", root.messageId);
     const second = await site.owner.say(general, "second answer", root.messageId);
     const { page } = await openApp(site, `/app/c/${general}/t/${root.messageId}?seq=${second.seq}`);
-    await page.locator(`.thread-panel [data-seq="${second.seq}"].highlighted`).waitFor();
+    await page
+      .getByRole("complementary", { name: "讨论串" })
+      .locator(`[data-seq="${second.seq}"][data-highlighted]`)
+      .waitFor();
     await messages(page, "first answer").waitFor();
   });
 
@@ -297,13 +300,15 @@ describe("conversations", () => {
     const site = await startSite();
     const general = await site.owner.channel("general");
     const { page } = await openApp(site, `/app/c/${general}`);
-    await page.getByRole("button", { name: "离开", exact: true }).click();
-    await page.getByRole("button", { name: "确认离开" }).click();
+    await page.getByRole("button", { name: "更多" }).click();
+    await page.getByRole("menuitem", { name: "离开频道" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "离开", exact: true }).click();
     await page.getByText("你还没有加入这个频道").waitFor();
     await page.getByRole("button", { name: "加入", exact: true }).click();
     await composer(page).waitFor();
-    await page.getByRole("button", { name: "归档", exact: true }).click();
-    await page.getByRole("button", { name: "确认归档" }).click();
+    await page.getByRole("button", { name: "更多" }).click();
+    await page.getByRole("menuitem", { name: "归档频道" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "归档", exact: true }).click();
     await page.getByText("这个频道已归档，只能阅读。").waitFor();
     expect(await composer(page).count()).toBe(0);
   });

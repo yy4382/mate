@@ -1,21 +1,53 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { AtSign, Hash, Lock, Plus } from "lucide-react";
+import { Hash, Lock, Plus, Search } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { post } from "../shell/api.ts";
 import { Link, chatPath, navigate, useRoute } from "../shell/router.tsx";
-import { Badge, Button, Dialog, ErrorLine, Field, Input, Select, Tabs, cx } from "../shell/ui.tsx";
+import {
+  Avatar,
+  Badge,
+  Button,
+  Dialog,
+  ErrorLine,
+  Field,
+  Input,
+  Select,
+  Tabs,
+  cx,
+} from "../shell/ui.tsx";
 import { keys } from "./cache.ts";
-import { conversationLabel, ownerOf, useAccounts, useConversations, useUnread } from "./data.ts";
-import type { ConversationView } from "./types.ts";
+import {
+  accountName,
+  conversationLabel,
+  ownerOf,
+  useAccounts,
+  useConversations,
+  useUnread,
+} from "./data.ts";
+import type { AccountView, ConversationView } from "./types.ts";
 
-const kindIcons: Record<ConversationView["kind"], ReactNode> = {
-  dm: <AtSign aria-hidden />,
-  private: <Lock aria-hidden />,
-  public: <Hash aria-hidden />,
-};
+function KindIcon({
+  conversation,
+  accounts,
+}: {
+  conversation: ConversationView;
+  accounts: readonly AccountView[];
+}) {
+  if (conversation.kind === "dm") {
+    const ownerId = ownerOf(accounts)?.accountId;
+    const otherId = conversation.members.find((id) => id !== ownerId);
+    return <Avatar size="xs" name={accountName(accounts, otherId ?? 0)} />;
+  }
+  return conversation.kind === "private" ? <Lock aria-hidden /> : <Hash aria-hidden />;
+}
 
-function Heading({ children }: { children: string }) {
-  return <h2 className="px-2 pb-1 pt-4 text-xs font-medium text-muted">{children}</h2>;
+function Heading({ children, action }: { children: string; action?: ReactNode }) {
+  return (
+    <div className="mt-2 flex h-8 items-center justify-between pl-2 text-xs font-medium text-muted">
+      <h2>{children}</h2>
+      {action}
+    </div>
+  );
 }
 
 /** The conversations the owner can see, grouped by kind, with search and "new conversation". */
@@ -38,17 +70,17 @@ export function ConversationList() {
           to={chatPath(conversation.conversationId)}
           {...(active ? { "aria-current": "page" as const } : {})}
           className={cx(
-            "flex h-9 items-center gap-2 rounded-md px-2 text-sm text-foreground no-underline hover:bg-border/50 aria-[current=page]:bg-border/60 aria-[current=page]:font-medium [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted",
-            !conversation.member && "opacity-70",
+            "flex h-8 items-center gap-2 rounded-md border border-transparent px-2 text-sm no-underline hover:bg-border/50 aria-[current=page]:border-border aria-[current=page]:bg-background aria-[current=page]:font-medium [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted",
+            conversation.member ? "text-foreground" : "text-muted",
           )}
         >
-          {kindIcons[conversation.kind]}
+          <KindIcon conversation={conversation} accounts={accounts} />
           <span className="min-w-0 flex-1 truncate">
             {conversationLabel(conversation, accounts)}
           </span>
           {conversation.archived ? <Badge>已归档</Badge> : null}
           {count > 0 ? (
-            <Badge tone={mentioned ? "solid" : "accent"} aria-label={`${count} 条未读`}>
+            <Badge tone={mentioned ? "solid" : "inverse"} aria-label={`${count} 条未读`}>
               {count}
             </Badge>
           ) : null}
@@ -61,30 +93,43 @@ export function ConversationList() {
   return (
     <nav aria-label="会话" className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-6 md:p-2">
       <h1 className="pb-4 text-2xl font-semibold tracking-tight md:hidden">聊天</h1>
-      <div className="flex gap-2">
-        <form
-          className="min-w-0 flex-1"
-          role="search"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const query = new FormData(event.currentTarget).get("q");
-            if (typeof query === "string" && query.trim() !== "")
-              navigate(`/app/search?q=${encodeURIComponent(query.trim())}`);
-          }}
-        >
-          <Input name="q" type="search" aria-label="搜索消息" placeholder="搜索消息" />
-        </form>
-        <Button
-          variant="secondary"
-          size="icon"
-          aria-label="新建会话"
-          onClick={() => setCreating(true)}
-        >
-          <Plus aria-hidden />
-        </Button>
-      </div>
+      <form
+        className="relative"
+        role="search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const query = new FormData(event.currentTarget).get("q");
+          if (typeof query === "string" && query.trim() !== "")
+            navigate(`/app/search?q=${encodeURIComponent(query.trim())}`);
+        }}
+      >
+        <Search
+          aria-hidden
+          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted"
+        />
+        <Input
+          name="q"
+          type="search"
+          aria-label="搜索消息"
+          placeholder="搜索消息"
+          className="pl-9"
+        />
+      </form>
       <div className="min-h-0 flex-1 overflow-auto">
-        <Heading>频道</Heading>
+        <Heading
+          action={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="新建会话"
+              onClick={() => setCreating(true)}
+            >
+              <Plus aria-hidden />
+            </Button>
+          }
+        >
+          频道
+        </Heading>
         <ul className="m-0 grid list-none gap-0.5 p-0">{channels.map(row)}</ul>
         <Heading>私信</Heading>
         <ul className="m-0 grid list-none gap-0.5 p-0">{dms.map(row)}</ul>
@@ -174,9 +219,11 @@ function NewConversation({ onClose }: { onClose: () => void }) {
           </Field>
         )}
         <ErrorLine error={error} />
-        <Button type="submit" variant="primary">
-          {mode === "channel" ? "创建频道" : "打开私信"}
-        </Button>
+        <div className="flex justify-end">
+          <Button type="submit" variant="primary">
+            {mode === "channel" ? "创建频道" : "打开私信"}
+          </Button>
+        </div>
       </form>
     </Dialog>
   );

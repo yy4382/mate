@@ -1,8 +1,35 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  ArrowUp,
+  Circle,
+  CircleCheck,
+  ListTodo,
+  MessageSquare,
+  MessageSquareReply,
+} from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { describe, post } from "../shell/api.ts";
 import { Link, chatPath } from "../shell/router.tsx";
-import { ErrorLine, timeLabel } from "../shell/ui.tsx";
+import {
+  Avatar,
+  Button,
+  EmptyState,
+  ErrorLine,
+  Input,
+  Notice,
+  Select,
+  Textarea,
+  buttonClass,
+  cx,
+  timeLabel,
+} from "../shell/ui.tsx";
 import {
   accountName,
   loadOlder,
@@ -53,10 +80,10 @@ function Body({ text, accounts }: { text: string; accounts: readonly AccountView
   const handles = new Set(accounts.map((a) => a.handle.toLowerCase()));
   const parts = text.split(/(@[\p{L}\p{N}][\p{L}\p{N}_.-]*)/gu);
   return (
-    <p className="body">
+    <p className="whitespace-pre-wrap text-sm leading-6 [overflow-wrap:anywhere]">
       {parts.map((part, index) =>
         part.startsWith("@") && handles.has(part.slice(1).toLowerCase()) ? (
-          <span key={index} className="mention">
+          <span key={index} className="rounded-sm bg-accent-soft px-0.5 text-accent">
             {part}
           </span>
         ) : (
@@ -67,7 +94,7 @@ function Body({ text, accounts }: { text: string; accounts: readonly AccountView
   );
 }
 
-function TaskChips(props: {
+function TaskBox(props: {
   tasks: readonly TaskState[];
   accounts: readonly AccountView[];
   canWrite: boolean;
@@ -87,65 +114,79 @@ function TaskChips(props: {
     }
   };
   return (
-    <ul className="tasks">
-      {props.tasks.map((task) => (
-        <li key={task.taskId} className={task.completed ? "task done" : "task"}>
-          <span className="task-title">{task.title}</span>
-          <span className="task-owner">
-            {task.completed
-              ? "已完成"
-              : task.owner === null
-                ? "无人认领"
-                : accountName(accounts, task.owner)}
-          </span>
-          {props.canWrite && !task.completed ? (
-            task.owner === null ? (
-              <button
-                type="button"
-                className="button small"
-                onClick={() => change(task.taskId, "claim")}
-              >
-                认领
-              </button>
-            ) : task.owner === me ? (
-              <>
-                <button
-                  type="button"
-                  className="button small"
-                  onClick={() => change(task.taskId, "complete")}
-                >
-                  完成
-                </button>
-                <button
-                  type="button"
-                  className="button small"
-                  onClick={() => change(task.taskId, "yield")}
-                >
-                  让出
-                </button>
-                <select
-                  aria-label="转交给"
-                  value=""
-                  onChange={(event) => change(task.taskId, "transfer", Number(event.target.value))}
-                >
-                  <option value="">转交…</option>
-                  {accounts
-                    .filter((a) => a.active && a.accountId !== me)
-                    .map((a) => (
-                      <option key={a.accountId} value={a.accountId}>
-                        {a.displayName}
-                      </option>
-                    ))}
-                </select>
-              </>
-            ) : null
-          ) : null}
-        </li>
-      ))}
-      {note === null ? null : <li className="error">{note}</li>}
-    </ul>
+    <div className="mt-2 overflow-hidden rounded-md border border-border bg-background">
+      <ul className="m-0 grid list-none divide-y divide-border p-0">
+        {props.tasks.map((task) => (
+          <li
+            key={task.taskId}
+            className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1"
+          >
+            {task.completed ? (
+              <CircleCheck aria-hidden className="size-4 shrink-0 text-success" />
+            ) : (
+              <Circle aria-hidden className="size-4 shrink-0 text-muted" />
+            )}
+            <span
+              className={cx("min-w-0 flex-1 text-sm", task.completed && "text-muted line-through")}
+            >
+              {task.title}
+            </span>
+            <span className="text-xs text-muted">
+              {task.completed
+                ? "已完成"
+                : task.owner === null
+                  ? "无人认领"
+                  : accountName(accounts, task.owner)}
+            </span>
+            {props.canWrite && !task.completed ? (
+              task.owner === null ? (
+                <Button size="sm" onClick={() => change(task.taskId, "claim")}>
+                  认领
+                </Button>
+              ) : task.owner === me ? (
+                <>
+                  <Button size="sm" onClick={() => change(task.taskId, "complete")}>
+                    完成
+                  </Button>
+                  <Button size="sm" onClick={() => change(task.taskId, "yield")}>
+                    让出
+                  </Button>
+                  <Select
+                    aria-label="转交给"
+                    className="w-28 [&_select]:h-8 [&_select]:text-xs"
+                    value=""
+                    onChange={(event) =>
+                      change(task.taskId, "transfer", Number(event.target.value))
+                    }
+                  >
+                    <option value="">转交…</option>
+                    {accounts
+                      .filter((a) => a.active && a.accountId !== me)
+                      .map((a) => (
+                        <option key={a.accountId} value={a.accountId}>
+                          {a.displayName}
+                        </option>
+                      ))}
+                  </Select>
+                </>
+              ) : null
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {note === null ? null : (
+        <p className="border-t border-border px-3 py-2 text-xs text-danger" role="alert">
+          {note}
+        </p>
+      )}
+    </div>
   );
 }
+
+const GROUP_MS = 5 * 60 * 1000;
+
+const clockLabel = (at: number) =>
+  new Date(at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 
 function MessageRow(props: {
   entry: MessageEntry;
@@ -155,9 +196,12 @@ function MessageRow(props: {
   conversation: number;
   canWrite: boolean;
   highlighted: boolean;
+  /** Continues the previous message's author, so the name and avatar are left out. */
+  grouped: boolean;
 }) {
   const { entry, accounts, timeline } = props;
   const author = accounts.find((a) => a.accountId === entry.author);
+  const name = author?.displayName ?? `#${entry.author}`;
   const replies = useReplyCount(entry.messageId);
   const [titling, setTitling] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -175,69 +219,112 @@ function MessageRow(props: {
       setError(cause);
     }
   };
+  const actions: ReactNode[] = [];
+  if ("conversation" in timeline)
+    actions.push(
+      <Link
+        key="reply"
+        to={chatPath(props.conversation, entry.messageId)}
+        aria-label="回复"
+        title="回复"
+        className={buttonClass({ variant: "ghost", size: "icon-sm" })}
+      >
+        <MessageSquareReply aria-hidden />
+      </Link>,
+    );
+  if (props.canWrite && titling === null)
+    actions.push(
+      <Button
+        key="task"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="转为任务"
+        title="转为任务"
+        onClick={() => setTitling("")}
+      >
+        <ListTodo aria-hidden />
+      </Button>,
+    );
   return (
     <article
-      className={props.highlighted ? "message highlighted" : "message"}
+      className={cx(
+        "group relative grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3 px-4 hover:bg-subtle focus-within:bg-subtle data-highlighted:bg-accent-soft md:px-6",
+        props.grouped ? "py-0.5" : "pt-3 pb-0.5",
+      )}
       data-seq={entry.seq}
       data-message-id={entry.messageId}
+      {...(props.highlighted ? { "data-highlighted": "" } : {})}
     >
-      <div className="avatar" aria-hidden>
-        {(author?.displayName ?? "?").slice(0, 1).toUpperCase()}
-      </div>
-      <div className="message-main">
-        <header>
-          <strong>{author?.displayName ?? `#${entry.author}`}</strong>
-          <span className="handle">@{author?.handle ?? "?"}</span>
-          <time>{timeLabel(entry.at)}</time>
-        </header>
+      {props.grouped ? (
+        <time className="hidden select-none whitespace-nowrap text-right text-xs leading-6 text-muted group-hover:block">
+          {clockLabel(entry.at)}
+        </time>
+      ) : (
+        <Avatar name={name} />
+      )}
+      <div className="min-w-0">
+        {props.grouped ? null : (
+          <div className="flex items-baseline gap-2 leading-6">
+            <strong className="text-sm font-semibold">{name}</strong>
+            <span className="text-xs text-muted">@{author?.handle ?? "?"}</span>
+            <time className="text-xs text-muted">{timeLabel(entry.at)}</time>
+          </div>
+        )}
         <Body text={entry.body} accounts={accounts} />
         {props.tasks.length > 0 ? (
-          <TaskChips tasks={props.tasks} accounts={accounts} canWrite={props.canWrite} />
+          <TaskBox tasks={props.tasks} accounts={accounts} canWrite={props.canWrite} />
         ) : null}
-        <footer>
-          {"conversation" in timeline ? (
-            <Link className="reply-link" to={chatPath(props.conversation, entry.messageId)}>
-              {replies > 0 ? `${replies} 条回复` : "回复"}
-            </Link>
-          ) : null}
-          {props.canWrite && titling === null ? (
-            <button type="button" className="link-button" onClick={() => setTitling("")}>
-              转为任务
-            </button>
-          ) : null}
-        </footer>
+        {"conversation" in timeline && replies > 0 ? (
+          <Link
+            className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-accent no-underline hover:underline [&_svg]:size-3.5"
+            to={chatPath(props.conversation, entry.messageId)}
+          >
+            <MessageSquare aria-hidden />
+            {`${replies} 条回复`}
+          </Link>
+        ) : null}
         {titling === null ? null : (
           <form
-            className="inline-form"
+            className="mt-2 flex items-center gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               void createTask();
             }}
           >
-            <input
+            <Input
               aria-label="任务标题"
               placeholder="任务标题"
+              className="h-8 flex-1 text-xs"
               value={titling}
               onChange={(event) => setTitling(event.target.value)}
               autoFocus
             />
-            <button className="button small primary" type="submit">
+            <Button variant="primary" size="sm" type="submit">
               创建任务
-            </button>
-            <button className="button small" type="button" onClick={() => setTitling(null)}>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setTitling(null)}>
               取消
-            </button>
+            </Button>
           </form>
         )}
         <ErrorLine error={error} />
       </div>
+      {actions.length === 0 ? null : (
+        <div className="absolute -top-3 right-4 flex gap-0.5 rounded-md border border-border bg-background p-0.5 opacity-0 shadow-sm focus-within:opacity-100 group-hover:opacity-100 md:right-6 [@media(hover:none)]:opacity-100">
+          {actions}
+        </div>
+      )}
     </article>
   );
 }
 
 function TaskLine({ entry, accounts }: { entry: TaskEntry; accounts: readonly AccountView[] }) {
   return (
-    <p className="task-line" data-seq={entry.seq}>
+    <p
+      className="flex items-center justify-center gap-1.5 px-4 py-2 text-center text-xs text-muted md:px-6 [&_svg]:size-3.5 [&_svg]:shrink-0"
+      data-seq={entry.seq}
+    >
+      <ListTodo aria-hidden />
       {accountName(accounts, entry.actor)} {TASK_VERB[entry.change]}「{entry.title}」
     </p>
   );
@@ -301,6 +388,36 @@ function useJump(ref: TimelineRef, seq: number | null, entries: readonly Entry[]
   return { notice, target };
 }
 
+/** The message a thread replies to, shown above the replies. It lives in the conversation's timeline, so it shows once that is loaded and holds it. */
+function ThreadRoot(props: { conversation: number; thread: number; replies: number }) {
+  const accounts = useAccounts().data ?? [];
+  const entry = useTimeline({ conversation: props.conversation }).data?.entries.find(
+    (e): e is MessageEntry => e.kind === "message" && e.messageId === props.thread,
+  );
+  if (entry === undefined) return null;
+  const author = accounts.find((a) => a.accountId === entry.author);
+  const name = author?.displayName ?? `#${entry.author}`;
+  return (
+    <div className="pb-2">
+      <div className="grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3 px-4 pt-3 pb-1 md:px-6">
+        <Avatar name={name} />
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2 leading-6">
+            <strong className="text-sm font-semibold">{name}</strong>
+            <span className="text-xs text-muted">@{author?.handle ?? "?"}</span>
+            <time className="text-xs text-muted">{timeLabel(entry.at)}</time>
+          </div>
+          <Body text={entry.body} accounts={accounts} />
+        </div>
+      </div>
+      <div className="flex items-center gap-3 px-4 pt-2 text-xs text-muted md:px-6">
+        {props.replies > 0 ? `${props.replies} 条回复` : "还没有回复"}
+        <span className="h-px flex-1 bg-border" />
+      </div>
+    </div>
+  );
+}
+
 function MessageList(props: {
   timelineRef: TimelineRef;
   conversation: number;
@@ -328,13 +445,18 @@ function MessageList(props: {
     } else if (stick.current && target === null) element.scrollTop = element.scrollHeight;
   }, [entries, target]);
 
-  if (timeline.isError) return <ErrorLine error={timeline.error} />;
-  if (entries === undefined) return <p className="splash">正在加载…</p>;
+  if (timeline.isError)
+    return (
+      <div className="flex-1 p-6">
+        <ErrorLine error={timeline.error} />
+      </div>
+    );
+  if (entries === undefined) return <p className="flex-1 p-6 text-sm text-muted">正在加载…</p>;
   const tasks = tasksOf(entries);
   const first = entries[0];
   return (
     <div
-      className="messages"
+      className="flex min-h-0 flex-1 flex-col overflow-auto py-4"
       ref={scroller}
       onScroll={(event) => {
         const el = event.currentTarget;
@@ -342,33 +464,51 @@ function MessageList(props: {
       }}
     >
       {notice === null ? null : (
-        <p className="notice" role="status">
-          {notice}
-        </p>
+        <div className="px-4 pb-2 md:px-6">
+          <Notice>{notice}</Notice>
+        </div>
       )}
       {first !== undefined && first.seq > 1 ? (
-        <button
-          type="button"
-          className="button load-older"
-          disabled={older === "loading"}
-          onClick={async () => {
-            setOlder("loading");
-            before.current = scroller.current?.scrollHeight ?? null;
-            try {
-              await loadOlder(qc, ref);
-              setOlder("idle");
-            } catch {
-              before.current = null;
-              setOlder("failed");
-            }
-          }}
-        >
-          {older === "failed" ? "加载失败，点此重试" : "加载更早的消息"}
-        </button>
+        <div className="flex justify-center pb-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={older === "loading"}
+            onClick={async () => {
+              setOlder("loading");
+              before.current = scroller.current?.scrollHeight ?? null;
+              try {
+                await loadOlder(qc, ref);
+                setOlder("idle");
+              } catch {
+                before.current = null;
+                setOlder("failed");
+              }
+            }}
+          >
+            {older === "failed" ? "加载失败，点此重试" : "加载更早的消息"}
+          </Button>
+        </div>
       ) : null}
-      {entries.length === 0 ? <p className="empty">还没有消息。</p> : null}
-      {entries.map((entry) =>
-        entry.kind === "message" ? (
+      {"thread" in ref ? (
+        <ThreadRoot
+          conversation={props.conversation}
+          thread={ref.thread}
+          replies={entries.filter((e) => e.kind === "message").length}
+        />
+      ) : null}
+      {entries.length === 0 && !("thread" in ref) ? (
+        <div className="px-4 md:px-6">
+          <EmptyState icon={<MessageSquare />} title="还没有消息">
+            在下面说点什么，开始这段对话。
+          </EmptyState>
+        </div>
+      ) : null}
+      {entries.map((entry, index) => {
+        if (entry.kind !== "message")
+          return <TaskLine key={entry.seq} entry={entry} accounts={accounts} />;
+        const previous = entries[index - 1];
+        return (
           <MessageRow
             key={entry.seq}
             entry={entry}
@@ -378,19 +518,30 @@ function MessageList(props: {
             conversation={props.conversation}
             canWrite={props.canWrite}
             highlighted={entry.seq === target}
+            grouped={
+              previous?.kind === "message" &&
+              previous.author === entry.author &&
+              entry.at - previous.at < GROUP_MS
+            }
           />
-        ) : (
-          <TaskLine key={entry.seq} entry={entry} accounts={accounts} />
-        ),
-      )}
+        );
+      })}
     </div>
   );
 }
 
-function Composer({ timelineRef: ref }: { timelineRef: TimelineRef }) {
+function Composer({
+  timelineRef: ref,
+  placeholder,
+}: {
+  timelineRef: TimelineRef;
+  placeholder: string;
+}) {
   const accounts = useAccounts().data ?? [];
   const draft = useDraft(ref);
+  const area = useRef<HTMLTextAreaElement>(null);
   const sending = draft.pending?.status === "sending";
+  const failed = draft.pending?.status === "failed";
   const submit = () => void sendDraft(ref, accounts);
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -398,47 +549,66 @@ function Composer({ timelineRef: ref }: { timelineRef: TimelineRef }) {
       submit();
     }
   };
+  useLayoutEffect(() => {
+    const element = area.current;
+    if (element === null) return;
+    element.style.height = "auto";
+    element.style.height = `${element.scrollHeight}px`;
+  }, [draft.text]);
   return (
-    <form
-      className="composer"
-      onSubmit={(event) => {
-        event.preventDefault();
-        submit();
-      }}
-    >
-      <textarea
-        aria-label="消息"
-        placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-        rows={2}
-        value={draft.text}
-        onChange={(event) => setDraftText(ref, event.target.value)}
-        onKeyDown={onKeyDown}
-      />
-      <div className="composer-row">
-        <span className="composer-status" role="status">
-          {sending ? "发送中…" : draft.pending?.status === "failed" ? "发送失败" : ""}
-          {draft.error !== null ? ` ${draft.error}` : ""}
-        </span>
-        {draft.pending?.status === "failed" ? (
-          <>
-            <button type="button" className="button" onClick={() => abandonPending(ref)}>
-              放弃
-            </button>
-            <button type="submit" className="button primary">
-              重试发送
-            </button>
-          </>
-        ) : (
-          <button
-            type="submit"
-            className="button primary"
-            disabled={sending || draft.text.trim() === ""}
+    <div className="shrink-0 px-4 pb-4 md:px-6">
+      <form
+        className="rounded-lg border border-border-strong bg-background focus-within:border-accent focus-within:ring-1 focus-within:ring-accent"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <Textarea
+          bare
+          ref={area}
+          aria-label="消息"
+          placeholder={placeholder}
+          rows={1}
+          className="max-h-52 overflow-y-auto"
+          value={draft.text}
+          onChange={(event) => setDraftText(ref, event.target.value)}
+          onKeyDown={onKeyDown}
+        />
+        <div className="flex min-h-10 items-center gap-2 px-2 pb-2">
+          <span
+            className={cx(
+              "min-w-0 flex-1 truncate px-1 text-xs",
+              failed ? "text-danger" : "text-muted",
+            )}
+            role="status"
           >
-            发送
-          </button>
-        )}
-      </div>
-    </form>
+            {sending ? "发送中…" : failed ? "发送失败" : ""}
+            {draft.error !== null ? ` ${draft.error}` : ""}
+          </span>
+          {failed ? (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => abandonPending(ref)}>
+                放弃
+              </Button>
+              <Button variant="primary" size="sm" type="submit">
+                重试发送
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="primary"
+              size="icon-sm"
+              type="submit"
+              aria-label="发送"
+              disabled={sending || draft.text.trim() === ""}
+            >
+              <ArrowUp aria-hidden />
+            </Button>
+          )}
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -449,6 +619,9 @@ export function Timeline(props: {
   seq: number | null;
   canWrite: boolean;
   readonlyReason?: string;
+  /** The way out of a read-only timeline, such as a join button. */
+  readonlyAction?: ReactNode;
+  placeholder: string;
 }) {
   return (
     <>
@@ -460,9 +633,14 @@ export function Timeline(props: {
         canWrite={props.canWrite}
       />
       {props.canWrite ? (
-        <Composer timelineRef={props.timelineRef} />
+        <Composer timelineRef={props.timelineRef} placeholder={props.placeholder} />
       ) : (
-        <p className="readonly">{props.readonlyReason}</p>
+        <div className="shrink-0 px-4 pb-4 md:px-6">
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-subtle px-4 py-3 text-sm text-muted">
+            <p>{props.readonlyReason}</p>
+            {props.readonlyAction}
+          </div>
+        </div>
       )}
     </>
   );
