@@ -4,12 +4,13 @@ import { Menu as BaseMenu } from "@base-ui/react/menu";
 import { Tabs as BaseTabs } from "@base-ui/react/tabs";
 import { ChevronDown, MoreHorizontal, X } from "lucide-react";
 import { useState, type ComponentProps, type ReactNode } from "react";
+import { twMerge } from "tailwind-merge";
 import { describe } from "./api.ts";
 
 type Class = string | false | null | undefined;
 
-/** Joins class names, skipping the falsy ones. */
-export const cx = (...parts: Class[]): string => parts.filter(Boolean).join(" ");
+/** Joins class names, skipping the falsy ones; a later class wins over an earlier one it conflicts with, so a caller's `className` overrides the primitive's own. */
+export const cx = (...parts: Class[]): string => twMerge(parts.filter(Boolean).join(" "));
 
 // Buttons
 
@@ -66,10 +67,21 @@ export function Input({ className, ...rest }: ComponentProps<"input">) {
   return <input className={cx(controlClass, className)} {...rest} />;
 }
 
-export function Textarea({ className, ...rest }: ComponentProps<"textarea">) {
+const bareTextareaClass =
+  "block min-h-0 w-full resize-none rounded-none border-0 bg-transparent px-3 py-2 text-sm leading-6 text-foreground placeholder:text-muted focus-visible:outline-none disabled:opacity-50";
+
+/** `bare` drops the border and focus styling, for a textarea that sits inside a bordered box that owns them (the composer). */
+export function Textarea({
+  className,
+  bare = false,
+  ...rest
+}: ComponentProps<"textarea"> & { bare?: boolean }) {
   return (
     <textarea
-      className={cx(controlClass, "h-auto min-h-20 resize-y py-2 leading-6", className)}
+      className={cx(
+        bare ? bareTextareaClass : cx(controlClass, "h-auto min-h-20 resize-y py-2 leading-6"),
+        className,
+      )}
       {...rest}
     />
   );
@@ -150,25 +162,26 @@ export function CardFooter({ className, ...rest }: ComponentProps<"div">) {
 
 export type Tone = "neutral" | "success" | "warning" | "danger" | "accent";
 
-const badgeTones: Record<Tone | "solid", string> = {
+const badgeTones: Record<Tone | "solid" | "inverse", string> = {
   neutral: "border border-border bg-subtle text-muted",
   success: "bg-success-soft text-success",
   warning: "bg-warning-soft text-warning",
   danger: "bg-danger-soft text-danger",
   accent: "bg-accent-soft text-accent",
   solid: "bg-accent text-background",
+  inverse: "bg-foreground text-background",
 };
 
-/** `solid` is for counts that need to be noticed, such as unread mentions. */
+/** `solid` is for counts that need to be noticed, such as unread mentions; `inverse` is the quiet count, such as plain unread. */
 export function Badge({
   tone = "neutral",
   className,
   ...rest
-}: ComponentProps<"span"> & { tone?: Tone | "solid" }) {
+}: ComponentProps<"span"> & { tone?: Tone | "solid" | "inverse" }) {
   return (
     <span
       className={cx(
-        "inline-flex h-5 min-w-5 items-center justify-center rounded-full px-2 text-xs font-medium",
+        "inline-flex h-5 min-w-5 shrink-0 items-center justify-center whitespace-nowrap rounded-full px-2 text-xs font-medium",
         badgeTones[tone],
         className,
       )}
@@ -194,9 +207,10 @@ export function StatusDot({ tone = "neutral", label }: { tone?: Tone; label?: st
   );
 }
 
-export type AvatarSize = "sm" | "md" | "lg";
+export type AvatarSize = "xs" | "sm" | "md" | "lg";
 
 const avatarSizes: Record<AvatarSize, string> = {
+  xs: "size-5 text-[10px]",
   sm: "size-6 text-xs",
   md: "size-8 text-sm",
   lg: "size-10 text-base",
@@ -416,14 +430,28 @@ export function TabPanel({ value, children }: { value: string; children: ReactNo
 
 // Page furniture
 
-export function PageHeader(props: { title: string; description?: ReactNode; actions?: ReactNode }) {
+export function PageHeader(props: {
+  title: string;
+  description?: ReactNode;
+  actions?: ReactNode;
+  /** Sits left of the title, such as an avatar. */
+  leading?: ReactNode;
+  /** Sits right of the title, such as a status badge. */
+  badge?: ReactNode;
+}) {
   return (
     <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-      <div className="grid gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">{props.title}</h1>
-        {props.description === undefined ? null : (
-          <p className="text-sm text-muted">{props.description}</p>
-        )}
+      <div className="flex min-w-0 items-start gap-3">
+        {props.leading}
+        <div className="grid min-w-0 gap-1">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 className="text-2xl font-semibold tracking-tight">{props.title}</h1>
+            {props.badge}
+          </div>
+          {props.description === undefined ? null : (
+            <p className="text-sm text-muted">{props.description}</p>
+          )}
+        </div>
       </div>
       {props.actions === undefined ? null : (
         <div className="flex shrink-0 items-center gap-2">{props.actions}</div>
