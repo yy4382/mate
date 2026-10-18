@@ -1,18 +1,51 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { Check, MessageSquare } from "lucide-react";
 import { useState } from "react";
 import { put } from "../shell/api.ts";
-import { Link } from "../shell/router.tsx";
-import { ErrorLine } from "../shell/ui.tsx";
-import { SettingsFields, settingsBody } from "./Agents.tsx";
+import { Link, navigate } from "../shell/router.tsx";
+import {
+  Avatar,
+  Button,
+  Card,
+  CardBody,
+  CardFooter,
+  EmptyState,
+  ErrorLine,
+  PageHeader,
+  TabPanel,
+  Tabs,
+  buttonClass,
+} from "../shell/ui.tsx";
+import { AgentActions } from "./AgentActions.tsx";
+import { AgentStateBadge, SettingsFields, settingsBody } from "./Agents.tsx";
 import { Watch } from "./Watch.tsx";
 import { Workspace } from "./Workspace.tsx";
-import { STATE_LABEL, adminKeys, useAgents, useModels } from "./data.ts";
+import { adminKeys, useAgents, useModels } from "./data.ts";
 
 type Tab = "settings" | "watch" | "workspace";
 
+const TABS: { value: Tab; label: string }[] = [
+  { value: "settings", label: "设置" },
+  { value: "watch", label: "观察" },
+  { value: "workspace", label: "工作区" },
+];
+
+function Breadcrumb({ name }: { name: string }) {
+  return (
+    <nav aria-label="面包屑" className="flex items-center gap-2 text-sm text-muted">
+      <Link to="/app/admin/agents" className="text-muted no-underline hover:text-foreground">
+        Agent
+      </Link>
+      <span aria-hidden>/</span>
+      <span className="truncate text-foreground">{name}</span>
+    </nav>
+  );
+}
+
 export function AgentDetail({ agentId }: { agentId: string }) {
   const qc = useQueryClient();
-  const agent = useAgents().data?.find((a) => a.agentId === agentId);
+  const agents = useAgents();
+  const agent = agents.data?.find((a) => a.agentId === agentId);
   const models = useModels().data ?? [];
   const [tab, setTab] = useState<Tab>("settings");
   const [form, setForm] = useState<{
@@ -22,8 +55,21 @@ export function AgentDetail({ agentId }: { agentId: string }) {
   } | null>(null);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  if (agent === undefined) return <p className="empty">找不到这个 Agent。</p>;
-  if (agent.state === "unreadable") return <p className="error">{agent.problem}</p>;
+  const [actionError, setActionError] = useState<unknown>(null);
+  if (agent === undefined)
+    return agents.data === undefined ? null : (
+      <>
+        <Breadcrumb name="未知" />
+        <EmptyState title="找不到这个 Agent。">它可能已经被删除了。</EmptyState>
+      </>
+    );
+  if (agent.state === "unreadable")
+    return (
+      <>
+        <Breadcrumb name={agent.displayName ?? agent.agentId} />
+        <ErrorLine error={agent.problem} />
+      </>
+    );
   const current = {
     model: `${agent.settings.model.provider}/${agent.settings.model.modelId}`,
     thinking: agent.settings.thinkingLevel ?? "",
@@ -43,75 +89,93 @@ export function AgentDetail({ agentId }: { agentId: string }) {
           contextWindow: 0,
         },
       ];
+  const name = agent.displayName ?? agent.agentId;
   return (
-    <section>
-      <header className="section-header">
-        <h2>
-          {agent.displayName} <span className="handle">@{agent.handle}</span>
-        </h2>
-        <span className={agent.state === "open" ? "tag ok" : "tag"}>
-          {STATE_LABEL[agent.state]}
-        </span>
-        <Link to="/app/admin/agents">返回</Link>
-      </header>
-      <div className="segmented" role="tablist">
-        {(
-          [
-            ["settings", "设置"],
-            ["watch", "观察"],
-            ["workspace", "工作区"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            onClick={() => setTab(id)}
-          >
-            {label}
-          </button>
-        ))}
+    <>
+      <div className="grid gap-4">
+        <Breadcrumb name={name} />
+        <PageHeader
+          title={name}
+          leading={<Avatar name={name} size="lg" />}
+          badge={
+            <>
+              {agent.handle === undefined ? null : (
+                <span className="text-sm text-muted">@{agent.handle}</span>
+              )}
+              <AgentStateBadge state={agent.state} />
+            </>
+          }
+          actions={
+            <>
+              {agent.handle === undefined ? null : (
+                <Link to={`/app?dm=${encodeURIComponent(agent.handle)}`} className={buttonClass()}>
+                  <MessageSquare aria-hidden />
+                  发消息
+                </Link>
+              )}
+              <AgentActions
+                agent={agent}
+                onError={setActionError}
+                onDeleted={() => navigate("/app/admin/agents")}
+              />
+            </>
+          }
+        />
+        <ErrorLine error={actionError} />
       </div>
-      {tab === "settings" ? (
-        <form
-          className="card form"
-          aria-label="Agent 设置"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            try {
-              await put(`/api/admin/agents/${agentId}/settings`, settingsBody(value));
-              setError(null);
-              setSaved(true);
-              setForm(null);
-              await qc.invalidateQueries({ queryKey: adminKeys.agents });
-            } catch (cause) {
-              setSaved(false);
-              setError(cause);
-            }
-          }}
-        >
-          <SettingsFields
-            models={choices}
-            value={value}
-            onChange={(next) => {
-              setSaved(false);
-              setForm(next);
+      <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} items={TABS}>
+        <TabPanel value="settings">
+          <form
+            aria-label="Agent 设置"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              try {
+                await put(`/api/admin/agents/${agentId}/settings`, settingsBody(value));
+                setError(null);
+                setSaved(true);
+                setForm(null);
+                await qc.invalidateQueries({ queryKey: adminKeys.agents });
+              } catch (cause) {
+                setSaved(false);
+                setError(cause);
+              }
             }}
-          />
-          <ErrorLine error={error} />
-          {saved ? (
-            <p className="notice" role="status">
-              已保存，从下一次请求起生效。
-            </p>
-          ) : null}
-          <button className="button primary" type="submit">
-            保存设置
-          </button>
-        </form>
-      ) : null}
-      {tab === "watch" ? <Watch agentId={agentId} open={agent.state === "open"} /> : null}
-      {tab === "workspace" ? <Workspace agentId={agentId} /> : null}
-    </section>
+          >
+            <Card>
+              <CardBody>
+                <SettingsFields
+                  models={choices}
+                  value={value}
+                  onChange={(next) => {
+                    setSaved(false);
+                    setForm(next);
+                  }}
+                />
+                <ErrorLine error={error} />
+              </CardBody>
+              <CardFooter>
+                {saved ? (
+                  <p role="status" className="flex items-center gap-1.5 text-sm text-success">
+                    <Check aria-hidden className="size-4" />
+                    已保存，从下一次请求起生效。
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted">从下一次模型请求起生效</p>
+                )}
+                <Button type="submit" variant="primary">
+                  保存设置
+                </Button>
+              </CardFooter>
+            </Card>
+          </form>
+        </TabPanel>
+        <TabPanel value="watch">
+          <Watch agentId={agentId} open={agent.state === "open"} />
+        </TabPanel>
+        <TabPanel value="workspace">
+          <Workspace agentId={agentId} />
+        </TabPanel>
+      </Tabs>
+    </>
   );
 }

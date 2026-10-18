@@ -6,8 +6,7 @@ import { Providers } from "./Providers.tsx";
 
 export function AdminPage({ route }: { route: Extract<Route, { page: "admin" }> }) {
   return (
-    <main className="page admin">
-      <h1>管理</h1>
+    <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-6 md:px-8 md:py-8">
       {route.section === "agents" ? (
         route.agentId === null ? (
           <Agents />

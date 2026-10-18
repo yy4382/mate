@@ -20,7 +20,7 @@ describe("providers and nodes", () => {
     expect(shown).toContain("5678");
     expect(shown, "the key is never shown whole").not.toContain(KEY);
     await openai.getByRole("button", { name: "删除 key" }).click();
-    await openai.getByRole("button", { name: "确认删除 key" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "删除 key" }).click();
     await openai.getByText("未设置").waitFor();
   });
 
@@ -92,10 +92,10 @@ describe("Agents", () => {
       .step("done", (request) => request.text("answered"));
     await page.getByLabel("消息", { exact: true }).fill("status report please");
     await page.getByLabel("消息", { exact: true }).press("Enter");
-    await page.locator("article.message", { hasText: "All green" }).waitFor();
+    await page.getByRole("article").filter({ hasText: "All green" }).waitFor();
 
     await page.goto(`${site.origin}/app/admin/agents`);
-    await card.getByRole("link", { name: "详情" }).click();
+    await card.getByRole("link", { name: "Richard" }).click();
     await page.getByRole("tab", { name: "观察" }).click();
     await page.getByTestId("transcript").getByText("status report please").first().waitFor();
     await page.getByTestId("transcript").getByText("All green", { exact: false }).first().waitFor();
@@ -105,10 +105,15 @@ describe("Agents", () => {
     await expect.poll(() => page.getByTestId("file-content").textContent()).toBe("remember me");
 
     await page.getByRole("tab", { name: "观察" }).click();
-    await page.getByRole("link", { name: "返回" }).click();
-    await card.getByRole("button", { name: "暂停" }).click();
+    await page
+      .getByRole("navigation", { name: "面包屑" })
+      .getByRole("link", { name: "Agent" })
+      .click();
+    await card.getByRole("button", { name: "更多" }).click();
+    await page.getByRole("menuitem", { name: "暂停" }).click();
     await card.getByText("已暂停").waitFor();
-    await card.getByRole("button", { name: "恢复" }).click();
+    await card.getByRole("button", { name: "更多" }).click();
+    await page.getByRole("menuitem", { name: "恢复" }).click();
     await card.getByText("运行中").waitFor();
     scripted.assertComplete();
   });
@@ -117,7 +122,7 @@ describe("Agents", () => {
     const site = await startSite();
     await site.agent("sam");
     const { page } = await openApp(site, "/app/admin/agents");
-    await page.locator('[data-agent="sam"]').getByRole("link", { name: "详情" }).click();
+    await page.locator('[data-agent="sam"]').getByRole("link", { name: "Sam" }).click();
     const form = page.getByRole("form", { name: "Agent 设置" });
     await form.getByLabel("说明文字（可选）").fill("Be brief.");
     await form.getByRole("button", { name: "保存设置" }).click();
@@ -134,11 +139,15 @@ describe("Agents", () => {
     await site.agent("sam");
     const { page } = await openApp(site, "/app/admin/agents");
     const card = page.locator('[data-agent="sam"]');
-    await card.getByRole("button", { name: "删除" }).click();
-    await card.getByRole("button", { name: "取消" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await card.getByRole("button", { name: "更多" }).click();
+    await page.getByRole("menuitem", { name: "删除 Agent" }).click();
+    await dialog.getByRole("button", { name: "取消" }).click();
+    await dialog.waitFor({ state: "hidden" });
     expect(await card.count(), "cancelled").toBe(1);
-    await card.getByRole("button", { name: "删除" }).click();
-    await card.getByRole("button", { name: "确认删除" }).click();
+    await card.getByRole("button", { name: "更多" }).click();
+    await page.getByRole("menuitem", { name: "删除 Agent" }).click();
+    await dialog.getByRole("button", { name: "删除", exact: true }).click();
     await page.getByText("还没有 Agent。").waitFor();
   });
 });

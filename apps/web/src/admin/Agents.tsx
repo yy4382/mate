@@ -1,10 +1,40 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { Bot, MessageSquare, Plus } from "lucide-react";
 import { useState } from "react";
 import type { AgentView, CatalogModel } from "@mate/admin";
-import { ApiError, del, post } from "../shell/api.ts";
+import { ApiError, post } from "../shell/api.ts";
 import { Link } from "../shell/router.tsx";
-import { ConfirmButton, ErrorLine } from "../shell/ui.tsx";
-import { STATE_LABEL, adminKeys, totalTokens, useAgents, useModels, useNodes } from "./data.ts";
+import {
+  Avatar,
+  Badge,
+  Button,
+  Dialog,
+  EmptyState,
+  ErrorLine,
+  Field,
+  Input,
+  Notice,
+  PageHeader,
+  Select,
+  Textarea,
+  buttonClass,
+  type Tone,
+} from "../shell/ui.tsx";
+import { AgentActions } from "./AgentActions.tsx";
+import { STATE_LABEL, totalTokens, useAgents, useModels, useNodes } from "./data.ts";
+
+const STATE_TONE: Record<string, Tone> = {
+  open: "success",
+  paused: "warning",
+  closed: "neutral",
+  unreadable: "danger",
+};
+
+export function AgentStateBadge({ state }: { state: AgentView["state"] }) {
+  return <Badge tone={STATE_TONE[state] ?? "neutral"}>{STATE_LABEL[state]}</Badge>;
+}
+
+const linkClass = "text-accent no-underline hover:underline";
 
 export type Settings = {
   model: { provider: string; modelId: string };
@@ -22,9 +52,8 @@ export function SettingsFields(props: {
   const chosen = models.find((m) => `${m.provider}/${m.modelId}` === value.model);
   return (
     <>
-      <label>
-        模型
-        <select
+      <Field label="模型">
+        <Select
           value={value.model}
           onChange={(event) =>
             props.onChange({ ...value, model: event.target.value, thinking: "" })
@@ -37,11 +66,10 @@ export function SettingsFields(props: {
               {m.provider} · {m.name}
             </option>
           ))}
-        </select>
-      </label>
-      <label>
-        思考级别
-        <select
+        </Select>
+      </Field>
+      <Field label="思考级别">
+        <Select
           value={value.thinking}
           onChange={(event) => props.onChange({ ...value, thinking: event.target.value })}
         >
@@ -51,16 +79,15 @@ export function SettingsFields(props: {
               {level}
             </option>
           ))}
-        </select>
-      </label>
-      <label>
-        说明文字（可选）
-        <textarea
+        </Select>
+      </Field>
+      <Field label="说明文字（可选）">
+        <Textarea
           rows={3}
           value={value.instructions}
           onChange={(event) => props.onChange({ ...value, instructions: event.target.value })}
         />
-      </label>
+      </Field>
     </>
   );
 }
@@ -90,175 +117,187 @@ function CreateAgent({ onDone }: { onDone: () => void }) {
   const [unfinished, setUnfinished] = useState<string | null>(null);
   const node = nodes.length === 1 ? nodes[0]?.nodeId : nodeId;
   return (
-    <form
-      className="card form"
-      aria-label="创建 Agent"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        try {
-          await post("/api/admin/agents", {
-            ...(unfinished === null ? {} : { agentId: unfinished }),
-            nodeId: node,
-            displayName,
-            handle,
-            settings: settingsBody(settings),
-          });
-          await qc.invalidateQueries({ queryKey: ["admin"] });
-          await qc.invalidateQueries({ queryKey: ["chat", "accounts"] });
-          onDone();
-        } catch (cause) {
-          // A create that stopped part way is finished by sending its agentId back.
-          if (cause instanceof ApiError && typeof cause.body.agentId === "string")
-            setUnfinished(cause.body.agentId);
-          setError(cause);
-        }
-      }}
+    <Dialog
+      title="创建 Agent"
+      description="给它起个名字，选好模型，它就会在聊天里上线。"
+      onClose={onDone}
     >
-      <h3>创建 Agent</h3>
-      <label>
-        显示名
-        <input
-          value={displayName}
-          onChange={(event) => setDisplayName(event.target.value)}
-          required
-        />
-      </label>
-      <label>
-        Handle
-        <input
-          value={handle}
-          onChange={(event) => setHandle(event.target.value)}
-          pattern="[\p{L}\p{N}][\p{L}\p{N}_.\-]*"
-          required
-        />
-      </label>
-      {nodes.length === 0 ? (
-        <p className="notice">还没有配对的 node，先到「Node」里配对一个。</p>
-      ) : nodes.length === 1 ? (
-        <p>
-          Node：<code>{nodes[0]?.nodeId}</code>
-        </p>
-      ) : (
-        <label>
-          Node
-          <select value={nodeId} onChange={(event) => setNodeId(event.target.value)} required>
-            <option value="">选择…</option>
-            {nodes.map((n) => (
-              <option key={n.nodeId} value={n.nodeId}>
-                {n.nodeId}（{n.online ? "在线" : "离线"}）
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      {models.length === 0 ? (
-        <p className="notice">没有可选的模型，先到「提供商」里保存 API key。</p>
-      ) : (
-        <SettingsFields models={models} value={settings} onChange={setSettings} />
-      )}
-      <ErrorLine error={error} />
-      <button
-        className="button primary"
-        type="submit"
-        disabled={nodes.length === 0 || models.length === 0}
+      <form
+        className="grid gap-4"
+        aria-label="创建 Agent"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          try {
+            await post("/api/admin/agents", {
+              ...(unfinished === null ? {} : { agentId: unfinished }),
+              nodeId: node,
+              displayName,
+              handle,
+              settings: settingsBody(settings),
+            });
+            await qc.invalidateQueries({ queryKey: ["admin"] });
+            await qc.invalidateQueries({ queryKey: ["chat", "accounts"] });
+            onDone();
+          } catch (cause) {
+            // A create that stopped part way is finished by sending its agentId back.
+            if (cause instanceof ApiError && typeof cause.body.agentId === "string")
+              setUnfinished(cause.body.agentId);
+            setError(cause);
+          }
+        }}
       >
-        {unfinished === null ? "创建" : "继续创建"}
-      </button>
-    </form>
+        <Field label="显示名">
+          <Input
+            value={displayName}
+            onChange={(event) => setDisplayName(event.target.value)}
+            required
+          />
+        </Field>
+        <Field label="Handle">
+          <Input
+            value={handle}
+            onChange={(event) => setHandle(event.target.value)}
+            pattern="[\p{L}\p{N}][\p{L}\p{N}_.\-]*"
+            required
+          />
+        </Field>
+        {nodes.length === 0 ? (
+          <Notice>
+            还没有配对的 node，先到
+            <Link to="/app/admin/nodes" className={linkClass}>
+              Node
+            </Link>
+            里配对一个。
+          </Notice>
+        ) : nodes.length === 1 ? (
+          <div className="grid gap-1.5">
+            <span className="text-sm font-medium">Node</span>
+            <code className="font-mono text-xs text-muted">{nodes[0]?.nodeId}</code>
+          </div>
+        ) : (
+          <Field label="Node">
+            <Select value={nodeId} onChange={(event) => setNodeId(event.target.value)} required>
+              <option value="">选择…</option>
+              {nodes.map((n) => (
+                <option key={n.nodeId} value={n.nodeId}>
+                  {n.nodeId}（{n.online ? "在线" : "离线"}）
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
+        {models.length === 0 ? (
+          <Notice>
+            没有可选的模型，先到
+            <Link to="/app/admin/providers" className={linkClass}>
+              提供商
+            </Link>
+            里保存 API key。
+          </Notice>
+        ) : (
+          <SettingsFields models={models} value={settings} onChange={setSettings} />
+        )}
+        <ErrorLine error={error} />
+        <div className="flex justify-end">
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={nodes.length === 0 || models.length === 0}
+          >
+            {unfinished === null ? "创建" : "继续创建"}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
-function AgentCard({ agent }: { agent: AgentView }) {
-  const qc = useQueryClient();
+function AgentRow({ agent }: { agent: AgentView }) {
   const [error, setError] = useState<unknown>(null);
-  const run = async (work: () => Promise<unknown>) => {
-    try {
-      await work();
-      setError(null);
-      await qc.invalidateQueries({ queryKey: adminKeys.agents });
-    } catch (cause) {
-      setError(cause);
-    }
-  };
-  const readable = agent.state !== "unreadable";
   const name = agent.displayName ?? agent.agentId;
   return (
-    <article className="card agent" data-agent={agent.handle ?? agent.agentId}>
-      <header>
-        <h3>{name}</h3>
-        {agent.handle === undefined ? null : <span className="handle">@{agent.handle}</span>}
-        <span className={agent.state === "open" ? "tag ok" : "tag"}>
-          {STATE_LABEL[agent.state]}
-        </span>
-      </header>
-      {readable ? (
-        <p className="meta">
-          {agent.settings.model.provider}/{agent.settings.model.modelId}
-          {agent.settings.thinkingLevel === undefined
-            ? ""
-            : ` · 思考 ${agent.settings.thinkingLevel}`}
-          {" · "}已用 {totalTokens(agent)} tokens
-        </p>
-      ) : (
-        <p className="error">{agent.problem}</p>
-      )}
-      <div className="actions">
-        {readable ? <Link to={`/app/admin/agents/${agent.agentId}`}>详情</Link> : null}
-        {agent.handle === undefined || !readable ? null : (
-          <Link to={`/app?dm=${encodeURIComponent(agent.handle)}`} className="button">
-            发消息
-          </Link>
-        )}
-        {agent.state === "open" ? (
-          <button
-            type="button"
-            className="button"
-            onClick={() => run(() => post(`/api/admin/agents/${agent.agentId}/pause`))}
-          >
-            暂停
-          </button>
-        ) : null}
-        {agent.state === "paused" ? (
-          <button
-            type="button"
-            className="button"
-            onClick={() => run(() => post(`/api/admin/agents/${agent.agentId}/resume`))}
-          >
-            恢复
-          </button>
-        ) : null}
-        <ConfirmButton
-          label="删除"
-          danger
-          onConfirm={() => run(() => del(`/api/admin/agents/${agent.agentId}`))}
-        />
+    <li className="grid gap-2 p-4" data-agent={agent.handle ?? agent.agentId}>
+      <div className="flex items-center gap-3">
+        <Avatar name={name} size="md" />
+        <div className="grid min-w-0 flex-1 gap-0.5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {agent.state === "unreadable" ? (
+              <span className="truncate text-sm font-medium">{name}</span>
+            ) : (
+              <Link
+                to={`/app/admin/agents/${agent.agentId}`}
+                className="truncate text-sm font-medium text-foreground no-underline hover:underline"
+              >
+                {name}
+              </Link>
+            )}
+            {agent.handle === undefined ? null : (
+              <span className="text-sm text-muted">@{agent.handle}</span>
+            )}
+            <AgentStateBadge state={agent.state} />
+          </div>
+          {agent.state === "unreadable" ? (
+            <p className="text-xs text-danger">{agent.problem}</p>
+          ) : (
+            <p className="break-words text-xs text-muted">
+              {agent.settings.model.provider}/{agent.settings.model.modelId}
+              {agent.settings.thinkingLevel === undefined
+                ? ""
+                : ` · 思考 ${agent.settings.thinkingLevel}`}
+              {" · "}已用 {totalTokens(agent)} tokens
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {agent.handle === undefined || agent.state === "unreadable" ? null : (
+            <Link
+              to={`/app?dm=${encodeURIComponent(agent.handle)}`}
+              className={buttonClass({ size: "sm", className: "max-sm:size-8 max-sm:px-0" })}
+              aria-label="发消息"
+            >
+              <MessageSquare aria-hidden />
+              <span className="max-sm:hidden">发消息</span>
+            </Link>
+          )}
+          <AgentActions agent={agent} onError={setError} />
+        </div>
       </div>
       <ErrorLine error={error} />
-    </article>
+    </li>
   );
 }
 
 export function Agents() {
   const agents = useAgents();
   const [creating, setCreating] = useState(false);
+  const create = (
+    <Button variant="primary" onClick={() => setCreating(true)}>
+      <Plus aria-hidden />
+      创建 Agent
+    </Button>
+  );
+  const empty = agents.data?.length === 0;
   return (
-    <section>
-      <header className="section-header">
-        <h2>Agent</h2>
-        {creating ? null : (
-          <button type="button" className="button primary" onClick={() => setCreating(true)}>
-            创建 Agent
-          </button>
-        )}
-      </header>
-      {creating ? <CreateAgent onDone={() => setCreating(false)} /> : null}
+    <>
+      <PageHeader
+        title="Agent"
+        description="常驻的 AI 同事。每个 Agent 有自己的上下文和工作目录。"
+        actions={empty ? undefined : create}
+      />
       <ErrorLine error={agents.error} />
-      {agents.data?.length === 0 && !creating ? <p className="empty">还没有 Agent。</p> : null}
-      <div className="cards">
-        {agents.data?.map((agent) => (
-          <AgentCard key={agent.agentId} agent={agent} />
-        ))}
-      </div>
-    </section>
+      {empty ? (
+        <EmptyState icon={<Bot />} title="还没有 Agent。" action={create}>
+          创建一个，它就会出现在聊天里，等你交代事情。
+        </EmptyState>
+      ) : null}
+      {agents.data === undefined || empty ? null : (
+        <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+          {agents.data.map((agent) => (
+            <AgentRow key={agent.agentId} agent={agent} />
+          ))}
+        </ul>
+      )}
+      {creating ? <CreateAgent onDone={() => setCreating(false)} /> : null}
+    </>
   );
 }
