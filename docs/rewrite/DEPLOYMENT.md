@@ -13,8 +13,8 @@
 |---|---|
 | 起真实进程的端到端场景（M9） | 未开始；各模块的边界测试和部署冒烟是目前的验证手段 |
 | 发布 | `v*` 标签在 `.github/workflows/ci.yml` 里先跑完 `pnpm check` 和 `pnpm test:linux`，再推镜像、建 Release；`v0.1.0-alpha.1` 走通了这条路 |
-| 真实主机 | 在一台 x86_64 的 Debian 13 VPS 上验证过：从 `v0.1.0-alpha.1` 源码构建的镜像用两个 Compose 文件起来、登录、跨站请求被拒；发布出的 x64 node 包经 `sha256sum -c`、安装、配置后由真正的 systemd 用户服务运行并连上，Agent 在它上面创建、工作区可浏览、越界被拒，重启控制面后数据和登录都在、node 自动重连，`uninstall` 干净。没在 VPS 上直接拉 GHCR 镜像（缺 `read:packages` token，匿名拉取按预期被拒），也没接真实模型 |
-| 反向代理和 HTTPS | 冒烟不经过反向代理；按 §3.1 第 6 步配置 |
+| 真实主机 | 在一台 x86_64 的 Debian 13 VPS 上验证过：从 `v0.1.0-alpha.1` 源码构建的镜像用两个 Compose 文件起来、登录、跨站请求被拒；发布出的 x64 node 包经 `sha256sum -c`、安装、配置后由真正的 systemd 用户服务运行并连上，Agent 在它上面创建、工作区可浏览、越界被拒，重启控制面后数据和登录都在、node 自动重连，`uninstall` 干净。之后在同一台机器上按两个账号的形态做了第一次正式部署：镜像从 GHCR 匿名拉取，Caddy 提供 HTTPS。还没接真实模型 |
+| 反向代理和 HTTPS | 冒烟不经过反向代理；第一次正式部署用 Caddy 验证过，按 §3.1 第 6 步配置 |
 | 附件 | 第一版之后（ARCHITECTURE §11 第 7 条） |
 
 ## 1. 部署形态
@@ -22,16 +22,18 @@
 ```
 VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 │
-├─ 现有普通账号（例如 chris，UID 1000）
-│   ├─ 控制面：一个 Docker 容器，以这个账号的 UID/GID 运行
-│   │    网页、聊天 app、管理模块、Agent Manager、所有 Agent 的 runtime、node 网关
-│   │    数据：宿主上一个私有 bind 目录 → 容器内 data/
-│   │
+├─ 控制面：一个 Docker 容器，以一个专用的无登录系统账号（例如 mate-control）的 UID/GID 运行
+│    网页、聊天 app、管理模块、Agent Manager、所有 Agent 的 runtime、node 网关
+│    数据：宿主上一个只属于这个系统账号的私有 bind 目录 → 容器内 data/
+│
+├─ node 账号：一个普通账号（例如 mate），不在 docker 组里
 │   └─ node：systemd 用户服务（mate-node.service），由 `mate node` CLI 管理
 │        在 Agent 的工作区里执行命令、读写文件；主动用 WebSocket 连控制面
 │
 └─ 你自己已有的 HTTPS 反向代理（Caddy、nginx 等）→ 控制面端口
 ```
+
+**为什么分两个账号。** Agent 的命令以 node 账号运行。控制面的数据目录里有模型 API key、密码哈希和所有对话；它如果也属于 node 账号，任何 Agent 都能 `cat` 出来。所以数据目录属于另一个账号，node 账号连进入它的权限都没有。同理，node 账号不能在 docker 组里：能用 Docker 就等于宿主上的 root。控制面由 root（或你别的管理账号）用 `docker compose` 管理。
 
 - **规模假设**：一个所有者、少量 Agent（ARCHITECTURE §10）。一台低配置 VPS 足够；资源主要花在模型 API 费用上，不在本机。
 - **Mate 不做的事**：不创建系统用户，不切换身份，不安装系统软件，不改 sudo、Docker 权限或 linger，不装证书或反向代理。Agent 在命令里自己写的 `sudo` 能不能成功，由宿主的 sudo 配置决定。
@@ -40,11 +42,12 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 ## 2. 前提
 
 1. 一台 Ubuntu 24.04 或 Debian 13 的 VPS，x86_64 或 arm64。
-2. 一个现有的普通账号（不是 root）。node 会以它运行，Agent 的命令也以它运行，所以给它的权限就是你愿意给 Agent 的权限。
-3. 这个账号能用 Docker Engine 和 Docker Compose。
-4. 这个账号有可用的 systemd user manager。如果希望注销后、或开机后 node 也一直运行，需要你自己执行 `sudo loginctl enable-linger <账号>`，Mate 不替你做。
-5. 一个域名和 HTTPS 反向代理。浏览器推送（Web Push）和登录 cookie 都需要 HTTPS。
-6. 至少一个模型提供商的 API key。具体接哪家还没定，测试目前按 OpenAI Responses 协议模拟模型。
+2. 一个给 node 用的普通账号（不是 root，不在 docker 组里），例如 `sudo useradd -m -s /bin/bash mate`。node 会以它运行，Agent 的命令也以它运行，所以给它的权限就是你愿意给 Agent 的权限。
+3. 一个给控制面用的无登录系统账号，例如 `sudo useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin mate-control`。它只是数据目录的所有者，容器以它的 UID/GID 运行。
+4. 一个能用 Docker Engine 和 Docker Compose 的管理账号（root 或你自己的账号）。
+5. node 账号有可用的 systemd user manager。如果希望注销后、或开机后 node 也一直运行，需要你自己执行 `sudo loginctl enable-linger <账号>`，Mate 不替你做。
+6. 一个域名和 HTTPS 反向代理。浏览器推送（Web Push）和登录 cookie 都需要 HTTPS。
+7. 至少一个模型提供商的 API key。具体接哪家还没定，测试目前按 OpenAI Responses 协议模拟模型。
 
 ## 3. 安装
 
@@ -52,10 +55,10 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 
 控制面是 `deploy/control-plane/` 里的一个镜像加两个 Compose 文件：`compose.yaml` 是日常配置，`compose.initialize.yaml` 只在第一次启动时叠加，把初始密码文件交给控制面。镜像用 `docker build --file deploy/control-plane/Dockerfile .` 从仓库根目录构建，构建出的镜像带网页前端；发布时由 CI 推到镜像仓库，用确切的版本号，不用 `latest`。
 
-1. 建一个只属于你账号的私有数据目录，权限 0700，例如 `mkdir -m 700 -p ~/mate/data`。Compose 不会替你建它（目录不存在就拒绝启动），因为让 Docker 建出来的会属于 root。
-2. 仓库是私有的，镜像仓库里的镜像也是私有的。先在 VPS 上登录 GHCR：用一个只有 `read:packages` 权限的 GitHub token，`echo <token> | docker login ghcr.io -u <GitHub 用户名> --password-stdin`。
-3. 把 `compose.yaml`、`compose.initialize.yaml` 和 `.env.example`（改名 `.env`）放在同一个目录，填好 `.env`（变量见下表）。`MATE_UID`、`MATE_GID` 用 `id -u`、`id -g` 查你的账号。
-4. 写初始密码文件（至少 12 字节，末尾的换行不算），权限 0600，路径写进 `.env` 的 `MATE_INITIAL_PASSWORD`。控制面只在库里还没有密码时读它，只存 scrypt 哈希（ARCHITECTURE §4.7、MODULE_TESTS 11.1）；第一次启动没有它就拒绝启动。
+1. 建一个只属于控制面系统账号的私有数据目录，权限 0700，放在 node 账号进不去的地方，例如 `sudo install -d -m 700 -o mate-control -g mate-control /srv/mate-control-plane/data`。Compose 不会替你建它（目录不存在就拒绝启动），因为让 Docker 建出来的会属于 root。
+2. 镜像在 GHCR 上公开，可以匿名拉取，不需要登录。
+3. 把 `compose.yaml`、`compose.initialize.yaml` 和 `.env.example`（改名 `.env`）放在同一个目录，填好 `.env`（变量见下表）。`MATE_UID`、`MATE_GID` 用 `id -u mate-control`、`id -g mate-control` 查。这个目录和 `.env` 只给管理账号看（例如放在 root 的 `/srv/mate-control-plane`，权限 0700；容器的绑定挂载不受上级目录权限影响）。
+4. 写初始密码文件（至少 12 字节，末尾的换行不算），属于控制面系统账号、权限 0600（容器以它的身份读这个文件），路径写进 `.env` 的 `MATE_INITIAL_PASSWORD`。控制面只在库里还没有密码时读它，只存 scrypt 哈希（ARCHITECTURE §4.7、MODULE_TESTS 11.1）；第一次启动没有它就拒绝启动。
 5. 第一次启动叠加两个文件：
 
    ```sh
@@ -70,7 +73,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 | 变量 | 含义 | 缺省 |
 |---|---|---|
 | `MATE_IMAGE` | 控制面镜像，写确切版本号 | 必填 |
-| `MATE_UID`、`MATE_GID` | 容器进程的 UID 和 GID，用数据目录的所有者 | 必填 |
+| `MATE_UID`、`MATE_GID` | 容器进程的 UID 和 GID，用数据目录的所有者（控制面系统账号） | 必填 |
 | `MATE_DATA` | 宿主上的数据目录，绑定挂载到容器内 `/var/lib/mate` | 必填，目录必须已存在 |
 | `MATE_INITIAL_PASSWORD` | 初始密码文件的宿主路径，只有 `compose.initialize.yaml` 读它 | 第一次启动必填 |
 | `MATE_LISTEN` | 宿主上监听的地址和端口 | `127.0.0.1:8787` |
@@ -86,7 +89,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 | `MATE_WEB_DIRECTORY` | 构建好的网页前端目录；镜像里是 `/opt/mate/web`；没有时 API 照常，页面回 404 | 无 |
 | `MATE_VAPID_SUBJECT` | 推送服务联系你用的 `mailto:` 或 `https:` 地址，写在每个推送请求的签名里 | `mailto:owner@mate.invalid` |
 
-镜像以非 root 用户运行，`user:` 让 Compose 换成你的 UID/GID，所以数据目录里的文件属于你的账号。镜像自带健康检查（带不带会话都能答的 API 路径返回 401 就算健康）。`SIGTERM`（`docker compose stop`）让控制面先断开所有连接，再依次关闭所有 Agent、网关和聊天库后退出，在 Compose 的 10 秒期限内完成。
+镜像以非 root 用户运行，`user:` 让 Compose 换成控制面系统账号的 UID/GID，所以数据目录里的文件属于它，node 账号读不到。镜像自带健康检查（带不带会话都能答的 API 路径返回 401 就算健康）。`SIGTERM`（`docker compose stop`）让控制面先断开所有连接，再依次关闭所有 Agent、网关和聊天库后退出，在 Compose 的 10 秒期限内完成。
 
 ### 3.2 node
 
@@ -113,7 +116,7 @@ node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安�
 4. `mate node start`：启用并启动 `mate-node.service`。
 5. 网页显示 node 在线后，可以不带 `--pairing-token` 再跑一次 `configure`，把令牌从配置里去掉。不去也没关系：node 先用自己的身份签名认证，令牌已经用掉。
 
-**磁盘上的东西。** 全在这个账号的 HOME 下：
+**磁盘上的东西。** 全在 node 账号的 HOME 下：
 
 ```
 ~/.local/lib/mate-node/                  程序目录：发布包的内容，整个替换，从不原地修改
@@ -197,7 +200,7 @@ node 一侧：node 的身份密钥和配置在 node 账号自己的目录里；�
 ### 5.2 备份与搬家
 
 1. 停控制面：`docker compose stop`。
-2. 复制整个数据目录（连同 `-wal`、`-shm` 文件），例如 `cp -a ~/mate/data ~/mate/backup-$(date +%F)`。
+2. 复制整个数据目录（连同 `-wal`、`-shm` 文件），保留所有者，例如 `sudo cp -a /srv/mate-control-plane/data /srv/mate-control-plane/backup-$(date +%F)`。
 3. 在新机器上用同一版本启动，`.env` 的 `MATE_DATA` 指向复制过去的目录。数据库里已有密码，所以不需要 `compose.initialize.yaml`。
 
 node 的工作区按普通文件备份即可。node 换机器时，在新机器上重新配对。
@@ -217,7 +220,7 @@ mate node start
 **数据不做迁移**（ADR-0002）。新版本发现某个数据库的结构版本不对时，会拒绝启动并报出文件名，不会改动它。重写期间结构变化很频繁（例如聊天库已经从版本 1 变成版本 2），所以在正式发布之前，每次升级都可能需要换一个新的空数据目录（ARCHITECTURE §11 第 8 条，所有者已接受）：
 
 1. `docker compose down`，旧数据目录原样留着，需要回退时还能用。
-2. 建一个新的空 0700 目录，`.env` 里改 `MATE_IMAGE` 和 `MATE_DATA`，把初始密码文件重新写出来。
+2. 建一个新的空 0700 目录（属于控制面系统账号），`.env` 里改 `MATE_IMAGE` 和 `MATE_DATA`，把初始密码文件重新写出来。
 3. 用两个 Compose 文件起新版本（§3.1 第 4 步），重新配对 node、重建 Agent；Agent 的工作区在 node 上，不受影响。旧数据目录里的对话不会带过来。
 
 ### 5.4 卸载

@@ -3,7 +3,7 @@
 services:
   control-plane:
     image: ${MATE_IMAGE:?set MATE_IMAGE to an exact control-plane image tag}
-    user: "${MATE_UID:?set MATE_UID to the owner account's UID}:${MATE_GID:?set MATE_GID to the owner account's GID}"
+    user: "${MATE_UID:?set MATE_UID to the control-plane system account's UID}:${MATE_GID:?set MATE_GID to the control-plane system account's GID}"
     environment:
       MATE_DATA_DIRECTORY: /var/lib/mate
       MATE_HOST: 0.0.0.0

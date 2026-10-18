@@ -229,7 +229,7 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 连接器提交给 runtime 的一条不含消息正文的提示，写明截至某个时间点至少有多少未读、分布在哪里、有没有 @ 你。同一时间最多只有一条还没交给模型的通知，新的会替换旧的。
 
 **node**
-以宿主机现有账号运行的执行进程，由 `mate node` CLI 管理成 systemd 用户服务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
+以宿主机上一个普通账号（node 账号，不是控制面的账号，也不在 docker 组里）运行的执行进程，由 `mate node` CLI 管理成 systemd 用户服务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
 
 **发布包**（bundle）
 node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-node/` 一个目录（Node 运行时、打成一个脚本的 node 程序和 CLI、`mate` 启动命令、清单），旁边是它的 `.sha256`。由 `pnpm bundle:node` 构建，`mate node install`/`update` 读取。
