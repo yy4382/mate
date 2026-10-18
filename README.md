@@ -12,18 +12,16 @@ Mate 是一个人使用的个人环境，让若干个 AI Agent 作为长期同�
 
 ## 运行在哪里
 
-首个版本部署在一台低配置的 Linux VPS 上：
+Mate 部署在一台低配置的 Linux VPS 上：
 
 - **控制面**：一个 Docker 容器，提供网页，运行所有 Agent。
-- **node**：以宿主机现有的普通账号运行，作为 systemd 用户服务，负责执行 Agent 的命令。
+- **node**：以一个普通账号运行，作为 systemd 用户服务，负责执行 Agent 的命令。控制面以另一个系统账号运行，所以 Agent 读不到模型凭据和对话库。
 
-Mate 不创建系统用户，也不提升权限。Agent 自己在命令里写了 `sudo` 的话，能不能成功由宿主机的 sudo 配置决定。
+Mate 不替你创建账号，也不提升权限。Agent 自己在命令里写了 `sudo` 的话，能不能成功由宿主机的 sudo 配置决定。
 
-## 现状
+## 文档
 
-项目正在从头重写，进度见 [重写计划](docs/rewrite/PLAN.md)。聊天 app、Agent runtime、连接器、Agent Manager 和 node 链路（M1–M4）已经完成；控制面进程、网页和安装包还没有，所以暂时不能部署。
-
-- [架构](docs/rewrite/ARCHITECTURE.md)：模块划分、接口，以及设计为什么这样做。
-- [模块边界测试](docs/rewrite/MODULE_TESTS.md)：每个模块要验证哪些行为。
-- [部署指南](docs/rewrite/DEPLOYMENT.md)：目标部署方式，以及现在能做到哪一步。
+- [架构](docs/ARCHITECTURE.md)：模块划分、接口，以及设计为什么这样做。
+- [模块边界测试](docs/MODULE_TESTS.md)：每个模块要验证哪些行为。
+- [部署指南](docs/DEPLOYMENT.md)：怎样装到一台 VPS 上，以及日常运维。
 - [术语表](GLOSSARY.md)：文档和代码里统一使用的词。

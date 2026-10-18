@@ -1,6 +1,6 @@
 /**
  * The chat database schema. A store is created at this version and never migrated: a file stamped with any other
- * `user_version` is refused (see ADR-0002, first-release compatibility reset).
+ * `user_version` is refused (ARCHITECTURE section 6).
  */
 export const CHAT_SCHEMA_VERSION = 3;
 

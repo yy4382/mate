@@ -1,21 +1,7 @@
-# Mate 部署指南（重写版）
+# Mate 部署指南
 
 > 读者：要把 Mate 装到一台 Linux VPS 上的所有者。
-> 配套文档：[ARCHITECTURE.md](ARCHITECTURE.md) 第 6、7 节，[PLAN.md](PLAN.md)。
-
-## 0. 现在能不能部署
-
-**能，做第一次部署。** M1–M8 已完成并经过独立审查：聊天 app、Agent runtime（含历史工具和上下文压缩）、Agent Manager、node 网关与 node、登录与 HTTP 路由、实时事件流、Web Push、管理模块、网页前端、控制面镜像、node 发布包和 `mate node` CLI。`pnpm smoke:deploy` 在 Docker 里用发布的镜像和 node 发布包跑通登录、配对、创建 Agent、私信回复和重启后数据仍在（MODULE_TESTS §13）。
-
-还没做或没验证过的：
-
-| 事项 | 现状 |
-|---|---|
-| 起真实进程的端到端场景（M9） | 未开始；各模块的边界测试和部署冒烟是目前的验证手段 |
-| 发布 | `v*` 标签在 `.github/workflows/ci.yml` 里先跑完 `pnpm check` 和 `pnpm test:linux`，再推镜像、建 Release；`v0.1.0-alpha.1` 走通了这条路 |
-| 真实主机 | 在一台 x86_64 的 Debian 13 VPS 上验证过：从 `v0.1.0-alpha.1` 源码构建的镜像用两个 Compose 文件起来、登录、跨站请求被拒；发布出的 x64 node 包经 `sha256sum -c`、安装、配置后由真正的 systemd 用户服务运行并连上，Agent 在它上面创建、工作区可浏览、越界被拒，重启控制面后数据和登录都在、node 自动重连，`uninstall` 干净。之后在同一台机器上按两个账号的形态做了第一次正式部署：镜像从 GHCR 匿名拉取，Caddy 提供 HTTPS。还没接真实模型 |
-| 反向代理和 HTTPS | 冒烟不经过反向代理；第一次正式部署用 Caddy 验证过，按 §3.1 第 6 步配置 |
-| 附件 | 第一版之后（ARCHITECTURE §11 第 7 条） |
+> 配套文档：[ARCHITECTURE.md](ARCHITECTURE.md) 第 6、7 节。
 
 ## 1. 部署形态
 
@@ -37,7 +23,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 
 - **规模假设**：一个所有者、少量 Agent（ARCHITECTURE §10）。一台低配置 VPS 足够；资源主要花在模型 API 费用上，不在本机。
 - **Mate 不做的事**：不创建系统用户，不切换身份，不安装系统软件，不改 sudo、Docker 权限或 linger，不装证书或反向代理。Agent 在命令里自己写的 `sudo` 能不能成功，由宿主的 sudo 配置决定。
-- **控制面和 node 可以不在同一台机器上。** node 主动连控制面，只需要能访问控制面的地址。首版按同机部署来写。
+- **控制面和 node 可以不在同一台机器上。** node 主动连控制面，只需要能访问控制面的地址。本指南按同机部署来写。
 
 ## 2. 前提
 
@@ -47,7 +33,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 4. 一个能用 Docker Engine 和 Docker Compose 的管理账号（root 或你自己的账号）。
 5. node 账号有可用的 systemd user manager。如果希望注销后、或开机后 node 也一直运行，需要你自己执行 `sudo loginctl enable-linger <账号>`，Mate 不替你做。
 6. 一个域名和 HTTPS 反向代理。浏览器推送（Web Push）和登录 cookie 都需要 HTTPS。
-7. 至少一个模型提供商的 API key。具体接哪家还没定，测试目前按 OpenAI Responses 协议模拟模型。
+7. 至少一个模型提供商的 API key。管理界面提供 OpenAI（Responses API）和 DeepSeek 两家（ARCHITECTURE 4.6）。
 
 ## 3. 安装
 
@@ -189,7 +175,7 @@ node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安�
 <数据目录>/                     控制面容器里的 data/
   control.sqlite               密码哈希、登录会话、VAPID 密钥、API key、node 注册表；控制面以 0600 新建它
   chat.sqlite                  聊天的全部数据
-  attachments/                 附件文件
+  attachments/                 附件文件（还没有实现）
   agents/<agentId>.sqlite      每个 Agent 的全部状态：对话、配置、提醒、连接器位置、是否暂停
 ```
 
@@ -217,11 +203,11 @@ mate node start
 
 `update` 之后服务保持停止。程序目录里如果有你自己放的文件，`update` 会拒绝并列出它们，挪走后重跑。
 
-**数据不做迁移**（ADR-0002）。新版本发现某个数据库的结构版本不对时，会拒绝启动并报出文件名，不会改动它。重写期间结构变化很频繁（例如聊天库已经从版本 1 变成版本 2），所以在正式发布之前，每次升级都可能需要换一个新的空数据目录（ARCHITECTURE §11 第 8 条，所有者已接受）：
+**数据不做迁移**（ARCHITECTURE 第 10 节）。新版本发现某个数据库的结构版本不对时，会拒绝启动并报出文件名，不会改动它。所以新版本改了结构时，升级要换一个新的空数据目录（ARCHITECTURE §11 第 8 条）：
 
 1. `docker compose down`，旧数据目录原样留着，需要回退时还能用。
 2. 建一个新的空 0700 目录（属于控制面系统账号），`.env` 里改 `MATE_IMAGE` 和 `MATE_DATA`，把初始密码文件重新写出来。
-3. 用两个 Compose 文件起新版本（§3.1 第 4 步），重新配对 node、重建 Agent；Agent 的工作区在 node 上，不受影响。旧数据目录里的对话不会带过来。
+3. 用两个 Compose 文件起新版本（§3.1 第 4、5 步），重新配对 node、重建 Agent；Agent 的工作区在 node 上，不受影响。旧数据目录里的对话不会带过来。
 
 ### 5.4 卸载
 
@@ -229,7 +215,7 @@ mate node start
 
 不是 Mate 写的单元文件，`uninstall` 不删，也不停用它定义的服务。
 
-## 6. 今天在开发机上能做什么
+## 6. 在开发机上运行
 
 需要 Node 24、pnpm 10；跑 Linux 测试还需要 Docker（macOS 上用 OrbStack 即可）。
 
@@ -253,8 +239,5 @@ MATE_DATA_DIRECTORY=~/mate-dev/data MATE_INITIAL_PASSWORD_FILE=~/mate-dev/passwo
 curl -i -X POST localhost:8787/api/login -H 'content-type: application/json' -d '{"password":"一个至少十二字节的密码"}'
 ```
 
-登录返回的 `Set-Cookie` 要原样带在之后的请求里。路由见 ARCHITECTURE §4.7。各模块的边界测试仍是验证系统的主要手段，`apps/control-plane/test/composition.test.ts` 以真实 HTTP 跑通"经 HTTP 配对 node、创建 Agent、所有者私信它、它回复并推送"。
+登录返回的 `Set-Cookie` 要原样带在之后的请求里。路由见 ARCHITECTURE §4.7。各模块的边界测试是验证系统的主要手段，`apps/control-plane/test/composition.test.ts` 以真实 HTTP 跑通"经 HTTP 配对 node、创建 Agent、所有者私信它、它回复并推送"。
 
-## 7. 正式部署之前还要定的事
-
-见 PLAN.md 的 M5–M9。node 安装器不用可续做的状态机，已经决定（架构文档第 11 节第 1 条，本文 §3.2）。

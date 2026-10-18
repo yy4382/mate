@@ -201,7 +201,7 @@ Web 外壳签名推送请求用的 P-256 密钥对，第一次启动时生成，
 所有者用来创建和配置 Agent、管理 API key、配对 node、查看对话记录和用量、浏览工作区的模块。它拥有 Agent Manager：`openAdmin` 打开 Manager，并把 node 网关接成 Manager 的工作区宿主，Web 外壳不直接碰 Manager。
 
 **提供商**（provider）
-模型的提供方，在 pi-ai 模型目录里有一个 ID。首版只提供 `openai`（Responses API）和 `deepseek`。
+模型的提供方，在 pi-ai 模型目录里有一个 ID。只提供 `openai`（Responses API）和 `deepseek`。
 
 **模型目录**（model catalog）
 pi-ai 自带的模型清单（`builtinModels()`）。每个模型带它接受的 thinking 级别；runtime 的 `catalogModels(provider)` 列出一个提供商的模型，Agent 的请求也在这个目录里解析。

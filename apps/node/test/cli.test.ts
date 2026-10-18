@@ -21,7 +21,7 @@ const command = (h: Host) => join(h.home, ".local/bin/mate");
 const config = (h: Host) => join(h.home, ".config/mate/node.json");
 const installedVersion = (h: Host) =>
   JSON.parse(readFileSync(join(program(h), "manifest.json"), "utf8")).version;
-/** Mate's scratch directories next to the program directory (DEPLOYMENT §5.4). */
+/** Mate's scratch directories next to the program directory (DEPLOYMENT §3.2). */
 const scratch = (h: Host) =>
   readdirSync(join(h.home, ".local/lib")).filter((name) => name.startsWith(".mate-node-"));
 const verbs = (h: Host) => h.systemd().calls.map((call) => call[1]);

@@ -1,6 +1,5 @@
-# Mate 架构（重写草案）
+# Mate 架构
 
-> 状态：已经所有者确认的架构。第 11 节记录所有者对原先待定问题的回答。
 > 读者：只读过 `README.md` 的工程师。第一次出现的术语都会解释。
 
 ## 1. Mate 是什么
@@ -67,9 +66,27 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 
 控制面是**一个进程**。模块之间直接调用方法接口，不走本机网络。模块边界靠接口划定，不靠进程隔离。
 
+**包。** 模块边界用 pnpm 包来强制：每个包只通过 `package.json` 的 `exports` 暴露公开接口，从外部 import 包的内部文件会直接构建失败。
+
+| 包 | 内容 |
+|---|---|
+| `packages/chat`（`@mate/chat`） | 聊天 app |
+| `packages/runtime`（`@mate/runtime`） | Agent runtime 及其扩展 |
+| `packages/manager`（`@mate/manager`） | Agent Manager 和连接器 |
+| `packages/node-protocol`（`@mate/node-protocol`） | 网关与 node 之间的消息格式，包括工具名和工具结果的形状 |
+| `packages/clock`（`@mate/clock`） | 时钟：`now` 和可中止的 `sleep`，各模块共用，测试里换成可控时钟 |
+| `packages/gateway`（`@mate/gateway`） | node 网关 |
+| `packages/control-store`（`@mate/control-store`） | 控制库：几个模块共用 `control.sqlite` 时，各自打开自己的表并按模块检查结构版本 |
+| `packages/admin`（`@mate/admin`） | 管理模块：Agent 的生命周期和设置、提供商的 API key、模型目录、node 配对、观察 Agent；它打开 Agent Manager，并把 node 网关接成工作区宿主 |
+| `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |
+| `apps/control-plane`（`@mate/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
+| `apps/web`（`@mate/web`） | 前端 |
+| `apps/node`（`@mate/node`） | node 进程和 `mate node` CLI |
+| `tests/system`（`@mate/system-tests`） | 起真实控制面和 node 进程的系统场景（MODULE_TESTS 第 12 节） |
+
 ## 4. 模块
 
-每个模块都按同一结构写：职责、不负责什么、对外接口、持久化、关键规则。接口用伪 TypeScript 描述形状，实际签名在实现时由 Zod schema 推导。
+每个模块都按同一结构写：职责、不负责什么、对外接口、持久化、关键规则。接口用伪 TypeScript 描述形状，实际签名由 Zod schema 推导。
 
 ### 4.1 聊天 app
 
@@ -92,7 +109,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 - 讨论串回复：只通知**关注**这个讨论串、并且还能读这个会话的人。关注者是根消息的作者、回复过的人，以及在这个讨论串里被 @ 过的人（包括这条回复 @ 的人）。
 - 私信：通知对方。
 - 所有者能读所有会话，但和别的账号一样，只在上面这些情况下收到通知：没加入的频道里的顶层消息不通知所有者。
-- 首个版本不做静音。
+- 不做静音。
 - "谁关注哪条时间线"只有一个定义（`chat.sqlite` 里的 `followed_timelines` 视图）：会话顶层由成员关注，讨论串由上面的关注者关注。收件事件发给关注者，未读摘要列的也正是关注的时间线，两者不会不一致。"谁能读哪个会话"同样只有一个定义（`readable_conversations` 视图），所有可见性判断都从它查。
 
 **对外接口：** 所有操作都以某个账号的身份调用。人（经过 Web 外壳）和 Agent（经过聊天工具）用的是同一套接口。
@@ -200,7 +217,7 @@ interface ChatApp {
 
 | 扩展 | 内容 | 谁能用 |
 |---|---|---|
-| 聊天 | 读未读、回看历史、搜索、发送、加入或离开频道、打开私信、任务操作（发布附件在首版之后） | 只有主对话 |
+| 聊天 | 读未读、回看历史、搜索、发送、加入或离开频道、打开私信、任务操作（还不能发布附件） | 只有主对话 |
 | 工作区 | `bash`、`bash_stop`、`read`、`write`、`edit`，在 node 上执行（见 4.5）。后台命令结束时，结果经投递作为一条输入提交给发起它的对话 | 主对话和助手 |
 | 提醒 | 设定、列出、取消提醒 | 主对话 |
 | 助手 | 派生助手、给助手发消息、等待、中断、列出（参照 Durable 的 `23-subagent-background` 示例） | 主对话 |
@@ -372,7 +389,7 @@ interface NodeGateway {
 2. **node 离线时 Agent 照常运行**，需要 node 的工具直接返回"节点离线"错误。
 3. **连接断开时，node 停掉那些已经没人等结果的进程组。** Agent 有意放到后台、脱离了进程组的进程（比如 `setsid`），由 Agent 自己负责。
 4. **执行前只检查工作目录是否存在。** 不检查 `MEMORY.md` 的权限，也不检查任何 Agent 能自己改动的文件：Agent 改动自己的文件，不应该让自己的命令全部失败。工作目录没有标记文件：它的路径记在 Agent 自己的文件里，只由创建流程生成。
-5. 沿用旧实现中与架构无关的执行细节：进程组、僵尸进程判断、PID 复用防护、后台子进程占住输出管道时短暂等待后返回并标明、按序列化后的大小检查帧长度。
+5. 与架构无关的执行细节：进程组、僵尸进程判断、PID 复用防护、后台子进程占住输出管道时短暂等待后返回并标明、按序列化后的大小检查帧长度。
 6. **谁在等结果，谁决定停。** 停止只有一种方式：调用方中止自己那次调用的 signal，网关就向 node 发这次调用的停止消息，node 杀掉它的命令进程组；命令已经返回、只剩后台进程占着输出时收到停止，也杀掉那些后台进程。暂停 Agent 就是关闭它的 runtime，runtime 中止所有进行中调用的 signal，所以不需要另一个"按 Agent 停止"的入口。node 按连接记录进行中的调用，连接断开停掉这条连接上的所有进行中调用；node 自己关闭时杀掉它启动的所有还有活进程的命令进程组。
 7. **身份被拒绝时退出，网络失败时退避重连。** 网关拒绝 node 的身份或配对令牌时发 `gateway.refused`，node 进程以非零码退出，不重试（`unknown_identity` 而 node 手里有令牌时除外，见第 8 条）；网关因为用法出错结束连接（格式错误、顺序错误、握手超时、内部错误）时发 `gateway.error`，node 和连不上、连接中断时一样，从 250ms 起倍增、最多 10 秒重连。退出还是重连由消息类型决定，node 不维护错误码清单。
 8. **先签名，令牌只在"不认识"之后用。** node 每次连接都先用签名认证，只有网关对这次认证明确回答 `unknown_identity`，才改用配对令牌；连不上、连接中断、握手超时都只是重连，下一次仍先用签名。配对令牌只存 SHA-256 哈希，只能用一次，过期作废。配对只会新增 node：已经配对过的 node ID 不能再配对，它的公钥不变，这次用的令牌也不算用掉。
@@ -433,7 +450,7 @@ interface Admin {
 
 拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。每个拒绝都是 `AdminError`（或上面这种 `ChatError`）：对 Agent 的操作排在该 Agent 的队列里执行，排队期间 Agent 被删掉，同样是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
 
-**模型和 API key：** 模型来自 pi-ai 自带的目录（runtime 的 `catalogModels`，Agent 的请求也在这个目录里解析）。首版提供 OpenAI（Responses API）和 DeepSeek 两家；凭据按提供商存 `{ apiKey, baseUrl? }`，`baseUrl` 替换目录里这个提供商所有模型的地址。设置模型时先检查（创建 Agent 时也一样，在任何东西被创建之前）：提供商是这两家之一、已经存了 key、目录里有这个模型、thinking 级别在这个模型接受的级别里。不接受的级别直接拒绝，不降级。runtime 每次模型请求都现读凭据，所以改了 key 从下一次请求起生效，再存一次同样的值不影响任何正在运行的 Agent；删了 key，这个提供商的请求不发出就失败。
+**模型和 API key：** 模型来自 pi-ai 自带的目录（runtime 的 `catalogModels`，Agent 的请求也在这个目录里解析）。管理界面提供 OpenAI（Responses API）和 DeepSeek 两家；凭据按提供商存 `{ apiKey, baseUrl? }`，`baseUrl` 替换目录里这个提供商所有模型的地址。设置模型时先检查（创建 Agent 时也一样，在任何东西被创建之前）：提供商是这两家之一、已经存了 key、目录里有这个模型、thinking 级别在这个模型接受的级别里。不接受的级别直接拒绝，不降级。runtime 每次模型请求都现读凭据，所以改了 key 从下一次请求起生效，再存一次同样的值不影响任何正在运行的 Agent；删了 key，这个提供商的请求不发出就失败。
 
 **观察：** `watchAgent` 就是 runtime 的 `watchEvents`：Durable 的 agent 事件原样交出去，第一批是快照，之后是流式文字、工具调用和它们的输出、输入、用量。观察只读，不改变 Agent 的任何状态。关闭的 Agent 没有可看的，拒绝为 `agent-closed`。
 
@@ -509,15 +526,14 @@ Manager 扫描 `data/agents/`，打开所有没有暂停的 Agent：
 data/
   control.sqlite              所有者的密码哈希和登录会话、VAPID 密钥、API key、node 注册表（0600）
   chat.sqlite                 聊天 app 的全部数据（含附件元数据和推送队列）
-  attachments/                附件文件（首版之后）
+  attachments/                附件文件（还没有实现）
   agents/<agentId>.sqlite     每个 Agent 的 Durable 存储（含配置、提醒、连接器位置）
 ```
 
-搬到另一台 VPS：停掉容器，复制 `data/`，启动。所有数据库都不做迁移，表结构不匹配就拒绝启动（ADR-0002）。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5。
+搬到另一台 VPS：停掉容器，复制 `data/`，启动。所有数据库都不做迁移，表结构不匹配就拒绝启动。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5。
 
 ## 7. 部署
 
-沿用 ADR-0009：
 - **控制面**：Docker 镜像加单服务 Compose，容器以一个专用的无登录系统账号的 UID/GID 运行，数据目录只属于它。node 账号（Agent 命令的身份）读不到模型凭据和对话库，也不在 docker 组里。
 - **node**：完整发布包，自带 Node 运行时和 `mate node` CLI，以宿主现有账号的 systemd 用户服务运行。发布包是一个 ustar 归档加旁边的 `.sha256`：官方 Node 24 二进制（构建脚本里钉死校验和），esbuild 把 node 程序和 CLI 打成的一个脚本，`mate` 启动命令，以及列出所有文件的清单。没有原生依赖，所以两种架构都在任何机器上构建。CLI 没有下载步骤，发布包由所有者自己拷到机器上。
 - **`mate node` 不记"做到哪一步"**（第 11 节第 1 条）。程序目录 `~/.local/lib/mate-node` 由暂存目录改名放入、改名挪开再删，所以要么是完整的某个版本，要么不存在；`install`、`update`、`uninstall` 只看程序目录、`~/.local/bin/mate`、单元文件和服务状态这几样现有状态决定做什么，配置、身份和工作区在程序目录之外，它们从不碰。清单同时说明程序目录里哪些文件是 Mate 的：有别的文件时 `update` 和 `uninstall` 拒绝，不删别人的东西。`install` 从不启动服务，`update` 只在服务完全停止时动手，之后也不启动。状态到动作的完整对照见 DEPLOYMENT §3.2。
@@ -532,7 +548,7 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 - 时钟：可控制的时钟；
 - 存储：临时文件。
 
-失败和恢复路径与正常路径同等重要：在指定的提交点之前或之后崩溃，再重启。每个模块具体测什么，写在 `docs/rewrite/MODULE_TESTS.md`（下一份文档）。
+失败和恢复路径与正常路径同等重要：在指定的提交点之前或之后崩溃，再重启。每个模块具体测什么，写在 [MODULE_TESTS.md](MODULE_TESTS.md)。
 
 ## 9. 旧问题在新结构下为什么不会出现
 
@@ -544,7 +560,7 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 | OwnerChat 是一个什么都管的大服务 | 消息、投递、run 完成、提醒共享事务 | 聊天 app 只管聊天事实，不知道 run |
 | "这条投递被 Durable 收下了"的确认，可能在两个库之间丢失 | 业务库确认 + 恢复时对账 | 事件 ID 就是 `requestId`，Durable 去重，不需要确认 |
 | 忙碌通知可能饿死、重复，被撤回后丢失 | SQL 排除已通知的、内存备忘、后继 ID | 同一时间最多一条没交给模型的通知，新的替换旧的 |
-| 新鲜度用"最高序号"实现，被只读最新一页绕过（96c8097d） | 改成逐条记录"给谁看过哪些" | 只能从已读位置往后读；跳过的区间在结果里明确交代 |
+| 新鲜度用"最高序号"实现，被只读最新一页绕过 | 改成逐条记录"给谁看过哪些" | 只能从已读位置往后读；跳过的区间在结果里明确交代 |
 | 读取推进了已读位置，但工具结果没提交就崩溃，导致丢一页 | 读取和"已展示"写在同一事务里 | 按工具调用 ID 存读取回执，重做时原样返回 |
 | 改配置后要用配置哈希作废已准备的请求 | 哈希、全部中止、重新配置 | 不追溯，下一次请求起生效 |
 | 用量统计反复重写 | 从原始 SSE 里抠数字 | 只读 Durable 的 `pi.usage`，只做观察 |
@@ -556,7 +572,7 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 
 ## 10. 不变的产品决定
 
-下面这些沿用旧设计，重写时不重新讨论：
+下面这些是产品层面的前提，改架构时不重新讨论：
 - 每个 Agent 一个主上下文，跨频道、讨论串、私信延续；不同 Agent 的上下文互相独立。
 - 模型的普通输出不发到任何地方，发言只通过发送工具。
 - 不设 token、费用、run 次数配额。
@@ -567,18 +583,18 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 - 一个所有者，中文界面，适配手机。
 - 规模很小：一个所有者，少量 Agent（模型费用决定了不会多），消息量不大。不为数据量做性能优化或分页之类的设计，除非测量证明确实有问题；结构简单优先。
 
-## 11. 已决定的问题
+## 11. 决定记录
 
-下面这些曾是待定问题，所有者在 2026-10-17 给了回答。每条写明决定和它落在本文哪里。
+下面这些决定各自写明它落在本文哪里。
 
 | # | 问题 | 决定 | 落在 |
 |---|---|---|---|
 | 1 | node 安装器要不要一套可续做的文件状态机？ | 不要。`mate node` 的每个命令都从现有状态推出该做什么，不记"做到哪一步"：程序目录整个替换，配置、身份和工作区放在程序目录之外，从不被安装、更新、卸载动到。中途失败就重跑同一个命令；重跑不了就删掉程序目录重装，Agent 的 `MEMORY.md` 等资料不会丢 | 4.5、第 7 节、MODULE_TESTS 第 9 节 |
-| 2 | 首个真实接入的模型提供商？ | 走 pi-ai 自带的模型目录，不自己写协议。首版在管理界面里提供 OpenAI（Responses API）和 DeepSeek（例如 `deepseek-flash`，用于便宜地测试）。API key 按提供商存 | 4.6 |
+| 2 | 接哪些模型提供商？ | 走 pi-ai 自带的模型目录，不自己写协议。管理界面提供 OpenAI（Responses API）和 DeepSeek（例如 `deepseek-flash`，用于便宜地测试）。API key 按提供商存 | 4.6 |
 | 3 | 上下文压缩用哪个模型？Agent 知不知道被压缩？ | 用 Durable 自带的压缩（`settings.compaction`），摘要由这个对话自己的模型写，失败或被截断的摘要不生效，Durable 保证。被压缩掉的记录仍在存储里，历史工具读它们；历史扩展的系统提示告诉 Agent "更早的记录可以用历史工具查" | 4.2 |
 | 4 | bash 没有时限时会一直占着 Agent，要不要默认上限？ | 参照 Claude Code 的后台命令：`bash` 加 `background` 参数。前台命令默认 10 分钟、最多 1 小时，跑命令期间 Agent 不处理别的；后台命令立即返回一个命令 ID，Agent 继续工作，命令结束时结果作为一条输入（`command:<ID>`）提交给发起它的对话（主对话或工作助手），可以用 `bash_stop` 停掉。后台命令最多跑一天 | 4.2、4.5 |
 | 5 | node 注册表放 `nodes.sqlite` 还是 `control.sqlite`？ | 统一放 `control.sqlite`，尽量少分文件。控制面里的网关、登录和管理模块共用这一个文件，各自建自己的表 | 4.5、4.6、第 6 节 |
 | 6 | 一个 Agent 用哪个 node？ | 创建 Agent 时从已配对的 node 列表里选一个，只有一个就只能选它。node ID 记在 Agent 自己的文件里，之后不变 | 4.4 |
-| 7 | 首版要不要 Web Push 和附件？ | 推送在 M6 做；附件推到首版之后，首版的聊天接口没有附件参数 | 4.1、PLAN |
-| 8 | 正式发布前每次升级可能要换空数据目录？ | 可以接受 | 第 6 节 |
-| 9 | 要不要 CI？ | 要。GitHub Actions 跑 `pnpm check` 和 `pnpm test:linux`。正式发布前推送分支不需要再问所有者 | PLAN |
+| 7 | 要不要 Web Push 和附件？ | 要推送；聊天接口接受附件元数据，但附件文件的上传和存储还没有实现 | 4.1 |
+| 8 | 数据库结构变了怎么升级？ | 不迁移，换一个空数据目录 | 第 6 节 |
+| 9 | 要不要 CI？ | 要。GitHub Actions 在每次推送时跑 `pnpm check` 和 `pnpm test:linux`；`v*` 标签在两者通过后发布镜像和 node 发布包 | `.github/workflows/ci.yml` |
