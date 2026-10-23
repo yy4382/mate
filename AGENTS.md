@@ -7,5 +7,5 @@
 - Fix a recurring class of bug by changing the structure until it cannot occur, not by adding a guard for one case.
 - When a decision changes, update the docs in the same commit and delete the code it supersedes.
 - Use pnpm.
-- Commit to local branches. Push only when the user asks.
+- Commit to local branches. A minor improvement or bug fix ships without asking: open a PR, merge it once CI is green, then push the next `v*` tag, which deploys it (`docs/DEPLOYMENT.md` 5.5); report the version. Anything larger, anything that migrates a store, and changes to the deploy itself wait for the user on the PR.
 - Talk to the user in Chinese.

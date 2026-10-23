@@ -1,0 +1,125 @@
+#!/bin/bash
+# Upgrade a same-host Mate deployment (DEPLOYMENT.md 5.3, 5.5) to one released version, and roll back on failure.
+# Runs as root, as the forced command of the deploy SSH key: `deploy <version> <sha256>` arrives in
+# SSH_ORIGINAL_COMMAND (or as arguments), and the node bundle for this host's architecture arrives on stdin.
+# Settings come from /etc/mate-deploy.env (see mate-deploy.env.example).
+set -Eeuo pipefail
+
+CONFIG=${MATE_DEPLOY_CONFIG:-/etc/mate-deploy.env}
+# shellcheck source=/dev/null
+. "$CONFIG"
+: "${MATE_PLANE_DIR:?} ${MATE_NODE_USER:?} ${MATE_IMAGE_REPO:?} ${MATE_HEALTH_URL:?}"
+STATE=${MATE_DEPLOY_STATE:-/var/lib/mate-deploy}
+KEEP=${MATE_KEEP_BACKUPS:-5}
+
+read -r -a request <<<"${SSH_ORIGINAL_COMMAND:-$*}"
+if [ "${#request[@]}" -ne 3 ] || [ "${request[0]}" != deploy ] ||
+  ! [[ ${request[1]} =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
+  ! [[ ${request[2]} =~ ^[0-9a-f]{64}$ ]]; then
+  echo "usage: deploy <version> <sha256 of the node bundle>, with the bundle on stdin" >&2
+  exit 2
+fi
+VERSION=${request[1]}
+SHA256=${request[2]}
+
+mkdir -p "$STATE/bundles" "$MATE_PLANE_DIR/backups"
+exec 9>"$STATE/lock"
+flock -n 9 || { echo "another deploy is running" >&2; exit 1; }
+
+case "$(uname -m)" in
+  x86_64) ARCH=x64 ;;
+  aarch64) ARCH=arm64 ;;
+  *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;;
+esac
+bundle_of() { echo "$STATE/bundles/mate-node-$1-linux-$ARCH.tar.gz"; }
+NEW_BUNDLE=$(bundle_of "$VERSION")
+
+node_user_id=$(id -u "$MATE_NODE_USER")
+mate_node() {
+  runuser -u "$MATE_NODE_USER" -- env XDG_RUNTIME_DIR="/run/user/$node_user_id" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$node_user_id/bus" \
+    "$(getent passwd "$MATE_NODE_USER" | cut -d: -f6)/.local/bin/mate" node "$@"
+}
+node_version() { mate_node status | sed -n 's/^Program: \([^ ]*\) .*/\1/p'; }
+plane_image() { sed -n 's/^MATE_IMAGE=//p' "$MATE_PLANE_DIR/.env"; }
+set_image() { sed -i "s|^MATE_IMAGE=.*|MATE_IMAGE=$1|" "$MATE_PLANE_DIR/.env"; }
+compose() { (cd "$MATE_PLANE_DIR" && docker compose "$@"); }
+# Hands the bundle to the node account, which `mate node update` runs as.
+update_node() {
+  local copy
+  copy=$(runuser -u "$MATE_NODE_USER" -- mktemp -d)
+  install -o "$MATE_NODE_USER" -m 0644 "$1" "$1.sha256" "$copy/"
+  mate_node update "$copy/$(basename "$1")"
+  rm -rf "$copy"
+}
+healthy() {
+  [ "$(curl -s -o /dev/null -w '%{http_code}' "$MATE_HEALTH_URL/api/me")" = 401 ] &&
+    [ "$(curl -s -o /dev/null -w '%{http_code}' "$MATE_HEALTH_URL/login")" = 200 ]
+}
+
+tmp=$(mktemp "$NEW_BUNDLE.XXXXXX")
+cat >"$tmp"
+if [ "$(sha256sum "$tmp" | cut -d' ' -f1)" != "$SHA256" ]; then
+  rm -f "$tmp"
+  echo "the bundle on stdin does not match $SHA256" >&2
+  exit 1
+fi
+mv "$tmp" "$NEW_BUNDLE"
+echo "$SHA256  $(basename "$NEW_BUNDLE")" >"$NEW_BUNDLE.sha256"
+
+NEW_IMAGE=$MATE_IMAGE_REPO:$VERSION
+OLD_IMAGE=$(plane_image)
+OLD_VERSION=$(node_version)
+if [ "$OLD_IMAGE" = "$NEW_IMAGE" ] && [ "$OLD_VERSION" = "$VERSION" ]; then
+  echo "already at $VERSION"
+  exit 0
+fi
+OLD_BUNDLE=$(bundle_of "$OLD_VERSION")
+[ -f "$OLD_BUNDLE" ] || { echo "no bundle of the running node $OLD_VERSION at $OLD_BUNDLE to roll back to" >&2; exit 1; }
+docker pull --quiet "$NEW_IMAGE"
+
+BACKUP=""
+rollback() {
+  echo "== deploy of $VERSION failed; rolling back to $OLD_IMAGE and node $OLD_VERSION" >&2
+  trap - ERR
+  set +e
+  mate_node stop
+  compose down
+  if [ -n "$BACKUP" ]; then
+    rm -rf "$MATE_PLANE_DIR/data"
+    cp -a "$BACKUP" "$MATE_PLANE_DIR/data"
+  fi
+  set_image "$OLD_IMAGE"
+  compose up -d --wait
+  [ "$(node_version)" = "$OLD_VERSION" ] || update_node "$OLD_BUNDLE"
+  mate_node start
+  healthy && echo "rolled back; $OLD_VERSION is running" >&2 || echo "ROLLBACK FAILED; see docker compose logs" >&2
+  exit 1
+}
+trap rollback ERR
+
+echo "== stop node $OLD_VERSION and the control plane"
+mate_node stop
+compose down
+copy=$MATE_PLANE_DIR/backups/before-$VERSION-$(date +%Y%m%d-%H%M%S)
+echo "== back up data to $copy"
+cp -a "$MATE_PLANE_DIR/data" "$copy"
+# Only a complete copy may replace the data on rollback.
+BACKUP=$copy
+
+echo "== start control plane $NEW_IMAGE"
+set_image "$NEW_IMAGE"
+compose up -d --wait
+healthy || { compose logs --tail 50; false; }
+
+echo "== update and start node"
+update_node "$NEW_BUNDLE"
+mate_node start
+sleep 15
+mate_node status | grep -x 'Service: active, enabled' >/dev/null || { mate_node logs --lines 50; false; }
+healthy
+trap - ERR
+
+ls -1dt "$MATE_PLANE_DIR"/backups/before-* | tail -n "+$((KEEP + 1))" | xargs -r rm -rf
+find "$STATE/bundles" -name 'mate-node-*' ! -name "$(basename "$NEW_BUNDLE")*" ! -name "$(basename "$OLD_BUNDLE")*" -delete
+echo "== $VERSION is running; backup at $BACKUP"

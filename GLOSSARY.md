@@ -255,6 +255,10 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-node/` 一个目录（Node 运行时、打成一个脚本的 node 程序和 CLI、`mate` 启动命令、清单），旁边是它的 `.sha256`。由 `pnpm bundle:node` 构建，`mate node install`/`update` 读取。
 避免：安装包、release（指 GitHub 的发布页时才用）。
 
+**自动部署**（deploy）
+推送 `v*` 标签发版之后，CI 的 Deploy 任务经一把只能执行 `mate-deploy` 的 SSH key，把同机部署的控制面和 node 升级到这个版本；先备份数据目录，失败就回退到原版本和这份备份（DEPLOYMENT 5.5）。
+避免：把推到 main 叫部署（只有发版才部署）。
+
 **清单**（manifest）
 发布包和程序目录里的 `manifest.json`：版本、平台、架构，以及其余每个文件的路径。它同时是"程序目录里哪些文件属于 Mate"的唯一依据。
 
