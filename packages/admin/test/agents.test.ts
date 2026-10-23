@@ -95,6 +95,7 @@ describe("listing Agents", () => {
     const byId = new Map((await admin.agents()).map((agent) => [agent.agentId, agent]));
 
     expect(byId.get(richard)).toMatchObject({
+      accountId: account,
       displayName: "Richard",
       handle: "richard",
       nodeId: node.nodeId,

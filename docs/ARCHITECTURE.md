@@ -431,7 +431,7 @@ interface NodeGateway {
 // gateway 只需 nodes、createPairingToken、prepareWorkspace、runTool、browse
 openAdmin({ dataDirectory, chat, owner, gateway, clock?, report? }): Admin
 interface Admin {
-  // 每个 Agent：显示名和 handle（聊天账号的）、nodeId、state（open | paused | closed）、settings、usage。
+  // 每个 Agent：聊天账号 ID、显示名和 handle（聊天账号的）、nodeId、state（open | paused | closed）、settings、usage。
   // 文件读不出来的 Agent 以 state: "unreadable" 和 problem 列出，所有者可以删掉它
   agents(): AgentView[]
   createAgent({ agentId?, nodeId, displayName, handle, settings }): AgentId // node 必须已配对；名字、handle 和 agentId（必须是小写 UUID）在边界检查；中途失败时 reject AgentCreationFailed

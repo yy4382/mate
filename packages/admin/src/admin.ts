@@ -66,8 +66,12 @@ export type AdminOptions = {
   readonly report?: (error: unknown, agentId: string) => void;
 };
 
-/** An Agent's names, which are its chat account's. */
-type AgentNames = { readonly displayName: string; readonly handle: string };
+/** An Agent's identity in chat, which is its chat account's. */
+type AgentNames = {
+  readonly accountId: number;
+  readonly displayName: string;
+  readonly handle: string;
+};
 
 /**
  * An Agent as the owner sees it: its names, and what its own file says. An Agent that cannot be described (its file
@@ -142,7 +146,11 @@ export class Admin {
       this.#manager.list().map(async ({ agentId }): Promise<AgentView | undefined> => {
         const account = this.#chat.findAccount(agentId);
         const view = account === undefined ? undefined : accounts.get(account);
-        const names = view && { displayName: view.displayName, handle: view.handle };
+        const names = view && {
+          accountId: view.accountId,
+          displayName: view.displayName,
+          handle: view.handle,
+        };
         try {
           if (names === undefined) throw new Error(`Agent ${agentId} has no chat account`);
           return { ...names, ...(await this.#manager.describe(agentId)) };
