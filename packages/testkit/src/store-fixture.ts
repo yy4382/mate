@@ -6,6 +6,8 @@ import { temporaryDirectory } from "./temporary-directory.ts";
 /** What `scripts/make-store-fixture.ts` recorded about the data it built, for a test to check against. */
 export type StoreFacts = {
   readonly ownerPassword: string;
+  /** A login session token the version issued the owner, still live when the fixture was built. */
+  readonly ownerSessionToken: string;
   readonly openaiApiKey: string;
   readonly pairingToken: string;
   /** The Agents' chat accounts' external IDs. */
