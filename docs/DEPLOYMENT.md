@@ -221,7 +221,7 @@ mate node start
 
 ### 5.5 自动部署
 
-控制面和 node 在同一台机器上时，可以让 CI 在每次发版后自动升级：推送 `v*` 标签，检查通过、镜像和发布包发布之后，`.github/workflows/ci.yml` 的 Deploy 任务用一把专用 SSH key 连到这台机器，执行 `deploy/auto-update/mate-deploy`，把 5.3 的步骤做一遍。没有预发环境，所以每次部署都先备份数据目录，失败就自动回退。
+控制面和 node 在同一台机器上时，可以让 CI 在每次发版后自动升级：推送 `v*` 标签（标签要打在 main 上的提交上；它不重跑检查，而是等这个提交在 main 上的检查通过，没通过就不发版，重跑 main 上失败的检查后再重跑发版任务），镜像和发布包发布之后，`.github/workflows/ci.yml` 的 Deploy 任务用一把专用 SSH key 连到这台机器，执行 `deploy/auto-update/mate-deploy`，把 5.3 的步骤做一遍。没有预发环境，所以每次部署都先备份数据目录，失败就自动回退。
 
 `mate-deploy` 以 root 运行，从 SSH 拿到 `deploy <版本> <sha256>`，从标准输入拿到这台机器架构的 node 发布包：
 

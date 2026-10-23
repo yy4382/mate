@@ -1,9 +1,12 @@
 name: Checks
 
-# A v* tag runs the same checks, and the release job publishes only after both pass.
+# A pull request and main run the checks once each. A v* tag does not run them again: the release job waits for
+# them to pass on main for the tagged commit, then publishes and deploys.
 
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -12,6 +15,7 @@ permissions:
 jobs:
   check:
     name: pnpm check
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -26,12 +30,18 @@ jobs:
           node-version: "24"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The page tests (apps/web) drive headless Chromium.
-      - run: pnpm --filter @mate/web exec playwright install --with-deps chromium-headless-shell
+      # The page tests (apps/web) drive headless Chromium. The runner image already has its system libraries, so
+      # only the browser is fetched, once per Playwright version (`--with-deps` spent 6-10 minutes in apt).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - run: pnpm --filter @mate/web exec playwright install chromium-headless-shell
       - run: pnpm check
 
   test-linux:
     name: pnpm test:linux
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -49,15 +59,34 @@ jobs:
   release:
     name: Image and node bundles
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [check, test-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: write
       packages: write
+      checks: read
     env:
       VERSION: ${{ github.ref_name }}
     steps:
+      - name: Wait for the checks to pass on main for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)
+          case "$status" in identical | behind) ;; *) echo "$VERSION is not on main ($status)"; exit 1 ;; esac
+          # The latest run of each check decides, so a rerun that passes counts; this run's own skipped jobs do not.
+          for _ in $(seq 120); do
+            latest=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" --jq '
+              [.check_runs[] | select((.name == "pnpm check" or .name == "pnpm test:linux") and .conclusion != "skipped")]
+              | group_by(.name) | map(max_by(.started_at) | .conclusion // "pending") | join(",")')
+            echo "checks: $latest"
+            case "$latest" in
+              success,success) exit 0 ;;
+              *failure* | *cancelled* | *timed_out*) echo "a check did not pass for $GITHUB_SHA"; exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "the checks did not finish in 20 minutes"; exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -124,5 +153,5 @@ jobs:
           chmod 0600 ~/.ssh/deploy
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           bundle="mate-node-${VERSION#v}-linux-$ARCH.tar.gz"
-          ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o BatchMode=yes "$HOST" \
-            "deploy ${VERSION#v} $(sha256sum "$bundle" | cut -d' ' -f1)" < "$bundle"
+          sha=$(sha256sum "$bundle" | cut -d' ' -f1)
+          ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o BatchMode=yes "$HOST" "deploy ${VERSION#v} $sha" < "$bundle"
