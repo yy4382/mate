@@ -1,9 +1,22 @@
 import type { Admin } from "@mate/admin";
 import type { ChatApp } from "@mate/chat";
 import { streamAgent, streamLive, type EventStream } from "./event-stream.ts";
+import type { Role } from "./humans.ts";
 import { forwarded, HttpError } from "./http.ts";
 
+/** The human a request acts as. */
+export type Requester = {
+  /** Their chat account. */
+  readonly account: number;
+  /** The external ID linking the chat account to the shell's record of them. */
+  readonly externalId: string;
+  readonly role: Role;
+  /** The session token the request carries. */
+  readonly token: string;
+};
+
 export type RouteInput = {
+  readonly human: Requester;
   readonly params: Readonly<Record<string, string>>;
   readonly query: URLSearchParams;
   readonly body: unknown;
@@ -12,16 +25,29 @@ export type RouteInput = {
 };
 
 /**
- * One owner operation over HTTP. A `json` route answers with what it returns (204 when that is undefined); a `stream`
- * route answers with server-sent events. `path` segments starting with `:` are parameters.
+ * One operation of the logged-in human over HTTP. A `json` route answers with what it returns (204 when that is
+ * undefined); a `stream` route answers with server-sent events. `path` segments starting with `:` are parameters.
+ * An `admin` route answers a member with 403 `admin-only` before it looks at the request body.
  */
 export type Route = {
-  readonly method: "GET" | "POST" | "PUT" | "DELETE";
+  readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   readonly path: string;
+  readonly admin?: true;
 } & (
   | { readonly json: (input: RouteInput) => unknown }
   | { readonly stream: (input: RouteInput, stream: EventStream) => Promise<void> }
 );
+
+/** Marks every route as admin-only. */
+export function adminOnly(routes: Route[]): Route[] {
+  return routes.map((route) => ({ ...route, admin: true }));
+}
+
+/** Refuse a member the routes marked `admin`. */
+export function requireRole(route: Route, human: Requester): void {
+  if (route.admin === true && human.role !== "admin")
+    throw new HttpError(403, "admin-only", "only an admin may do this");
+}
 
 type Send = Parameters<ChatApp["send"]>;
 type Read = Parameters<ChatApp["readUnread"]>;
@@ -56,14 +82,15 @@ function numbersIn(query: URLSearchParams, ...names: string[]): Record<string, n
 }
 
 /**
- * The chat app as the owner uses it. The web client sends without the freshness check: the owner watches the timeline
- * live, and showing an entry is what advances the owner's read position (`read`).
+ * The chat app as the requesting human uses it, always as their own account. The web client sends without the
+ * freshness check: the human watches the timeline live, and showing an entry is what advances their read position
+ * (`read`).
  */
-export function chatRoutes(chat: ChatApp, owner: number, vapidPublicKey: string): Route[] {
+export function chatRoutes(chat: ChatApp, vapidPublicKey: string): Route[] {
   const conversationAction =
     (action: "join" | "leave" | "archiveChannel") =>
-    ({ params, body }: RouteInput) =>
-      chat[action](owner, {
+    ({ human, params, body }: RouteInput) =>
+      chat[action](human.account, {
         ...forwarded<{ requestId: string }>(body),
         conversationId: Number(params.id),
       });
@@ -71,59 +98,71 @@ export function chatRoutes(chat: ChatApp, owner: number, vapidPublicKey: string)
     {
       method: "GET",
       path: "/api/chat/snapshot",
-      json: ({ query }) => {
+      json: ({ human, query }) => {
         const timeline = timelineIn(query);
-        return chat.liveSnapshot(owner, timeline === undefined ? {} : { timeline });
+        return chat.liveSnapshot(human.account, timeline === undefined ? {} : { timeline });
       },
     },
     {
       method: "GET",
       path: "/api/chat/events",
-      stream: ({ query, lastEventId }, stream) => {
+      stream: ({ human, query, lastEventId }, stream) => {
         const cursor = lastEventId ?? query.get("cursor");
         if (cursor === null)
           throw new HttpError(400, "invalid-input", "follow a snapshot's cursor: cursor=<cursor>");
-        return streamLive(stream, chat, owner, cursor);
+        return streamLive(stream, chat, human.account, cursor);
       },
     },
-    { method: "GET", path: "/api/chat/conversations", json: () => chat.listConversations(owner) },
-    { method: "GET", path: "/api/chat/unread", json: () => chat.unreadSummary(owner) },
+    {
+      method: "GET",
+      path: "/api/chat/conversations",
+      json: ({ human }) => chat.listConversations(human.account),
+    },
+    {
+      method: "GET",
+      path: "/api/chat/unread",
+      json: ({ human }) => chat.unreadSummary(human.account),
+    },
     {
       method: "GET",
       path: "/api/chat/history",
-      json: ({ query }) =>
-        chat.readHistory(owner, requireTimeline(query), numbersIn(query, "before", "limit")),
+      json: ({ human, query }) =>
+        chat.readHistory(
+          human.account,
+          requireTimeline(query),
+          numbersIn(query, "before", "limit"),
+        ),
     },
     {
       method: "GET",
       path: "/api/chat/search",
-      json: ({ query }) => chat.search(owner, query.get("q") ?? ""),
+      json: ({ human, query }) => chat.search(human.account, query.get("q") ?? ""),
     },
     {
       method: "POST",
       path: "/api/chat/read",
-      json: ({ body }) => {
+      json: ({ human, body }) => {
         const { timeline, ...request } = forwarded<{ timeline: Read[1] } & Read[2]>(body);
-        return chat.readUnread(owner, timeline, request);
+        return chat.readUnread(human.account, timeline, request);
       },
     },
     {
       method: "POST",
       path: "/api/chat/messages",
-      json: ({ body }) => {
+      json: ({ human, body }) => {
         const { timeline, ...request } = forwarded<{ timeline: Send[1] } & Send[2]>(body);
-        return chat.send(owner, timeline, { ...request, freshness: false });
+        return chat.send(human.account, timeline, { ...request, freshness: false });
       },
     },
     {
       method: "POST",
       path: "/api/chat/channels",
-      json: ({ body }) => chat.createChannel(owner, forwarded(body)),
+      json: ({ human, body }) => chat.createChannel(human.account, forwarded(body)),
     },
     {
       method: "POST",
       path: "/api/chat/dms",
-      json: ({ body }) => chat.openDm(owner, forwarded(body)),
+      json: ({ human, body }) => chat.openDm(human.account, forwarded(body)),
     },
     {
       method: "POST",
@@ -143,8 +182,8 @@ export function chatRoutes(chat: ChatApp, owner: number, vapidPublicKey: string)
     {
       method: "POST",
       path: "/api/chat/conversations/:id/invite",
-      json: ({ params, body }) =>
-        chat.invite(owner, {
+      json: ({ human, params, body }) =>
+        chat.invite(human.account, {
           ...forwarded<Omit<Parameters<ChatApp["invite"]>[1], "conversationId">>(body),
           conversationId: Number(params.id),
         }),
@@ -152,13 +191,14 @@ export function chatRoutes(chat: ChatApp, owner: number, vapidPublicKey: string)
     {
       method: "POST",
       path: "/api/chat/tasks",
-      json: ({ body }) => chat.createTask(owner, { ...forwarded(body), freshness: false }),
+      json: ({ human, body }) =>
+        chat.createTask(human.account, { ...forwarded(body), freshness: false }),
     },
     {
       method: "POST",
       path: "/api/chat/tasks/:id/change",
-      json: ({ params, body }) =>
-        chat.changeTask(owner, {
+      json: ({ human, params, body }) =>
+        chat.changeTask(human.account, {
           ...forwarded<Omit<Parameters<ChatApp["changeTask"]>[1], "taskId">>(body),
           taskId: Number(params.id),
           freshness: false,
@@ -172,21 +212,21 @@ export function chatRoutes(chat: ChatApp, owner: number, vapidPublicKey: string)
     {
       method: "POST",
       path: "/api/chat/push/subscribe",
-      json: ({ body }) => chat.subscribePush(owner, forwarded(body)),
+      json: ({ human, body }) => chat.subscribePush(human.account, forwarded(body)),
     },
     {
       method: "POST",
       path: "/api/chat/push/unsubscribe",
-      json: ({ body }) => chat.unsubscribePush(owner, forwarded(body)),
+      json: ({ human, body }) => chat.unsubscribePush(human.account, forwarded(body)),
     },
   ];
 }
 
 const agentId = (params: RouteInput["params"]) => params.id ?? "";
 
-/** The admin module's operations. */
+/** The admin module's operations, for admins only. */
 export function adminRoutes(admin: Admin): Route[] {
-  return [
+  return adminOnly([
     { method: "GET", path: "/api/admin/agents", json: () => admin.agents() },
     {
       method: "POST",
@@ -251,7 +291,7 @@ export function adminRoutes(admin: Admin): Route[] {
       path: "/api/admin/pairing-tokens",
       json: () => admin.createPairingToken(),
     },
-  ];
+  ]);
 }
 
 /** The route for `method` and `pathname`, with its parameters. */

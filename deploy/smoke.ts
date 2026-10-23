@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { ScriptedProvider } from "../packages/testkit/src/index.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const PASSWORD = "smoke test owner password";
+const PASSWORD = "smoke test admin password";
 const VERSION = "0.0.0-smoke";
 const PROJECT = "mate-smoke";
 const NODE_CONTAINER = "mate-smoke-node";
@@ -107,9 +107,9 @@ try {
   const base = `http://127.0.0.1:${port}`;
   let request = browser(base);
   assert.equal(
-    (await request("POST", "/api/login", { password: PASSWORD })).status,
+    (await request("POST", "/api/login", { handle: "admin", password: PASSWORD })).status,
     200,
-    "the owner logs in",
+    "the first admin logs in",
   );
 
   const { pairingToken } = (await request("POST", "/api/admin/pairing-tokens")).json;
@@ -227,7 +227,7 @@ try {
 
   compose(["compose.yaml"], ["up", "--detach", "--wait"]);
   request = browser(base);
-  const again = await request("POST", "/api/login", { password: PASSWORD });
+  const again = await request("POST", "/api/login", { handle: "admin", password: PASSWORD });
   assert.equal(
     again.status,
     200,

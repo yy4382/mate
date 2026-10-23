@@ -11,7 +11,7 @@ const refusal = (answer: { status: number; json: unknown }) => [
 async function signedIn() {
   const site = await environment().start();
   const owner = site.browser();
-  await owner.logIn();
+  await owner.logInAdmin();
   return { site, owner };
 }
 
@@ -66,8 +66,8 @@ describe("the status of each refusal", () => {
 
     const refused = await owner.post("/api/admin/agents", {
       nodeId,
-      displayName: "Second owner",
-      handle: "owner",
+      displayName: "Second admin",
+      handle: "admin",
       settings,
     });
 

@@ -23,7 +23,7 @@ describe("the composed control plane", () => {
     const env = environment();
     const site = await env.start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     const provider = await scriptedProvider(owner);
     const nodeId = await site.pairNode(owner);
 
@@ -98,7 +98,7 @@ describe("the composed control plane", () => {
   it("streams an open Agent's conversation, and ends the stream when the Agent is paused", async () => {
     const site = await environment().start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     await scriptedProvider(owner);
     const nodeId = await site.pairNode(owner);
     const { agentId } = (
@@ -134,7 +134,7 @@ describe("the composed control plane", () => {
     const env = environment();
     const site = await env.start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     const key = ((await owner.get("/api/chat/push/key")).json as { publicKey: string }).publicKey;
     expect(key, "a P-256 public key, base64url").toMatch(/^[A-Za-z0-9_-]{87}$/);
     await scriptedProvider(owner);
@@ -144,7 +144,7 @@ describe("the composed control plane", () => {
 
     const again = await env.start();
     const browser = again.browser();
-    await browser.logIn();
+    await browser.logInAdmin();
     expect((await browser.get("/api/chat/push/key")).json).toEqual({ publicKey: key });
     expect((await browser.get("/api/admin/nodes")).json).toEqual([
       expect.objectContaining({ nodeId }),

@@ -55,7 +55,7 @@ export class Executor {
     );
   }
 
-  /** Read a path in the Agent's workspace for the owner, changing nothing. */
+  /** Read a path in the Agent's workspace for an admin, changing nothing. */
   async browse(call: GatewayBrowse): Promise<NodeBrowseOutcome> {
     const workspace = join(this.#root, call.agentId);
     if (!isDirectory(workspace)) {

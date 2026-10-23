@@ -4,7 +4,7 @@ type Entry = Extract<AgentEvent, { type: "snapshot" }>["entries"][number];
 
 export type ToolRun = { name: string; args: string; output: string; done: boolean };
 
-/** What the owner sees of an Agent's conversation, built from the event batches the control plane streams. */
+/** What an admin sees of an Agent's conversation, built from the event batches the control plane streams. */
 export type Watching = {
   entries: Entry[];
   /** The assistant message being written, by content index. */

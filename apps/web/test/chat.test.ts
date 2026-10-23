@@ -387,10 +387,10 @@ describe("conversations", () => {
     await message.getByRole("button", { name: "创建任务" }).click();
     await message.getByText("无人认领").waitFor();
     await message.getByRole("button", { name: "认领" }).click();
-    await message.getByText("Owner").first().waitFor();
+    await message.getByText("admin").first().waitFor();
     await message.getByRole("button", { name: "完成" }).click();
     await message.getByText("已完成").waitFor();
-    await page.getByText("Owner 完成了任务「Write the report」").waitFor();
+    await page.getByText("admin 完成了任务「Write the report」").waitFor();
   });
 
   it("an Agent's messages carry its generated avatar, and the owner's carry an initial", async () => {

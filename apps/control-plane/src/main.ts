@@ -8,6 +8,7 @@ const Environment = z.object({
   MATE_PORT: z.coerce.number().int().min(0).max(65_535).default(8787),
   MATE_HOST: z.string().min(1).default("127.0.0.1"),
   MATE_INITIAL_PASSWORD_FILE: z.string().min(1).optional(),
+  MATE_INITIAL_HANDLE: z.string().min(1).optional(),
   MATE_WEB_DIRECTORY: z.string().min(1).optional(),
   MATE_VAPID_SUBJECT: z
     .string()
@@ -27,6 +28,7 @@ const controlPlane = await startControlPlane({
   port: env.MATE_PORT,
   host: env.MATE_HOST,
   initialPasswordFile: env.MATE_INITIAL_PASSWORD_FILE,
+  initialHandle: env.MATE_INITIAL_HANDLE,
   webDirectory: env.MATE_WEB_DIRECTORY,
   vapidSubject: env.MATE_VAPID_SUBJECT,
 });

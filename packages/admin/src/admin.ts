@@ -72,8 +72,8 @@ type AgentNames = {
 };
 
 /**
- * An Agent as the owner sees it: its names, and what its own file says. An Agent that cannot be described (its file
- * is unreadable, or it has no chat account) is listed with the problem, so the owner can delete it.
+ * An Agent as an admin sees it: its names, and what its own file says. An Agent that cannot be described (its file
+ * is unreadable, or it has no chat account) is listed with the problem, so an admin can delete it.
  */
 export type AgentView =
   | (AgentNames & AgentDescription)
@@ -114,7 +114,7 @@ export async function openAdmin(options: AdminOptions): Promise<Admin> {
 }
 
 /**
- * What the owner manages: Agents, providers and their keys, nodes. Every operation is one the `/api/admin/*` routes
+ * What an admin manages: Agents, providers and their keys, nodes. Every operation is one the `/api/admin/*` routes
  * make; inputs are parsed here, and a refusal is an `AdminError` that changed nothing. A create that failed part way
  * rejects with the Manager's `AgentCreationFailed`, whose `agentId` finishes it.
  */

@@ -1,6 +1,6 @@
 # Mate 部署指南
 
-> 读者：要把 Mate 装到一台 Linux VPS 上的所有者。
+> 读者：要把 Mate 装到一台 Linux VPS 上的管理员。
 > 配套文档：[ARCHITECTURE.md](ARCHITECTURE.md) 第 6、7 节。
 
 ## 1. 部署形态
@@ -21,7 +21,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 
 **为什么分两个账号。** Agent 的命令以 node 账号运行。控制面的数据目录里有模型 API key、密码哈希和所有对话；它如果也属于 node 账号，任何 Agent 都能 `cat` 出来。所以数据目录属于另一个账号，node 账号连进入它的权限都没有。同理，node 账号不能在 docker 组里：能用 Docker 就等于宿主上的 root。控制面由 root（或你别的管理账号）用 `docker compose` 管理。
 
-- **规模假设**：一个所有者、少量 Agent（ARCHITECTURE §10）。一台低配置 VPS 足够；资源主要花在模型 API 费用上，不在本机。
+- **规模假设**：几个人、少量 Agent（ARCHITECTURE §10）。一台低配置 VPS 足够；资源主要花在模型 API 费用上，不在本机。
 - **Mate 不做的事**：不创建系统用户，不切换身份，不安装系统软件，不改 sudo、Docker 权限或 linger，不装证书或反向代理。Agent 在命令里自己写的 `sudo` 能不能成功，由宿主的 sudo 配置决定。
 - **控制面和 node 可以不在同一台机器上。** node 主动连控制面，只需要能访问控制面的地址。本指南按同机部署来写。
 
@@ -39,19 +39,19 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 
 ### 3.1 控制面
 
-控制面是 `deploy/control-plane/` 里的一个镜像加两个 Compose 文件：`compose.yaml` 是日常配置，`compose.initialize.yaml` 只在第一次启动时叠加，把初始密码文件交给控制面。镜像用 `docker build --file deploy/control-plane/Dockerfile .` 从仓库根目录构建，构建出的镜像带网页前端；发布时由 CI 推到镜像仓库，用确切的版本号，不用 `latest`。
+控制面是 `deploy/control-plane/` 里的一个镜像加两个 Compose 文件：`compose.yaml` 是日常配置，`compose.initialize.yaml` 只在第一次启动时叠加，把第一个管理员的初始密码文件和 handle 交给控制面。镜像用 `docker build --file deploy/control-plane/Dockerfile .` 从仓库根目录构建，构建出的镜像带网页前端；发布时由 CI 推到镜像仓库，用确切的版本号，不用 `latest`。
 
 1. 建一个只属于控制面系统账号的私有数据目录，权限 0700，放在 node 账号进不去的地方，例如 `sudo install -d -m 700 -o mate-control -g mate-control /srv/mate-control-plane/data`。Compose 不会替你建它（目录不存在就拒绝启动），因为让 Docker 建出来的会属于 root。
 2. 镜像在 GHCR 上公开，可以匿名拉取，不需要登录。
 3. 把 `compose.yaml`、`compose.initialize.yaml` 和 `.env.example`（改名 `.env`）放在同一个目录，填好 `.env`（变量见下表）。`MATE_UID`、`MATE_GID` 用 `id -u mate-control`、`id -g mate-control` 查。这个目录和 `.env` 只给管理账号看（例如放在 root 的 `/srv/mate-control-plane`，权限 0700；容器的绑定挂载不受上级目录权限影响）。
-4. 写初始密码文件（至少 12 字节，末尾的换行不算），属于控制面系统账号、权限 0600（容器以它的身份读这个文件），路径写进 `.env` 的 `MATE_INITIAL_PASSWORD`。控制面只在库里还没有密码时读它，只存 scrypt 哈希（ARCHITECTURE §4.7、MODULE_TESTS 11.1）；第一次启动没有它就拒绝启动。
+4. 写初始密码文件（至少 12 字节，末尾的换行不算），属于控制面系统账号、权限 0600（容器以它的身份读这个文件），路径写进 `.env` 的 `MATE_INITIAL_PASSWORD`；第一个管理员的 handle 写进 `MATE_INITIAL_HANDLE`（缺省 `admin`，字母、数字、`_`、`.`、`-`，不分大小写）。控制面只在库里还没有任何人类时读它们：用这个 handle 建第一个人类账号（显示名同 handle）并设为管理员，密码只存 scrypt 哈希（ARCHITECTURE §4.7、MODULE_TESTS 11.1）；第一次启动没有密码文件，或 handle 不合法，就拒绝启动。之后其他人由管理员添加（`POST /api/humans`），每个人用自己的 handle 和密码登录，角色是管理员或普通人类，普通人类只能聊天。
 5. 第一次启动叠加两个文件：
 
    ```sh
    docker compose -f compose.yaml -f compose.initialize.yaml up -d --wait
    ```
 
-   用初始密码登录网页，确认能登录后，删掉初始密码文件，之后只用 `compose.yaml`：`docker compose up -d`。
+   用初始 handle 和初始密码登录网页，确认能登录后，删掉初始密码文件，之后只用 `compose.yaml`：`docker compose up -d`。
 6. 让 HTTPS 反向代理把你的域名转发到控制面端口（宿主 `127.0.0.1:8787`），**并把浏览器请求里原来的 `Host` 传过去**。控制面拒绝 `Origin` 和 `Host` 不一致的写请求（跨站防护，ARCHITECTURE §4.7），而 nginx 的 `proxy_pass` 缺省把 `Host` 换成上游地址，结果连登录都回 403 `cross-origin`；nginx 里要写 `proxy_set_header Host $host;`（Caddy 缺省就保留原 `Host`）。登录 cookie 带 `Secure`，浏览器只在 HTTPS（或 `localhost`）上保存它，所以经 HTTP 访问 VPS 的 IP 登录不上；Web Push 也需要 HTTPS。反向代理不要缓冲 `text/event-stream` 响应：nginx 认控制面发的 `X-Accel-Buffering: no`，其他代理要自己关缓冲；控制面每 25 秒发一次心跳，读超时设得比这长。
 
 `.env` 里的变量（`compose.yaml` 读它们）：
@@ -62,16 +62,18 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 | `MATE_UID`、`MATE_GID` | 容器进程的 UID 和 GID，用数据目录的所有者（控制面系统账号） | 必填 |
 | `MATE_DATA` | 宿主上的数据目录，绑定挂载到容器内 `/var/lib/mate` | 必填，目录必须已存在 |
 | `MATE_INITIAL_PASSWORD` | 初始密码文件的宿主路径，只有 `compose.initialize.yaml` 读它 | 第一次启动必填 |
+| `MATE_INITIAL_HANDLE` | 第一个管理员的 handle，只有 `compose.initialize.yaml` 读它 | `admin` |
 | `MATE_LISTEN` | 宿主上监听的地址和端口 | `127.0.0.1:8787` |
 | `MATE_VAPID_SUBJECT` | 见下表 | `mailto:owner@mate.invalid` |
 
-控制面进程读这些环境变量（ARCHITECTURE §4.7）。Compose 已经替你设好，只有 `MATE_VAPID_SUBJECT` 通过 `.env` 改：
+控制面进程读这些环境变量（ARCHITECTURE §4.7）。Compose 已经替你设好，只有 `MATE_VAPID_SUBJECT` 和（第一次启动时的）`MATE_INITIAL_HANDLE` 通过 `.env` 改：
 
 | 变量 | 含义 | 缺省 |
 |---|---|---|
 | `MATE_DATA_DIRECTORY` | 数据目录（§5.1）；Compose 设成 `/var/lib/mate` | 必填 |
 | `MATE_PORT`、`MATE_HOST` | 监听的端口和地址；容器里是 `8787`、`0.0.0.0`，由 Compose 只映射到 `MATE_LISTEN` | `8787`、`127.0.0.1` |
-| `MATE_INITIAL_PASSWORD_FILE` | 初始密码文件，只在第一次启动时读；`compose.initialize.yaml` 设成 `/run/secrets/initial_password` | 无 |
+| `MATE_INITIAL_PASSWORD_FILE` | 初始密码文件，只在第一次启动（还没有任何人类）时读；`compose.initialize.yaml` 设成 `/run/secrets/initial_password` | 无 |
+| `MATE_INITIAL_HANDLE` | 第一个管理员的 handle，同样只在第一次启动时用；`compose.initialize.yaml` 从 `.env` 的 `MATE_INITIAL_HANDLE` 设入 | `admin` |
 | `MATE_WEB_DIRECTORY` | 构建好的网页前端目录；镜像里是 `/opt/mate/web`；没有时 API 照常，页面回 404 | 无 |
 | `MATE_VAPID_SUBJECT` | 推送服务联系你用的 `mailto:` 或 `https:` 地址，写在每个推送请求的签名里 | `mailto:owner@mate.invalid` |
 
@@ -173,7 +175,7 @@ node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安�
 
 ```
 <数据目录>/                     控制面容器里的 data/
-  control.sqlite               密码哈希、登录会话、VAPID 密钥、API key、node 注册表；控制面以 0600 新建它
+  control.sqlite               每个人类的角色和密码哈希、登录会话、VAPID 密钥、API key、node 注册表；控制面以 0600 新建它
   chat.sqlite                  聊天的全部数据
   attachments/                 附件文件（还没有实现）
   agents/<agentId>.sqlite      每个 Agent 的全部状态：对话、配置、提醒、连接器位置、是否暂停
@@ -209,6 +211,8 @@ mate node start
 2. `.env` 里改 `MATE_IMAGE`，其余不动。
 3. 用两个 Compose 文件起新版本（§3.1 第 4、5 步）。需要回退时，换回旧镜像和第 1 步复制的数据目录。
 
+**从只有一个所有者的版本（v0.1.0-alpha.2 及以前）升级。** 原来的所有者在升级后成为管理员：handle 是 `owner`，显示名 `Owner`，密码不变，已登录的浏览器继续有效，他的会话、未读和推送订阅都在。所以升级不需要初始密码文件，`MATE_INITIAL_HANDLE` 也不起作用（库里已经有人类）；用 handle `owner` 登录，之后他可以自己改显示名和 handle，也可以添加别的人类。
+
 ### 5.4 卸载
 
 `mate node uninstall` 停止并停用服务，删除程序目录、`~/.local/bin/mate` 和单元文件，保留配置、身份和工作区（MODULE_TESTS §9）；中断后重新执行即可完成。它只删 Mate 的东西：程序目录里有清单外的文件时拒绝并列出它们，不是 Mate 写的单元文件或 `mate` 命令留着不动并报告。控制面用 `docker compose down` 删除容器，数据目录保留。
@@ -236,8 +240,8 @@ MATE_DATA_DIRECTORY=~/mate-dev/data MATE_INITIAL_PASSWORD_FILE=~/mate-dev/passwo
 # 浏览器打开 http://localhost:8787 。登录 cookie 带 Secure，只有 localhost 和 HTTPS 上浏览器才保留它，所以不要用局域网 IP。
 # 改前端时可以另开 `pnpm --filter @mate/web dev`（Vite 开发服务器，/api 代理到 8787）。
 # 也可以直接用 HTTP 客户端：
-curl -i -X POST localhost:8787/api/login -H 'content-type: application/json' -d '{"password":"一个至少十二字节的密码"}'
+curl -i -X POST localhost:8787/api/login -H 'content-type: application/json' -d '{"handle":"admin","password":"一个至少十二字节的密码"}'
 ```
 
-登录返回的 `Set-Cookie` 要原样带在之后的请求里。路由见 ARCHITECTURE §4.7。各模块的边界测试是验证系统的主要手段，`apps/control-plane/test/composition.test.ts` 以真实 HTTP 跑通"经 HTTP 配对 node、创建 Agent、所有者私信它、它回复并推送"。
+登录返回的 `Set-Cookie` 要原样带在之后的请求里。路由见 ARCHITECTURE §4.7。各模块的边界测试是验证系统的主要手段，`apps/control-plane/test/composition.test.ts` 以真实 HTTP 跑通"经 HTTP 配对 node、创建 Agent、管理员私信它、它回复并推送"。
 

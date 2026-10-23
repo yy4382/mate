@@ -5,7 +5,7 @@ import type { PushNotice, PushSubscription } from "@mate/chat";
 import {
   FakeClock,
   FakeNode,
-  OwnerBrowser,
+  HumanBrowser,
   temporaryDirectory,
   type Answer,
   type FakeNodeOptions,
@@ -15,6 +15,8 @@ import { onTestFinished } from "vitest";
 import { startControlPlane, type ControlPlane } from "../src/control-plane.ts";
 
 export const PASSWORD = "correct horse battery staple";
+/** The handle of the first human: the control plane's default. */
+export const ADMIN_HANDLE = "admin";
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -64,7 +66,12 @@ export function environment(options: { webDirectory?: string } = {}) {
     passwordFile,
     clock,
     pushes,
-    async start(overrides: { initialPasswordFile?: string | undefined } = {}): Promise<Site> {
+    async start(
+      overrides: {
+        initialPasswordFile?: string | undefined;
+        initialHandle?: string | undefined;
+      } = {},
+    ): Promise<Site> {
       const plane = await startControlPlane({
         dataDirectory: data,
         initialPasswordFile: passwordFile,
@@ -84,15 +91,15 @@ export function environment(options: { webDirectory?: string } = {}) {
           running.delete(plane);
           await plane.close();
         },
-        /** Pair a fake node with a token the owner made, connected through the control plane's own HTTP server. */
+        /** Pair a fake node with a token an admin made, connected through the control plane's own HTTP server. */
         async pairNode(
-          owner: Browser,
+          admin: Browser,
           behaviour: Pick<FakeNodeOptions, "onBrowse" | "onPrepareWorkspace"> = {},
           token?: string,
         ): Promise<string> {
           const pairingToken =
             token ??
-            ((await owner.post("/api/admin/pairing-tokens")).json as { pairingToken: string })
+            ((await admin.post("/api/admin/pairing-tokens")).json as { pairingToken: string })
               .pairingToken;
           const { privateKey, publicKey } = generateKeyPairSync("ed25519", {
             privateKeyEncoding: { type: "pkcs8", format: "pem" },
@@ -123,16 +130,16 @@ export type Site = {
   browser(): Browser;
   close(): Promise<void>;
   pairNode(
-    owner: Browser,
+    admin: Browser,
     behaviour?: Pick<FakeNodeOptions, "onBrowse" | "onPrepareWorkspace">,
     pairingToken?: string,
   ): Promise<string>;
 };
 
-/** The owner's browser with the control plane's test password as the default. */
-export class Browser extends OwnerBrowser {
-  override logIn(password = PASSWORD, next?: string): Promise<Answer> {
-    return super.logIn(password, next);
+/** A human's browser. `logInAdmin` logs in as the first human, the admin the test environment starts with. */
+export class Browser extends HumanBrowser {
+  logInAdmin(password = PASSWORD, next?: string): Promise<Answer> {
+    return this.logIn(ADMIN_HANDLE, password, next);
   }
 }
 
