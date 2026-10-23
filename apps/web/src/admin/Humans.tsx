@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Plus, ShieldCheck, ShieldOff, UserX } from "lucide-react";
+import { CircleUser, KeyRound, Plus, ShieldCheck, ShieldOff, UserX } from "lucide-react";
 import { useState } from "react";
 import { ApiError, post } from "../shell/api.ts";
+import { navigate } from "../shell/router.tsx";
 import {
   HANDLE_PATTERN,
   ROLE_LABEL,
@@ -201,6 +202,11 @@ function HumanRow({
       </div>
       {human.active ? (
         <Menu label={`更多：${human.displayName}`}>
+          {isMe ? (
+            <MenuItem icon={<CircleUser aria-hidden />} onClick={() => navigate("/app/profile")}>
+              编辑个人资料
+            </MenuItem>
+          ) : null}
           <MenuItem
             icon={other === "admin" ? <ShieldCheck aria-hidden /> : <ShieldOff aria-hidden />}
             onClick={() => run(() => post(`/api/humans/${human.accountId}/role`, { role: other }))}

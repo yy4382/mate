@@ -113,6 +113,24 @@ describe("humans", () => {
     await row.getByText("已停用").waitFor();
   });
 
+  it("a human's own row on the humans page leads to their profile, and other rows do not", async () => {
+    const site = await startSite();
+    await addMember(site, "mei", "Mei");
+    const { page } = await openApp(site, "/app/admin/humans");
+    await page.getByRole("button", { name: "更多：Mei" }).click();
+    await page.getByRole("menuitem", { name: "停用" }).waitFor();
+    expect(
+      await page.getByRole("menuitem", { name: "编辑个人资料" }).count(),
+      "not on another human's row",
+    ).toBe(0);
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "更多：admin" }).click();
+    await page.getByRole("menuitem", { name: "编辑个人资料" }).click();
+    await page.getByRole("heading", { name: "个人资料" }).waitFor();
+    expect(new URL(page.url()).pathname).toBe("/app/profile");
+  });
+
   describe("logging out on a browser with notifications on", () => {
     const FAKE_ENDPOINT = "https://push.example/phone";
     const subscribedBrowser = `
