@@ -193,7 +193,7 @@ function CreateAgent(props: {
         ) : nodes.length === 1 ? (
           <div className="grid gap-1.5">
             <span className="text-sm font-medium">Node</span>
-            <code className="font-mono text-xs text-muted">{nodes[0]?.nodeId}</code>
+            <span className="text-sm text-muted">{nodes[0]?.name}</span>
           </div>
         ) : (
           <Field label="Node">
@@ -205,7 +205,7 @@ function CreateAgent(props: {
               <option value="">选择…</option>
               {nodes.map((n) => (
                 <option key={n.nodeId} value={n.nodeId}>
-                  {n.nodeId}（{n.online ? "在线" : "离线"}）
+                  {n.name}（{n.online ? "在线" : "离线"}）
                 </option>
               ))}
             </Select>
@@ -278,6 +278,8 @@ function AgentRow({ agent }: { agent: AgentView }) {
                 ? ""
                 : ` · 思考 ${agent.settings.thinkingLevel}`}
               {" · "}已用 {totalTokens(agent)} tokens
+              {" · Node "}
+              {agent.nodeName}
             </p>
           )}
         </div>

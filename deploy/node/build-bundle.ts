@@ -52,6 +52,7 @@ const script = await build({
   format: "esm",
   target: "node24",
   conditions: ["mate-source"],
+  define: { __MATE_NODE_VERSION__: JSON.stringify(version) },
   // Bundled CommonJS dependencies (ws) call require() for Node built-ins.
   banner: {
     js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",

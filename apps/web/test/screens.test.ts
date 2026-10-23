@@ -22,6 +22,16 @@ it.runIf(out !== undefined)(
     const general = await site.owner.channel("general");
     await site.owner.channel("random");
     const ada = await site.agent("ada");
+    await site.owner.put(`/api/admin/nodes/${ada.nodeId}`, { name: "legacy-server" });
+    const nodeId = await site.pairNode({
+      system: {
+        platform: "linux",
+        arch: "arm64",
+        hostname: "build-server.local",
+        osRelease: "6.8.0-64-generic",
+        version: "v0.1.0-alpha.3",
+      },
+    });
     await site.owner.post(`/api/chat/conversations/${general}/invite`, {
       requestId: randomUUID(),
       invitee: ada.accountId,
@@ -71,6 +81,10 @@ it.runIf(out !== undefined)(
         await page.waitForTimeout(600);
         await page.screenshot({ path: join(dir, `${view.name}-${name}.png`) });
       }
+      await page.goto(`${site.origin}/app/admin/nodes`);
+      await page.locator(`[data-node="${nodeId}"]`).getByRole("button", { name: "改名" }).click();
+      await page.getByRole("dialog", { name: "修改 Node 名字" }).waitFor();
+      await page.screenshot({ path: join(dir, `${view.name}-node-rename.png`) });
       await page.goto(`${site.origin}/app/c/${general}`);
       await page.waitForTimeout(600);
       await page.getByText("下午再跑一次 smoke test").hover();

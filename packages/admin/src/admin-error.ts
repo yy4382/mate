@@ -7,6 +7,7 @@ import type { z } from "zod";
  * - `unknown-agent`: no Agent has that ID.
  * - `agent-exists`: creating with the ID of an Agent that exists.
  * - `unknown-node`: no paired node has that ID.
+ * - `name-taken`: another node has that name.
  * - `unknown-provider`: the provider is not one Mate offers.
  * - `no-credentials`: the provider has no API key, so its models cannot be chosen.
  * - `unknown-model`: the provider's catalog has no such model.
@@ -23,6 +24,7 @@ export type AdminErrorReason =
   | "unknown-agent"
   | "agent-exists"
   | "unknown-node"
+  | "name-taken"
   | "unknown-provider"
   | "no-credentials"
   | "unknown-model"

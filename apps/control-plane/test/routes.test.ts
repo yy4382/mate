@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { get } from "node:http";
 import { join } from "node:path";
 import { temporaryDirectory } from "@mate/testkit";
+import type { NodeStatusResult } from "@mate/admin";
 import { describe, expect, it } from "vitest";
 import { environment } from "./support.ts";
 
@@ -119,6 +120,56 @@ describe("the owner's HTTP operations", () => {
       elsewhere.onerror = () => resolve("refused");
     });
     expect(closed).toBe("refused");
+  });
+
+  it("shows node metadata, renames nodes over HTTP, and maps every rename refusal without changing the registry", async () => {
+    const site = await environment().start();
+    const admin = site.browser();
+    await admin.logInAdmin();
+    const system = {
+      platform: "linux",
+      arch: "arm64",
+      hostname: "Server",
+      osRelease: "6.12",
+      version: "v0.1.0",
+    };
+    const first = await site.pairNode(admin, { system });
+    const second = await site.pairNode(admin, { system: { ...system, hostname: "laptop" } });
+    const nodes = (await admin.get("/api/admin/nodes")).json as NodeStatusResult[];
+    expect(nodes.find((node) => node.nodeId === first)).toMatchObject({
+      name: "server",
+      online: true,
+      system,
+    });
+
+    expect(
+      (await admin.request("PUT", `/api/admin/nodes/${first}`, { name: "worker" })).status,
+    ).toBe(204);
+    expect(
+      (await admin.request("PUT", `/api/admin/nodes/${first}`, { name: "worker" })).status,
+    ).toBe(204);
+    const renamed = (await admin.get("/api/admin/nodes")).json as NodeStatusResult[];
+    expect(renamed.find((node) => node.nodeId === first)).toEqual({
+      ...nodes.find((node) => node.nodeId === first),
+      name: "worker",
+    });
+    for (const body of [{ name: "Bad Name" }, {}, { name: null }, { name: 123 }, null]) {
+      expect(refusal(await admin.request("PUT", `/api/admin/nodes/${first}`, body))).toEqual([
+        400,
+        "invalid-input",
+      ]);
+    }
+    expect(
+      refusal(await admin.request("PUT", `/api/admin/nodes/${second}`, { name: "worker" })),
+    ).toEqual([409, "name-taken"]);
+    expect(
+      refusal(await admin.request("PUT", "/api/admin/nodes/missing", { name: "unused" })),
+    ).toEqual([404, "unknown-node"]);
+    expect((await admin.get("/api/admin/nodes")).json).toEqual(renamed);
+    expect(
+      (await site.browser().request("PUT", `/api/admin/nodes/${first}`, { name: "anonymous" }))
+        .status,
+    ).toBe(401);
   });
 });
 

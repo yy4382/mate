@@ -10,6 +10,13 @@ export type StoreFacts = {
   readonly ownerSessionToken: string;
   readonly openaiApiKey: string;
   readonly pairingToken: string;
+  /** Test identities paired through the released version's WebSocket protocol. */
+  readonly pairedNodes: readonly {
+    readonly nodeId: string;
+    readonly privateKey: string;
+    readonly publicKey: string;
+    readonly lastConnectedAt: string;
+  }[];
   /** The Agents' chat accounts' external IDs. */
   readonly agentExternalIds: readonly string[];
   /** The endpoint of the owner's Web Push subscription. */

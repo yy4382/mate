@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { hostname, release } from "node:os";
 import { WebSocket } from "ws";
 import type { Clock } from "@mate/clock";
 import {
@@ -7,9 +8,22 @@ import {
   type GatewayMessage,
   type GatewayRunTool,
   type NodeRequest,
+  type NodeSystem,
 } from "@mate/node-protocol";
 import type { Executor } from "./executor.ts";
 import { signChallenge, type NodeIdentity } from "./identity.ts";
+
+declare const __MATE_NODE_VERSION__: string;
+
+function nodeSystem(): NodeSystem {
+  return {
+    platform: process.platform,
+    arch: process.arch,
+    hostname: hostname(),
+    osRelease: release(),
+    version: typeof __MATE_NODE_VERSION__ === "undefined" ? "dev" : __MATE_NODE_VERSION__,
+  };
+}
 
 export type ConnectionOptions = {
   url: string;
@@ -113,6 +127,7 @@ export function connect(
             requestId: authRequestId,
             nodeId: options.identity.id,
             signature: signChallenge(options.identity, nonce),
+            system: nodeSystem(),
           });
           return;
         case "gateway.refused":
@@ -128,6 +143,7 @@ export function connect(
               publicKey: options.identity.publicKey,
               signature: signChallenge(options.identity, nonce),
               pairingToken: options.pairingToken,
+              system: nodeSystem(),
             });
             return;
           }

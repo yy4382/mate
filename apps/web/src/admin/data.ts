@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import type { AgentView, CatalogModel, ProviderView } from "@mate/admin";
+import type { AgentView, CatalogModel, NodeStatusResult, ProviderView } from "@mate/admin";
 import { get } from "../shell/api.ts";
 import type { ListedHuman } from "../shell/humans.ts";
 
-export type NodeView = { nodeId: string; online: boolean; lastConnectedAt: string | null };
+export type NodeView = NodeStatusResult;
 
 export const adminKeys = {
   agents: ["admin", "agents"] as const,

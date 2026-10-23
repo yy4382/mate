@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { AccountNames, type ChatApp } from "@mate/chat";
 import type { Clock } from "@mate/clock";
-import type { NodeGateway, NodeStatusResult } from "@mate/gateway";
+import { GatewayError, type NodeGateway, type NodeStatusResult } from "@mate/gateway";
 import {
   AgentIdInUse,
   isAgentId,
@@ -51,7 +51,7 @@ const CredentialsInput = z.object({
 /** What the admin module needs of the node gateway. */
 export type AdminGateway = Pick<
   NodeGateway,
-  "nodes" | "createPairingToken" | "prepareWorkspace" | "runTool" | "browse"
+  "nodes" | "renameNode" | "createPairingToken" | "prepareWorkspace" | "runTool" | "browse"
 >;
 
 export type AdminOptions = {
@@ -76,7 +76,7 @@ type AgentNames = {
  * is unreadable, or it has no chat account) is listed with the problem, so an admin can delete it.
  */
 export type AgentView =
-  | (AgentNames & AgentDescription)
+  | (AgentNames & AgentDescription & { readonly nodeName: string })
   | ({
       readonly agentId: string;
       readonly state: "unreadable";
@@ -149,7 +149,10 @@ export class Admin {
         };
         try {
           if (names === undefined) throw new Error(`Agent ${agentId} has no chat account`);
-          return { ...names, ...(await this.#manager.describe(agentId)) };
+          const description = await this.#manager.describe(agentId);
+          const node = this.#gateway.nodes().find((node) => node.nodeId === description.nodeId);
+          if (node === undefined) throw new Error(`Agent ${agentId} has no paired node`);
+          return { ...names, ...description, nodeName: node.name };
         } catch (error) {
           // Deleted since it was listed.
           if (error instanceof AgentStoreMissing) return undefined;
@@ -290,6 +293,16 @@ export class Admin {
   /** Every paired node and whether it is online. */
   nodes(): NodeStatusResult[] {
     return this.#gateway.nodes();
+  }
+
+  /** Change the name of a paired node; its identity and reported system information stay the same. */
+  renameNode(nodeId: string, name: string): void {
+    try {
+      this.#gateway.renameNode(nodeId, name);
+    } catch (error) {
+      if (error instanceof GatewayError) throw new AdminError(error.reason, error.message);
+      throw error;
+    }
   }
 
   /** A single-use token that pairs one new node. */

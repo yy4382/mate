@@ -80,7 +80,7 @@ describe("node gateway registry in control.sqlite (MODULE_TESTS 7)", () => {
     openControlTables(dataDirectory, {
       module: "gateway",
       migrations: new Migrations([
-        { version: 2, sql: "CREATE TABLE paired_nodes (id TEXT PRIMARY KEY)" },
+        { version: 3, sql: "CREATE TABLE paired_nodes (id TEXT PRIMARY KEY)" },
       ]),
     }).close();
 

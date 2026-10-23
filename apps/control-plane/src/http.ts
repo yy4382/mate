@@ -42,6 +42,7 @@ const ADMIN_STATUS: Record<AdminErrorReason, number> = {
   "unknown-provider": 404,
   "unknown-assistant": 404,
   "agent-exists": 409,
+  "name-taken": 409,
   "no-credentials": 409,
   "agent-closed": 409,
   "not-found": 404,

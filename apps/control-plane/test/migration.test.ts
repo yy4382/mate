@@ -107,6 +107,8 @@ describe("11.1 the control plane on a store written by v0.1.0-alpha.2", () => {
 
     const nodeId = await site.pairNode(owner, {}, facts.pairingToken);
     const nodes = (await owner.get("/api/admin/nodes")).json as { nodeId: string }[];
-    expect(nodes.map((node) => node.nodeId)).toEqual([nodeId]);
+    expect(nodes.map((node) => node.nodeId).sort()).toEqual(
+      [...facts.pairedNodes.map((node) => node.nodeId), nodeId].sort(),
+    );
   });
 });

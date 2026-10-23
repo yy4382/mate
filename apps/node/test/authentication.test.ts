@@ -62,7 +62,7 @@ describe("node authentication against the real gateway (MODULE_TESTS 7)", () => 
       gateway.createPairingToken().pairingToken,
     );
     await eventually(
-      () => gateway.status(identity.id).online,
+      () => gateway.nodes().some((node) => node.nodeId === identity.id && node.online),
       "a new node is told it is unknown, then pairs with its token",
     );
     firstRun.abort();

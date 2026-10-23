@@ -4,7 +4,10 @@ import {
   type GatewayBrowse,
   type GatewayRunTool,
   type NodeBrowseOutcome,
+  type NodeAuthenticate,
+  type NodePair,
   type NodeRequest,
+  type NodeSystem,
   type ToolResult,
 } from "@mate/node-protocol";
 import { randomUUID } from "node:crypto";
@@ -20,6 +23,8 @@ export interface FakeNodeOptions {
   sign: (nonce: string) => string;
   publicKey?: string | undefined;
   pairingToken?: string | undefined;
+  /** Omitted for an older node that does not report system information. */
+  system?: NodeSystem;
   onRunTool?: (msg: GatewayRunTool) => Promise<{
     outputs: string[];
     result: ToolResult;
@@ -94,7 +99,7 @@ export class FakeNode {
     if (msg.type === "gateway.challenge") {
       this.#challenge = msg.nonce;
       const sig = this.#options.sign(msg.nonce);
-      this.send({
+      this.#sendHandshake({
         type: "node.authenticate",
         requestId: randomUUID(),
         nodeId: this.#options.nodeId,
@@ -112,7 +117,7 @@ export class FakeNode {
         pairingToken !== undefined &&
         publicKey !== undefined
       ) {
-        this.send({
+        this.#sendHandshake({
           type: "node.pair",
           requestId: randomUUID(),
           nodeId: this.#options.nodeId,
@@ -208,6 +213,18 @@ export class FakeNode {
         ],
         isError: true,
       });
+    }
+  }
+
+  /**
+   * An older node can omit system information; every current-format message goes through the sending schema.
+   */
+  #sendHandshake(message: Omit<NodeAuthenticate, "system"> | Omit<NodePair, "system">): void {
+    const system = this.#options.system;
+    if (system === undefined) {
+      if (this.#ws?.readyState === WebSocket.OPEN) this.#ws.send(JSON.stringify(message));
+    } else {
+      this.send({ ...message, system });
     }
   }
 
