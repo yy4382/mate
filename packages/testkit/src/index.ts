@@ -10,6 +10,7 @@ export {
 export { FaultyDatabase } from "./faulty-database.ts";
 export { FakeClock } from "./fake-clock.ts";
 export { temporaryDirectory } from "./temporary-directory.ts";
+export { storeFixture, type StoreFacts } from "./store-fixture.ts";
 export { FakeNode, type FakeNodeOptions } from "./fake-node.ts";
 export { FakeGateway, type FakeGatewayOptions } from "./fake-gateway.ts";
 export { FakeWorkspace, toolText, type PendingWorkspaceCall } from "./fake-workspace.ts";

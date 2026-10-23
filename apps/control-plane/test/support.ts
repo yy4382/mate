@@ -88,10 +88,12 @@ export function environment(options: { webDirectory?: string } = {}) {
         async pairNode(
           owner: Browser,
           behaviour: Pick<FakeNodeOptions, "onBrowse" | "onPrepareWorkspace"> = {},
+          token?: string,
         ): Promise<string> {
-          const { pairingToken } = (await owner.post("/api/admin/pairing-tokens")).json as {
-            pairingToken: string;
-          };
+          const pairingToken =
+            token ??
+            ((await owner.post("/api/admin/pairing-tokens")).json as { pairingToken: string })
+              .pairingToken;
           const { privateKey, publicKey } = generateKeyPairSync("ed25519", {
             privateKeyEncoding: { type: "pkcs8", format: "pem" },
             publicKeyEncoding: { type: "spki", format: "pem" },
@@ -123,6 +125,7 @@ export type Site = {
   pairNode(
     owner: Browser,
     behaviour?: Pick<FakeNodeOptions, "onBrowse" | "onPrepareWorkspace">,
+    pairingToken?: string,
   ): Promise<string>;
 };
 
