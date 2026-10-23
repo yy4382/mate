@@ -6,62 +6,116 @@ import {
   connectedNode,
   eventually,
   linux,
+  longCommand,
+  pidsOf,
   readPid,
   running,
+  scriptCommand,
   temporaryDirectory,
   textOf,
+  windows,
 } from "./support.ts";
 
 describe("node commands (MODULE_TESTS 8.1)", () => {
-  it("runs the command verbatim through /bin/sh -c with the workspace as working directory and HOME", async () => {
+  it("uses the system shell with the workspace as working directory and HOME", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     const result = await node.run(agentId, "bash", {
-      command: `printf '%s\\n' "$0" "$(pwd -P)" "$HOME"`,
+      command: windows
+        ? "$PSVersionTable.PSVersion.Major; (Get-Location).Path; $HOME"
+        : `printf '%s\\n' "$0" "$(pwd -P)" "$HOME"`,
     });
     expect(result.isError, textOf(result)).toBe(false);
-    expect(textOf(result).split("\n").slice(0, 3), "shell, working directory, HOME").toEqual([
-      "/bin/sh",
+    expect(textOf(result).split(/\r?\n/).slice(0, 3), "shell, working directory, HOME").toEqual([
+      windows ? "5" : "/bin/sh",
       workspace,
       workspace,
     ]);
   });
 
-  it("runs sudo only when the Agent wrote it, and never adds it", async () => {
-    const bin = join(temporaryDirectory(), "bin");
-    mkdirSync(bin);
-    const log = join(bin, "sudo.log");
-    writeFileSync(join(bin, "sudo"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexec "$@"\n`);
-    chmodSync(join(bin, "sudo"), 0o755);
-    const node = await connectedNode({ env: { PATH: `${bin}:${process.env["PATH"]}` } });
-    const { agentId } = await node.agent();
+  it.skipIf(windows)(
+    "runs sudo only when the Agent wrote it, and never adds it (POSIX sudo)",
+    async () => {
+      const bin = join(temporaryDirectory(), "bin");
+      mkdirSync(bin);
+      const log = join(bin, "sudo.log");
+      writeFileSync(join(bin, "sudo"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexec "$@"\n`);
+      chmodSync(join(bin, "sudo"), 0o755);
+      const node = await connectedNode({ env: { PATH: `${bin}:${process.env["PATH"]}` } });
+      const { agentId } = await node.agent();
 
-    const plain = await node.run(agentId, "bash", { command: "echo plain" });
-    expect(textOf(plain)).toContain("plain");
-    expect(existsSync(log), "a command without sudo never runs sudo").toBe(false);
+      const plain = await node.run(agentId, "bash", { command: "echo plain" });
+      expect(textOf(plain)).toContain("plain");
+      expect(existsSync(log), "a command without sudo never runs sudo").toBe(false);
 
-    const elevated = await node.run(agentId, "bash", { command: "sudo echo elevated" });
-    expect(textOf(elevated), "the host's sudo decides; this one just runs it").toContain(
-      "elevated",
-    );
-    expect(readFileSync(log, "utf8"), "sudo got exactly what the Agent wrote").toBe(
-      "echo elevated\n",
-    );
-  });
+      const elevated = await node.run(agentId, "bash", { command: "sudo echo elevated" });
+      expect(textOf(elevated), "the host's sudo decides; this one just runs it").toContain(
+        "elevated",
+      );
+      expect(readFileSync(log, "utf8"), "sudo got exactly what the Agent wrote").toBe(
+        "echo elevated\n",
+      );
+    },
+  );
 
-  it("tells a normal exit and its code apart from a kill by signal", async () => {
+  it("reports successful commands and explicit nonzero shell exit codes", async () => {
     const node = await connectedNode();
     const { agentId } = await node.agent();
 
     const ok = await node.run(agentId, "bash", { command: "echo fine" });
     expect(ok.isError).toBe(false);
-    expect(textOf(ok)).toBe("fine\n");
+    expect(textOf(ok).split(/\r?\n/)[0]).toBe("fine");
 
     const failed = await node.run(agentId, "bash", { command: "echo partial; exit 3" });
     expect(failed.isError).toBe(true);
     expect(textOf(failed), "output survives a nonzero exit").toContain("partial");
     expect(textOf(failed)).toContain("Command exited with code 3");
+  });
 
+  it.runIf(windows)(
+    "parses PowerShell using declarations before any initialization statements",
+    async () => {
+      const node = await connectedNode();
+      const { agentId } = await node.agent();
+      const result = await node.run(agentId, "bash", {
+        command: "using namespace System.IO; [Path]::GetFileName('a.txt')",
+      });
+      expect(result.isError, textOf(result)).toBe(false);
+      expect(textOf(result).split(/\r?\n/)[0]).toBe("a.txt");
+    },
+  );
+
+  it.runIf(windows)(
+    "preserves PowerShell parameters, quoting, HOME, UTF-8 and explicit exit codes",
+    async () => {
+      const node = await connectedNode();
+      const { agentId, workspace } = await node.agent();
+      const result = await node.run(agentId, "bash", {
+        command: [
+          "param([string] $Name = 'a''b.txt')",
+          "$Name",
+          "'literal $HOME `n'",
+          '"‘’‚‛"',
+          "$HOME",
+          "'你好，世界'",
+          "exit 7",
+        ].join("\n"),
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result).split(/\r?\n/).slice(0, 5)).toEqual([
+        "a'b.txt",
+        "literal $HOME `n",
+        "‘’‚‛",
+        workspace,
+        "你好，世界",
+      ]);
+      expect(textOf(result)).toContain("Command exited with code 7");
+    },
+  );
+
+  it.skipIf(windows)("distinguishes a POSIX signal from a shell exit code", async () => {
+    const node = await connectedNode();
+    const { agentId } = await node.agent();
     const killed = await node.run(agentId, "bash", { command: "kill -TERM $$" });
     expect(killed.isError).toBe(true);
     expect(textOf(killed)).toContain("Command was killed by signal SIGTERM");
@@ -73,16 +127,17 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     const { agentId, workspace } = await node.agent();
     const started = Date.now();
     const result = await node.run(agentId, "bash", {
-      command: "echo $$ > leader.pid; sleep 30 & echo $! > child.pid; echo waiting; wait",
-      timeout: 1,
+      command: longCommand("timeout"),
+      timeout: 5,
     });
-    expect(Date.now() - started, "returns at the timeout, not when sleep ends").toBeLessThan(5000);
+    expect(Date.now() - started, "returns at the timeout, not when the tree ends").toBeLessThan(
+      20_000,
+    );
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("waiting");
-    expect(textOf(result)).toContain("Command timed out after 1 seconds and was killed");
-    for (const name of ["leader.pid", "child.pid"]) {
-      const pid = readPid(join(workspace, name));
-      await eventually(() => !running(pid), `${name} (${pid}) is killed`);
+    expect(textOf(result)).toContain("Command timed out after 5 seconds and was killed");
+    for (const pid of await pidsOf(workspace, "timeout")) {
+      await eventually(() => !running(pid), `process ${pid} is killed`);
     }
   });
 
@@ -91,8 +146,8 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     const { agentId, workspace } = await node.agent();
     const { foreground, background } = BASH_TIMEOUT_SECONDS;
     for (const [mode, args] of [
-      ["foreground", { command: "touch ran", timeout: foreground.max + 1 }],
-      ["background", { command: "touch ran", background: true, timeout: background.max + 1 }],
+      ["foreground", { command: "echo ran > ran", timeout: foreground.max + 1 }],
+      ["background", { command: "echo ran > ran", background: true, timeout: background.max + 1 }],
     ] as const) {
       const result = await node.run(agentId, "bash", args);
       expect(result.isError, mode).toBe(true);
@@ -105,7 +160,10 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
       background: true,
       timeout: foreground.max + 1,
     });
-    expect(textOf(long), "a background command may ask for more than an hour").toBe("allowed\n");
+    expect(
+      textOf(long).split(/\r?\n/)[0],
+      "a background command may ask for more than an hour",
+    ).toBe("allowed");
   });
 
   it("reports a command the system cannot start as not started", async () => {
@@ -115,7 +173,7 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("Command could not start");
     const next = await node.run(agentId, "bash", { command: "echo still-serving" });
-    expect(textOf(next), "the node keeps serving").toBe("still-serving\n");
+    expect(textOf(next).split(/\r?\n/)[0], "the node keeps serving").toBe("still-serving");
   });
 
   it("fails clearly, without starting anything, when the workspace is missing", async () => {
@@ -130,12 +188,17 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
 
   it("keeps the tail of output beyond the limit and says it truncated", async () => {
     const node = await connectedNode();
-    const { agentId } = await node.agent();
+    const { agentId, workspace } = await node.agent();
     let streamed = 0;
     const result = await node.run(
       agentId,
       "bash",
-      { command: "head -c 300000 /dev/zero | tr '\\0' a; echo; echo END-OF-OUTPUT" },
+      {
+        command: scriptCommand(
+          workspace,
+          'process.stdout.write("a".repeat(300000) + "\\nEND-OF-OUTPUT\\n");',
+        ),
+      },
       (chunk) => (streamed += chunk.length),
     );
     expect(result.isError).toBe(false);
@@ -146,24 +209,55 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     expect(streamed, "the whole output streamed while it ran").toBeGreaterThan(300_000);
   });
 
-  it("returns soon after the shell exits even while a background process holds the output, and says so", async () => {
+  it("preserves UTF-8 shell output and a multibyte tail after truncation", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    const started = Date.now();
-    const result = await node.run(agentId, "bash", {
-      command: "sleep 30 & echo $! > background.pid; echo started",
+    const greeting = await node.run(agentId, "bash", {
+      command: windows ? "Write-Output '你好，世界'" : "printf '你好，世界\\n'",
     });
-    expect(Date.now() - started, "does not wait for the background process").toBeLessThan(5000);
-    expect(result.isError).toBe(false);
-    expect(textOf(result)).toContain("started");
-    expect(textOf(result)).toContain("Output may be incomplete");
-    expect(
-      running(readPid(join(workspace, "background.pid"))),
-      "the background is left alone",
-    ).toBe(true);
+    expect(textOf(greeting)).toContain("你好，世界");
+    const output = await node.run(agentId, "bash", {
+      command: scriptCommand(
+        workspace,
+        'process.stdout.write("中".repeat(30000) + "结束");',
+        "unicode",
+      ),
+    });
+    expect(textOf(output)).toContain("结束");
+    expect(textOf(output)).toContain("Output truncated");
+    expect(textOf(output)).not.toContain("�");
   });
 
-  it("reports background processes that still run after the command returned", async () => {
+  it.runIf(windows)("reports unknown background status after PowerShell exits", async () => {
+    const node = await connectedNode();
+    const { agentId } = await node.agent();
+    const result = await node.run(agentId, "bash", { command: "Write-Output finished" });
+    expect(result.isError).toBe(false);
+    expect(textOf(result)).toContain("Background process status is unknown");
+    expect(textOf(result)).not.toContain("are still running");
+  });
+
+  it.skipIf(windows)(
+    "returns soon when a POSIX background process keeps the output open",
+    async () => {
+      const node = await connectedNode();
+      const { agentId, workspace } = await node.agent();
+      const started = Date.now();
+      const result = await node.run(agentId, "bash", {
+        command: "sleep 30 & echo $! > background.pid; echo started",
+      });
+      expect(Date.now() - started, "does not wait for the background process").toBeLessThan(5000);
+      expect(result.isError).toBe(false);
+      expect(textOf(result)).toContain("started");
+      expect(textOf(result)).toContain("Output may be incomplete");
+      expect(
+        running(readPid(join(workspace, "background.pid"))),
+        "the background is left alone",
+      ).toBe(true);
+    },
+  );
+
+  it.skipIf(windows)("reports POSIX background processes after the shell returns", async () => {
     const node = await connectedNode();
     const { agentId } = await node.agent();
     const result = await node.run(agentId, "bash", {

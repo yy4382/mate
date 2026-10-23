@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import type { Clock } from "@mate/clock";
 import { BASH_KEPT_OUTPUT_BYTES, type ToolResult } from "@mate/node-protocol";
-import { ProcessGroup } from "./process-group.ts";
+import { currentPlatform } from "./platforms/index.ts";
+import type { Background, CommandProcess } from "./platforms/types.ts";
 
 /** Bytes streamed to the gateway per call; past this only the result's tail is sent, so `yes` cannot flood the link. */
 const STREAMED_OUTPUT_BYTES = 1024 * 1024;
@@ -11,7 +11,7 @@ const POLL_MS = 20;
 
 export type CommandRequest = {
   agentId: string;
-  /** Passed to `/bin/sh -c` exactly as the Agent wrote it. */
+  /** Passed to the node's system shell. */
   command: string;
   /** The Agent's workspace: the working directory and HOME. */
   workspace: string;
@@ -24,18 +24,15 @@ type Ending =
   | { kind: "signaled"; signal: string }
   | { kind: "timed-out" }
   | { kind: "stopped" }
+  | { kind: "stop-failed"; reason: string }
   | { kind: "not-started"; reason: string };
 
-type Execution = { ending: Ending; pipesHeld: boolean; backgroundRunning: boolean };
+type Execution = { ending: Ending; pipesHeld: boolean; background: Background };
 
-/**
- * Runs commands in process groups of their own and remembers every group it started until the group has finished,
- * including groups whose shell already returned but which still run background processes. A group is the node's only
- * handle on what a command started; a process that leaves it (for example with `setsid`) is the Agent's own.
- */
+/** Keeps each platform's handle while it can still identify and stop a command's running processes. */
 export class Commands {
   readonly #clock: Clock;
-  readonly #groups = new Set<ProcessGroup>();
+  readonly #groups = new Set<CommandProcess>();
 
   constructor(clock: Clock) {
     this.#clock = clock;
@@ -48,36 +45,44 @@ export class Commands {
     signal: AbortSignal,
   ): Promise<ToolResult> {
     const output = new Output(onOutput);
-    const { ending, pipesHeld, backgroundRunning } = await this.#execute(
-      request,
-      output,
-      signal,
-    ).catch((error: unknown): Execution => {
-      // Spawning itself throws for a command the OS cannot take at all, such as one with a NUL byte.
-      const reason = error instanceof Error ? error.message : String(error);
-      return {
-        ending: { kind: "not-started", reason },
-        pipesHeld: false,
-        backgroundRunning: false,
-      };
-    });
-    return render(ending, output, pipesHeld, backgroundRunning, request.timeoutSeconds);
+    const { ending, pipesHeld, background } = await this.#execute(request, output, signal);
+    return render(ending, output, pipesHeld, background, request.timeoutSeconds);
   }
 
   /** Kill every group this node started that may still run anything. For the node's own shutdown. */
   killAll(): void {
-    for (const group of this.#groups) group.kill();
-    this.#groups.clear();
+    const failures: string[] = [];
+    for (const group of this.#groups) {
+      const stopped = group.kill();
+      if (stopped.ok) {
+        this.#groups.delete(group);
+      } else {
+        failures.push(stopped.reason);
+        group.child.stdout.destroy();
+        group.child.stderr.destroy();
+        group.child.unref();
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(
+        `Node shutdown could not stop every command; processes may still be running: ${failures.join("; ")}`,
+      );
+    }
   }
 
   async #execute(request: CommandRequest, output: Output, signal: AbortSignal): Promise<Execution> {
-    const shell = spawn("/bin/sh", ["-c", request.command], {
-      cwd: request.workspace,
-      env: { ...process.env, HOME: request.workspace, PWD: request.workspace },
-      // A session and process group of its own, so stopping the command reaches its descendants and never the node.
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let group: CommandProcess;
+    try {
+      group = currentPlatform().commands.start({
+        command: request.command,
+        cwd: request.workspace,
+        env: { ...process.env, HOME: request.workspace, PWD: request.workspace },
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return { ending: { kind: "not-started", reason }, pipesHeld: false, background: "finished" };
+    }
+    const shell = group.child;
     const exit = new Promise<Ending>((resolve) => {
       shell.once("error", (error) => resolve({ kind: "not-started", reason: error.message }));
       shell.once("exit", (code, exitSignal) =>
@@ -95,9 +100,8 @@ export class Commands {
       stream.once("close", () => open--);
     }
     if (shell.pid === undefined) {
-      return { ending: await exit, pipesHeld: false, backgroundRunning: false };
+      return { ending: await exit, pipesHeld: false, background: "finished" };
     }
-    const group = new ProcessGroup(shell.pid);
     this.#groups.add(group);
 
     // Whichever comes first: the shell exits, the timeout passes, or the caller stops the call.
@@ -125,33 +129,41 @@ export class Commands {
     signal.removeEventListener("abort", onStop);
     let ending: Ending;
     if (exited === undefined || interruption !== undefined) {
-      group.kill();
-      await exit;
-      ending = { kind: interruption ?? "stopped" };
+      const stopped = group.kill();
+      if (stopped.ok) {
+        await exit;
+        ending = { kind: interruption ?? "stopped" };
+      } else {
+        ending = { kind: "stop-failed", reason: stopped.reason };
+      }
     } else if (exited.kind === "not-started") {
       this.#groups.delete(group);
-      return { ending: exited, pipesHeld: false, backgroundRunning: false };
+      return { ending: exited, pipesHeld: false, background: "finished" };
     } else {
       ending = exited;
     }
 
-    // The shell has exited. Output it already wrote may still be in flight, and a background process may hold the
-    // pipes or keep running: wait briefly for both, then return rather than wait on the background.
-    // A killed group only needs its pipes drained; a stop must not cut that short.
     const killed = ending.kind === "timed-out" || ending.kind === "stopped";
     const waitSignal = killed ? new AbortController().signal : signal;
     const deadline = this.#clock.now() + EXIT_GRACE_MS;
-    while ((open > 0 || group.running()) && this.#clock.now() < deadline && !waitSignal.aborted) {
+    while (
+      (open > 0 || group.background() === "running") &&
+      this.#clock.now() < deadline &&
+      !waitSignal.aborted
+    ) {
       await this.#clock.sleep(POLL_MS, waitSignal);
     }
     // A stop that arrives while waiting ends the background of a command that itself already finished.
-    if (signal.aborted) group.kill();
+    if (signal.aborted && !killed && ending.kind !== "stop-failed") {
+      const stopped = group.kill();
+      if (!stopped.ok) ending = { kind: "stop-failed", reason: stopped.reason };
+    }
     const pipesHeld = open > 0;
     shell.stdout.destroy();
     shell.stderr.destroy();
-    const backgroundRunning = group.running();
-    if (!backgroundRunning) this.#groups.delete(group);
-    return { ending, pipesHeld, backgroundRunning };
+    const background = group.background();
+    if (background !== "running") this.#groups.delete(group);
+    return { ending, pipesHeld, background };
   }
 }
 
@@ -174,9 +186,11 @@ class Output {
     this.#text += chunk;
     const excess = Buffer.byteLength(this.#text) - BASH_KEPT_OUTPUT_BYTES;
     if (excess > 0) {
-      const kept = Buffer.from(this.#text).subarray(excess).toString("utf8");
-      this.#dropped += excess;
-      this.#text = kept;
+      const bytes = Buffer.from(this.#text);
+      let offset = excess;
+      while (offset < bytes.length && (bytes[offset]! & 0xc0) === 0x80) offset++;
+      this.#dropped += offset;
+      this.#text = bytes.subarray(offset).toString("utf8");
     }
   }
 
@@ -193,7 +207,7 @@ function render(
   ending: Ending,
   output: Output,
   pipesHeld: boolean,
-  backgroundRunning: boolean,
+  background: Background,
   timeoutSeconds: number | undefined,
 ): ToolResult {
   const remarks: string[] = [];
@@ -202,13 +216,17 @@ function render(
       `[Output truncated: the first ${output.droppedBytes} bytes were dropped; the last ${BASH_KEPT_OUTPUT_BYTES} bytes are kept]`,
     );
   }
-  if (pipesHeld) {
+  if (pipesHeld && ending.kind !== "stop-failed") {
     remarks.push(
       "[Output may be incomplete: a background process still holds the output after the command exited]",
     );
   }
-  if (backgroundRunning) {
+  if (background === "running") {
     remarks.push("[Background processes started by this command are still running]");
+  } else if (background === "unknown") {
+    remarks.push(
+      "[Background process status is unknown: Windows cannot track orphaned processes after the command shell exits]",
+    );
   }
   const outcome = describe(ending, timeoutSeconds);
   if (outcome !== undefined) remarks.push(outcome);
@@ -229,6 +247,8 @@ function describe(ending: Ending, timeoutSeconds: number | undefined): string | 
       return `Command timed out after ${timeoutSeconds} seconds and was killed`;
     case "stopped":
       return "Command was stopped: its caller stopped it or the connection to the node dropped";
+    case "stop-failed":
+      return `Command could not be stopped; processes may still be running: ${ending.reason}`;
     case "not-started":
       return `Command could not start: ${ending.reason}`;
   }

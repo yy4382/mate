@@ -15,9 +15,10 @@ import {
 } from "./installation.ts";
 import { writeLink } from "./link.ts";
 import { NodeRejectedError, startNode } from "./node.ts";
+import { currentPlatform } from "./platforms/index.ts";
 
 const USAGE = `Usage:
-  mate node install <bundle.tar.gz>     install the program, the \`mate\` command and the service unit
+  mate node install <bundle.tar.gz>     install the program, the \`mate\` command and the service
   mate node update <bundle.tar.gz>      replace the program while the service is stopped
   mate node uninstall                   remove what install added; keeps config, identity and workspaces
   mate node configure --control-plane <url> [--pairing-token <token>] [--workspaces <dir>]
@@ -27,7 +28,7 @@ const USAGE = `Usage:
 
 const [scope, command, ...rest] = process.argv.slice(2);
 if (scope !== "node" || command === undefined) usage();
-if (command === "run") await run();
+if (command === "run") await run(rest);
 if (process.getuid?.() === 0) {
   fail("Refusing to run as root; run `mate` as the account the node and its Agents run as.");
 }
@@ -56,7 +57,7 @@ async function manage(command: string, args: string[]): Promise<number> {
       return print(start(paths));
     case "stop":
       noArguments(args);
-      return print(stop());
+      return print(stop(paths));
     case "status":
       noArguments(args);
       return print(status(paths));
@@ -71,7 +72,7 @@ async function manage(command: string, args: string[]): Promise<number> {
         }),
       );
       if (!/^\d+$/.test(values.lines)) usage();
-      return logs(Number(values.lines), values.follow);
+      return logs(paths, Number(values.lines), values.follow);
     }
     case "configure": {
       const { values } = parsed(() =>
@@ -99,9 +100,19 @@ async function manage(command: string, args: string[]): Promise<number> {
   return usage();
 }
 
-/** What the service runs. Never returns: exits 0 when stopped by a signal, and tells systemd whether to restart. */
-async function run(): Promise<never> {
+async function run(args: string[]): Promise<never> {
+  const { values } = parsed(() =>
+    parseArgs({ args, options: { service: { type: "boolean", default: false } } }),
+  );
   const paths = layout();
+  const service = currentPlatform().service(paths);
+  const report = (message: string) => {
+    if (values.service) service.report(message);
+    else process.stderr.write(`${message}\n`);
+  };
+  function exit(code: number): never {
+    process.exit(values.service ? service.exitCode(code) : code);
+  }
   const controller = new AbortController();
   process.on("SIGTERM", () => controller.abort());
   process.on("SIGINT", () => controller.abort());
@@ -109,12 +120,12 @@ async function run(): Promise<never> {
   try {
     config = readConfig(paths.config);
   } catch (error) {
-    process.stderr.write(`${(error as Error).message}\n`);
-    process.exit(EXIT_DO_NOT_RESTART);
+    report((error as Error).message);
+    exit(EXIT_DO_NOT_RESTART);
   }
   if (config === undefined) {
-    process.stderr.write(`${paths.config} is missing; run \`mate node configure\` first\n`);
-    process.exit(EXIT_DO_NOT_RESTART);
+    report(`${paths.config} is missing; run \`mate node configure\` first`);
+    exit(EXIT_DO_NOT_RESTART);
   }
   try {
     await startNode(
@@ -127,12 +138,10 @@ async function run(): Promise<never> {
       },
       controller.signal,
     );
-    process.exit(0);
+    exit(0);
   } catch (error) {
-    process.stderr.write(
-      `Node exiting: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
-    process.exit(error instanceof NodeRejectedError ? EXIT_DO_NOT_RESTART : 1);
+    report(`Node exiting: ${error instanceof Error ? error.message : String(error)}`);
+    exit(error instanceof NodeRejectedError ? EXIT_DO_NOT_RESTART : 1);
   }
 }
 

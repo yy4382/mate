@@ -1,6 +1,6 @@
 # Mate 部署指南
 
-> 读者：要把 Mate 装到一台 Linux VPS 上的管理员。
+> 读者：部署 Linux 控制面，以及在 Linux、macOS 或 Windows 上安装 node 的管理员。
 > 配套文档：[ARCHITECTURE.md](ARCHITECTURE.md) 第 6、7 节。
 
 ## 1. 部署形态
@@ -23,7 +23,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 
 - **规模假设**：几个人、少量 Agent（ARCHITECTURE §10）。一台低配置 VPS 足够；资源主要花在模型 API 费用上，不在本机。
 - **Mate 不做的事**：不创建系统用户，不切换身份，不安装系统软件，不改 sudo、Docker 权限或 linger，不装证书或反向代理。Agent 在命令里自己写的 `sudo` 能不能成功，由宿主的 sudo 配置决定。
-- **控制面和 node 可以不在同一台机器上。** node 主动连控制面，只需要能访问控制面的地址。本指南按同机部署来写。
+- **控制面和 node 可以不在同一台机器上。** node 主动连控制面，只需要能访问控制面的地址。控制面部分按 Linux 同机部署来写；§3.2 覆盖三个平台的 node。
 
 ## 2. 前提
 
@@ -81,76 +81,116 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 
 ### 3.2 node
 
-node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安装脚本，也没有下载步骤：发布包是两个文件，你用 `scp` 或 `gh release download` 自己拿到机器上。CLI 不碰下载凭据，下载出错也由你熟悉的工具报告。
+node 支持 Linux、macOS 和 Windows，各有 x64、arm64 发布包。安装、更新、卸载都由 `mate node` 完成，没有单独的安装脚本，也没有下载步骤。管理员把同一版本的 `mate-node-<版本>-<平台>-<架构>.tar.gz` 与旁边的 `.sha256` 下载到 node 机器上；平台名是 `linux`、`darwin`、`win`。包自带 Node 24，宿主不需要安装 Node、pnpm 或编译器。
 
-1. 把同一版本号、对应架构的两个文件放到 node 机器上：`mate-node-<版本>-linux-<x64|arm64>.tar.gz` 和它旁边的 `.sha256`。发布包自带 Node 24 运行时，宿主不需要装 Node、pnpm 或编译器。开发机上用 `pnpm bundle:node <版本>` 构建，产物在 `dist/node-bundles/`。
-2. 用包里的 CLI 安装（第一次只能这样，之后用装好的 `mate`）：
+**第一次安装。** 先校验再解包，运行包内的 CLI。以下版本号只是示例，用实际下载的文件名替换。
 
-   ```sh
-   sha256sum -c mate-node-0.1.0-linux-x64.tar.gz.sha256
-   tar -xzf mate-node-0.1.0-linux-x64.tar.gz
-   ./mate-node/bin/mate node install mate-node-0.1.0-linux-x64.tar.gz
-   rm -r mate-node
-   ```
+Linux：
 
-   第一次没有 `mate` 可用，所以由你先跑 `sha256sum -c`，再解包。`install` 自己也会按 `.sha256` 校验整个包，再在暂存目录里解包并检查：只能有普通文件和目录，路径都在 `mate-node/` 下，文件和清单 `manifest.json` 一一对应，平台和架构与本机相同。任何一项不过就拒绝，已安装的东西不变。通过后它放好程序目录、`~/.local/bin/mate` 链接和用户服务单元，**不启动服务**。
-3. 在网页的"节点管理"里生成一次性配对令牌，写进配置：
-
-   ```sh
-   mate node configure --control-plane http://127.0.0.1:8787 --pairing-token <令牌> [--workspaces <目录>]
-   ```
-
-   它整份重写 `~/.config/mate/node.json`（权限 0600）。同机部署时控制面地址用 `http://127.0.0.1:8787`，不是容器服务名。工作区根目录默认 `~/mate/workspaces`。
-4. `mate node start`：启用并启动 `mate-node.service`。
-5. 网页显示 node 在线后，可以不带 `--pairing-token` 再跑一次 `configure`，把令牌从配置里去掉。不去也没关系：node 先用自己的身份签名认证，令牌已经用掉。
-
-**磁盘上的东西。** 全在 node 账号的 HOME 下：
-
-```
-~/.local/lib/mate-node/                  程序目录：发布包的内容，整个替换，从不原地修改
-  manifest.json                          版本、平台、架构和程序目录里每个文件的清单
-  bin/mate  node/bin/node  node/LICENSE  lib/mate.mjs
-~/.local/lib/.mate-node-staging-*/       Mate 的暂存目录；命令开始时发现的都是上次中断留下的，直接删掉
-~/.local/lib/.mate-node-old-*/
-~/.local/bin/mate                        指向 ~/.local/lib/mate-node/bin/mate 的符号链接
-~/.config/systemd/user/mate-node.service 单元文件，第一行注明由 mate node 写；本地修改放进 drop-in
-~/.config/mate/node.json                 配置（configure 写）
-~/.local/share/mate/node/                node 的身份密钥（node 第一次运行时生成）
-~/mate/workspaces/<agentId>/             Agent 的工作区（位置由配置决定）
+```sh
+sha256sum -c mate-node-0.1.0-linux-x64.tar.gz.sha256
+tar -xzf mate-node-0.1.0-linux-x64.tar.gz
+./mate-node/bin/mate node install mate-node-0.1.0-linux-x64.tar.gz
+rm -r mate-node
 ```
 
-`install`、`update`、`uninstall` 只动前四项。配置、身份和工作区它们从不碰。
+macOS，在当前账号的图形登录会话内操作：
 
-**每个命令从现有状态推出该做什么**（ARCHITECTURE §11 第 1 条），不记"做到哪一步"：
+```sh
+shasum -a 256 -c mate-node-0.1.0-darwin-arm64.tar.gz.sha256
+tar -xzf mate-node-0.1.0-darwin-arm64.tar.gz
+./mate-node/bin/mate node install mate-node-0.1.0-darwin-arm64.tar.gz
+rm -r mate-node
+```
+
+Windows，在当前账号的 PowerShell 中操作，不需要管理员权限：
+
+```powershell
+$bundle = 'mate-node-0.1.0-win-x64.tar.gz'
+$expected = (Get-Content "$bundle.sha256").Split(' ')[0]
+if ((Get-FileHash $bundle -Algorithm SHA256).Hash -ne $expected) { throw 'Checksum mismatch' }
+tar -xzf $bundle
+.\mate-node\bin\mate.cmd node install $bundle
+Remove-Item -Recurse .\mate-node
+```
+
+`install` 自己也校验整个包，再在暂存目录解包检查：只能有普通文件和目录，路径在 `mate-node/` 内，文件与清单 `manifest.json` 一一对应，平台和架构与本机相同。归档统一使用 `/` 分隔的相对路径，拒绝反斜线、盘符、ADS、保留设备名、尾点空格和大小写重名，避免 Windows 将条目解释为另一个路径。任何一项不通过，已有安装不变。
+
+安装放好程序、命令和服务定义，**不启动服务**。POSIX 的命令是 `~/.local/bin/mate` 符号链接；Windows 是 `%LOCALAPPDATA%\Mate\bin\mate.cmd` 普通文件，不需要符号链接特权。CLI 不改用户的持久 PATH；把对应 bin 目录加入自己的 PATH，或使用安装输出中的完整命令路径。
+
+Windows 的已安装命令在更新或卸载时，先把管理入口和运行时复制到 TEMP 下的临时目录，从那里执行并在结束后清理。这样管理进程不会锁住待替换的 `node.exe`，也不会在删除自己的命令文件后丢掉清理步骤。服务仍直接使用程序目录中的运行时。
+
+**配置和启动。** 在网页的“节点管理”里生成一次性配对令牌，然后运行：
+
+```sh
+mate node configure --control-plane https://mate.example.com --pairing-token <令牌>
+mate node start
+```
+
+同机 Linux 部署可以用 `http://127.0.0.1:8787`，其他机器使用能访问到的控制面地址。`--workspaces <目录>` 可指定工作区根，缺省为账号的 `mate/workspaces`。网页显示 node 在线后，可以不带 `--pairing-token` 再运行一次 `configure` 去掉令牌；留下也无妨，node 每次先用自己的身份签名认证。
+
+**布局和文件保护。** 程序、配置、身份与工作区分开：
+
+| 内容 | Linux | macOS | Windows |
+|---|---|---|---|
+| 程序目录 | `~/.local/lib/mate-node` | 同 Linux | `%LOCALAPPDATA%\Mate\program` |
+| 命令 | `~/.local/bin/mate` | 同 Linux | `%LOCALAPPDATA%\Mate\bin\mate.cmd` |
+| 服务定义 | `~/.config/systemd/user/mate-node.service` | `~/Library/LaunchAgents/io.mate.node.plist` | `%LOCALAPPDATA%\Mate\config\node-task.xml`，注册为 `Mate node <账号 SID>` |
+| 配置 | `~/.config/mate/node.json` | 同 Linux | `%LOCALAPPDATA%\Mate\config\node.json` |
+| 身份和链路 | `~/.local/share/mate/node` | 同 Linux | `%LOCALAPPDATA%\Mate\data` |
+| 日志 | 用户 journal | 身份目录内的 `node.log` | 身份目录内的 `node.log` |
+| 缺省工作区 | `~/mate/workspaces` | 同 Linux | `%USERPROFILE%\mate\workspaces` |
+
+程序目录包含清单、运行时、许可证、`lib/mate.mjs` 和启动命令。暂存目录在程序目录旁，名字为 `.mate-node-staging-*`、`.mate-node-old-*`。POSIX 的私有目录和文件使用 0700、0600。Windows 依赖当前账号 LOCALAPPDATA 的默认 ACL 隔离其他普通账号；Mate 不用 `chmod` 冒充 ACL 设置，这也不是对管理员或 SYSTEM 的隔离。
+
+`install`、`update`、`uninstall` 只管理程序、命令和服务定义。配置、身份、日志和工作区保留。
+
+**每个命令从现有状态决定动作**（ARCHITECTURE §11 第 1 条），不记录“做到哪一步”。这张表在三个平台都成立：
 
 | 命令 | 看到的状态 | 做什么 |
 |---|---|---|
-| `install <包>` | 程序目录不存在 | 校验、解包到暂存目录、改名成程序目录 |
-| | 已装同一版本 | 程序目录不动 |
-| | 已装另一版本 | 拒绝，提示用 `update`，什么都不改 |
-| | 程序目录没有清单（不是 Mate 的） | 拒绝，什么都不改 |
-| | 之后：`mate` 链接、单元文件不存在或是 Mate 的旧内容 | 补上或重写（单元变了才 `daemon-reload`）；是别人的就不碰，在输出里报告 |
-| | 服务 | 从不启用、启动、重启 |
-| `update <包>` | 服务不是 `inactive`/`failed` | 拒绝，什么都不改 |
-| | 程序目录里有清单外的文件 | 拒绝并列出它们，什么都不改 |
-| | 已装另一版本 | 校验、解包到暂存目录，旧程序目录改名挪开，暂存目录改名成程序目录，删掉旧的 |
-| | 程序目录不存在（上次死在两次改名之间） | 和首次安装一样放好 |
-| | 之后 | 同 `install` 的链接和单元；服务保持停止 |
-| `uninstall` | 程序目录有清单外的文件或不是 Mate 的 | 拒绝，什么都不改 |
-| | 单元文件是别人的 | 不碰它，也不停用它定义的服务（只读状态），在输出里报告 |
-| | 单元文件是 Mate 的，或服务已加载但没有单元文件 | `systemctl --user disable --now`，再删单元文件并 `daemon-reload` |
-| | `mate` 链接是 Mate 的 | 删掉；别人的不碰并报告 |
-| | 程序目录存在 | 挪进暂存目录再删 |
-| `start` | 没装、没有单元或没有配置 | 拒绝 |
-| | 其余 | `systemctl --user enable --now` |
-| `stop` | 服务单元已加载 | `systemctl --user disable --now`；之后保持停止，开机也不启动 |
-| 所有修改命令 | 开头发现的暂存目录 | 删掉 |
+| `install <包>` | 程序目录不存在 | 校验并解包到暂存目录，再改名成程序目录 |
+| | 已装同一版本 | 保留程序，补齐缺失的 Mate 命令和服务定义 |
+| | 已装另一版本 | 拒绝，提示用 `update` |
+| | 程序目录没有可读清单 | 拒绝，不改动它 |
+| | 命令或服务定义属于别人 | 保留并报告，不能覆盖或操作那个服务 |
+| | 服务正在运行或已被管理员停用 | 不启动、不重启、不重新启用 |
+| `update <包>` | 服务运行、过渡中、可能重启或状态不明 | 拒绝；先用 `mate node stop` 停妥 |
+| | 程序目录含清单外文件 | 拒绝并列出文件 |
+| | 已完全停止且版本不同 | 校验新包，旧目录挪开，新目录改名就位，再删旧目录 |
+| | 程序目录不存在 | 按首次安装放好，服务仍保持停止 |
+| `uninstall` | 程序目录不是 Mate 的或含清单外文件 | 拒绝，不改文件和服务 |
+| | 服务定义属于 Mate，或能确认是 Mate 已加载的服务 | 停用并停止，删除 Mate 的服务定义 |
+| | 服务定义属于别人 | 不停它、不删它，输出中报告 |
+| | 命令属于 Mate | 删掉；别人的命令保留 |
+| | 程序目录存在 | 挪进暂存目录后删除 |
+| `start` | 没装、没有服务定义、配置缺失或服务属于别人 | 拒绝 |
+| | 其余 | 启用并启动，重复调用收敛到正在运行 |
+| `stop` | 服务未安装 | 报告无须停止 |
+| | Mate 的服务已存在 | 停用并停止，之后保持停止 |
+| `status` | 任何状态 | 报告程序、命令、服务、链路和配置，不打印配对令牌 |
+| 修改命令 | 发现上次留下的暂存目录 | 清理本程序的暂存内容 |
 
-中途失败就重跑同一个命令。程序目录要么是旧版本、要么是新版本、要么不存在，不会是半个。最坏的情况，删掉 `~/.local/lib/mate-node` 再 `install`，Agent 的资料都在程序目录之外。
+服务管理器按下面的现有事实执行这些动作：
 
-`mate node status` 里的 `Link:` 行说 node 与网关的连接（链路）：`Link: connected since <时间>` 或 `Link: disconnected since <时间>`。`node run` 在数据目录（`~/.local/share/mate/node`）的 `link.json` 里记下 `{ pid, connected, since }`；`status` 只在服务正在运行、且 `pid` 等于 systemd 的 `MainPID` 时读它，否则是 `Link: none`（服务没在运行，或文件是已经死掉的进程留下的）。服务 `active` 只说明进程起来了，不说明连上了控制面。
+| 动作或状态 | Linux / systemd | macOS / launchd | Windows / Task Scheduler |
+|---|---|---|---|
+| 安装 | 写用户单元，变更时 daemon-reload；不 enable/start | 写 Disabled 的 LaunchAgent；不 bootstrap | 注册当前账号 InteractiveToken 的登录任务，缺省禁用；不 Run |
+| 启动 | `systemctl --user enable --now` | `launchctl enable`，未加载时 `bootstrap gui/<uid>`，已加载但停止时 kickstart | schtasks 启用任务并 Run |
+| 停止 | `systemctl --user disable --now` | disable 后 bootout，避免下次登录重启 | 先禁用任务，终止已确认身份的 node 进程树，再 End |
+| 允许更新 | inactive 或 failed | 已停止且不会等待自动重启 | 禁用且没有运行实例 |
+| 拒绝更新 | active、activating、deactivating、reloading、未知 | running、等待重启、状态无法确认 | enabled、queued、running、状态无法确认 |
+| 卸载 | 停止、删除 Mate 单元、daemon-reload | 停止、删除 Mate plist | 停止、Delete Mate 任务、删除 Mate XML |
+| 状态查询 | show 的服务属性 | print 的有限状态和 PID；解析不明按 unknown | COM 的数字状态和实例，CIM 的进程身份，不解析本地化状态文字 |
+| 没有可用管理器 | 写文件前失败，提示当前账号需要 user manager | 写文件前失败，提示需要当前账号的 GUI domain | 写文件前失败，保留已有文件 |
 
-管理命令以 root 运行时拒绝。服务以 `mate node run` 运行；没有配置或身份被网关拒绝时它以 78 退出，单元的 `RestartPreventExitStatus=78` 让 systemd 不再重启它，`mate node status` 和 `mate node logs` 能看到原因。
+中途失败就重跑同一个命令。程序目录要么是完整旧版本、完整新版本，要么不存在。清单外的文件不会被更新或卸载悄悄删除。
+
+**链路。** `node run` 在数据目录的 `link.json` 原子记录 `{ pid, connected, since }`。`mate node status` 只有在服务正在运行，并能核对它的执行进程时才显示 `Link: connected/disconnected since <时间>`；否则显示 `Link: none`。Linux 核对 MainPID，macOS 核对 launchctl PID，Windows 核对任务实例与 CIM 进程路径、参数和创建时间，不能把 Task Scheduler 的 EnginePID 直接当作 node PID。服务运行本身不表示已连接控制面。
+
+**退出与重启。** 没有配置或身份被拒绝时，前台 `node run` 以 78 退出。Linux 用 RestartPreventExitStatus 阻止重启；macOS 和 Windows 由服务直接执行 `node run --service`，把这个不可重试退出映射为 0，原因仍记入日志。其他失败由服务管理器重启。Windows 计划任务按系统允许的间隔重试，有次数上限，不承诺 systemd 的无限重试。计划任务只在当前账号登录时运行，不保存账号密码，不切换到 LocalSystem。
+
+POSIX 管理命令拒绝 root。Mate 不创建账号、不配置 linger、不修改 Windows ACL，也不授予提权能力。
 
 ### 3.3 第一个 Agent
 
@@ -165,7 +205,7 @@ node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安�
 | 看 node 状态、日志 | `mate node status`（版本、服务状态、链路、配置，不打印令牌）、`mate node logs [--lines <n>] [--follow]` |
 | 启停 node | `mate node stop`（停止并停用）、`mate node start`（启用并启动）。stop 之后保持停止，重复 `install` 也不会启动它 |
 | 看控制面日志、启停 | 在放 `compose.yaml` 的目录里 `docker compose logs -f`、`docker compose stop`、`docker compose start`。日常命令只用 `compose.yaml`，不叠加 `compose.initialize.yaml` |
-| 暂停或恢复某个 Agent | 网页"管理"。暂停 = 立刻关闭它的 runtime，进行中的模型请求和 node 上的命令都被停掉（网关逐个通知 node 杀掉这些命令的进程组；用 `setsid` 之类脱离进程组的后台进程不受影响）；恢复后从停下的地方接着跑 |
+| 暂停或恢复某个 Agent | 网页"管理"。暂停 = 立刻关闭它的 runtime，进行中的模型请求和 node 上的命令都被停掉（网关逐个通知 node 停掉仍能追踪的命令进程组；POSIX 脱组进程和 Windows 已失去父链的孤儿不在保证内，见 ARCHITECTURE 4.5）；恢复后从停下的地方接着跑 |
 | 看 Agent 在想什么、做了什么 | 网页"管理"里的实时对话记录 |
 | 看用量 | 网页"管理"。只用于观察，没有任何配额 |
 
@@ -217,13 +257,13 @@ mate node start
 
 ### 5.4 卸载
 
-`mate node uninstall` 停止并停用服务，删除程序目录、`~/.local/bin/mate` 和单元文件，保留配置、身份和工作区（MODULE_TESTS §9）；中断后重新执行即可完成。它只删 Mate 的东西：程序目录里有清单外的文件时拒绝并列出它们，不是 Mate 写的单元文件或 `mate` 命令留着不动并报告。控制面用 `docker compose down` 删除容器，数据目录保留。
+`mate node uninstall` 停止并停用服务，删除程序目录、Mate 命令和服务定义，保留配置、身份和工作区（MODULE_TESTS §9）；中断后重新执行即可完成。它只删 Mate 的东西：程序目录里有清单外的文件时拒绝并列出它们，不是 Mate 写的单元文件或 `mate` 命令留着不动并报告。控制面用 `docker compose down` 删除容器，数据目录保留。
 
 不是 Mate 写的单元文件，`uninstall` 不删，也不停用它定义的服务。
 
 ### 5.5 自动部署
 
-控制面和 node 在同一台机器上时，可以让 CI 在每次发版后自动升级：推送 `v*` 标签（标签要打在 main 上的提交上；它不重跑检查，而是等这个提交在 main 上的 `checks` 通过，没通过就不发版；重跑 main 上失败的任务后再重跑发版任务），镜像和发布包发布之后，`.github/workflows/ci.yml` 的 Deploy 任务用一把专用 SSH key 连到这台机器，执行 `deploy/auto-update/mate-deploy`，把 5.3 的步骤做一遍。没有预发环境，所以每次部署都先备份数据目录，失败就自动回退。
+控制面和 node 在同一台 Linux 机器上时，可以让 CI 在每次发版后自动升级：推送 `v*` 标签（标签要打在 main 上的提交上；它不重跑检查，而是等这个提交在 main 上的 `checks` 通过，没通过就不发版；重跑 main 上失败的任务后再重跑发版任务），镜像和发布包发布之后，`.github/workflows/ci.yml` 的 Deploy 任务用一把专用 SSH key 连到这台机器，执行 `deploy/auto-update/mate-deploy`，把 5.3 的步骤做一遍。没有预发环境，所以每次部署都先备份数据目录，失败就自动回退。
 
 `mate-deploy` 以 root 运行，从 SSH 拿到 `deploy <版本> <sha256>`，从标准输入拿到这台机器架构的 node 发布包：
 
@@ -250,13 +290,15 @@ echo "restrict,command=\"/usr/local/sbin/mate-deploy\" $(cat mate-deploy-key.pub
 
 ## 6. 在开发机上运行
 
-需要 Node 24、pnpm 10；跑 Linux 测试还需要 Docker（macOS 上用 OrbStack 即可）。
+需要 Node 24、pnpm 10；跑 Linux 测试还需要 Docker（macOS 上用 OrbStack 即可）。node 的执行与 CLI 测试在 Linux、macOS、Windows 上运行，CI 的 macOS/Windows 任务另外构建本机发布包并验证真实服务。真实服务冒烟只在一次性 CI 账号上显式启用，日常 `pnpm check` 不安装开发机的服务。
 
 ```sh
 pnpm install
-pnpm check          # 格式、类型检查、全部测试（macOS 上会跳过只能在 Linux 上跑的测试）
+pnpm check          # 格式、类型检查、全部测试（只跳过明确限定其他平台的测试）
 pnpm test:linux     # 在非 root 的 Linux 容器里跑 node 的测试套件（以子进程启动 node，真实的进程组与文件系统）
 ```
+
+开发机可用 `pnpm bundle:node <版本>` 构建全部六个包；`--platform linux|darwin|win32` 与 `--arch x64|arm64` 可缩小目标，产物在 `dist/node-bundles/`。`node deploy/node/verify-bundles.ts dist/node-bundles` 验证实际产物并运行与宿主匹配的包内 CLI。自动部署继续只使用 Linux 包，macOS/Windows node 手动安装和更新。
 
 控制面可以在本机启动，前端要先构建，再用 `MATE_WEB_DIRECTORY` 指给它：
 

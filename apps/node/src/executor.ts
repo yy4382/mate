@@ -12,11 +12,7 @@ import { browseWorkspace } from "./browse.ts";
 import { Commands } from "./commands.ts";
 import { runFileTool } from "./files.ts";
 
-/**
- * Everything the node executes, in the Agents' workspaces under one root. A command runs in a process group the
- * executor remembers until it has finished; `shutdown` ends every such group, including the background of commands
- * that already returned.
- */
+/** Executes tools in Agent workspaces and retains command handles for stopping and shutdown. */
 export class Executor {
   readonly #root: string;
   readonly #commands: Commands;

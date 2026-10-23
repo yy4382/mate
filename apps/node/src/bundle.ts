@@ -20,25 +20,38 @@ import { z } from "zod";
  */
 export const BUNDLE_ROOT = "mate-node";
 export const MANIFEST = "manifest.json";
-/** Where the Node runtime, the bundled script and the `mate` command sit inside the bundle. */
-export const BUNDLE_ENTRIES = {
-  runtime: "node/bin/node",
-  script: "lib/mate.mjs",
-  command: "bin/mate",
-} as const;
 
-const relativePath = z
-  .string()
-  .refine(
-    (path) => path.split("/").every((part) => part !== "" && part !== "." && part !== ".."),
-    "must be a relative path without . or .. segments",
-  );
+const reservedName = /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$) *(\.|$)/i;
+const relativePath = z.string().refine((path) => {
+  return path.split("/").every((part) => {
+    return (
+      part !== "" &&
+      part !== "." &&
+      part !== ".." &&
+      !/[\\:<>"|?*\x00-\x1f]/.test(part) &&
+      !/[. ]$/.test(part) &&
+      !reservedName.test(part)
+    );
+  });
+}, "must be a portable relative file path");
 
 const manifestSchema = z.strictObject({
   version: z.string().regex(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/),
   platform: z.string().min(1),
   arch: z.string().min(1),
-  files: z.array(relativePath).min(1),
+  files: z
+    .array(relativePath)
+    .min(1)
+    .refine((files) => {
+      const paths = new ArchivePaths();
+      try {
+        paths.add(MANIFEST, "file");
+        for (const path of files) paths.add(path, "file");
+        return true;
+      } catch {
+        return false;
+      }
+    }, "must list distinct files without path conflicts"),
 });
 export type Manifest = z.infer<typeof manifestSchema>;
 
@@ -120,6 +133,27 @@ type Entry =
   | { kind: "file"; path: string; size: number; executable: boolean }
   | { kind: "directory"; path: string };
 
+class ArchivePaths {
+  readonly #paths = new Map<string, { path: string; kind: Entry["kind"] }>();
+
+  add(path: string, kind: Entry["kind"]): void {
+    for (const parent of parents(path)) this.#add(parent, "directory");
+    this.#add(path, kind);
+  }
+
+  #add(path: string, kind: Entry["kind"]): void {
+    const key = path.toLowerCase();
+    const existing = this.#paths.get(key);
+    if (existing !== undefined) {
+      if (existing.path !== path || existing.kind !== "directory" || kind !== "directory") {
+        throw new Error(`bundle holds conflicting paths: ${existing.path} and ${path}`);
+      }
+      return;
+    }
+    this.#paths.set(key, { path, kind });
+  }
+}
+
 function parseHeader(header: Buffer): Entry {
   const field = (start: number, length: number) =>
     header.toString("utf8", start, start + length).replace(/\0.*$/s, "");
@@ -151,6 +185,7 @@ function parseHeader(header: Buffer): Entry {
 }
 
 async function extract(bundle: string, into: string): Promise<void> {
+  const paths = new ArchivePaths();
   let pending: Buffer = Buffer.alloc(0);
   let open: { fd: number; remaining: number } | undefined;
   let padding = 0;
@@ -182,6 +217,7 @@ async function extract(bundle: string, into: string): Promise<void> {
             break;
           }
           const entry = parseHeader(header);
+          paths.add(entry.path, entry.kind);
           const target = join(into, entry.path);
           if (entry.kind === "directory") {
             mkdirSync(target, { recursive: true, mode: 0o755 });

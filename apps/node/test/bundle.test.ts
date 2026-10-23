@@ -3,6 +3,15 @@ import { host, snapshot, writeBundle, type TarEntry } from "./cli-support.ts";
 
 describe("mate node install and update check the bundle (MODULE_TESTS 9)", () => {
   const file = (path: string): TarEntry => ({ path, type: "file", content: "x" });
+  const regularFiles =
+    process.platform === "win32"
+      ? ["bin/mate.cmd", "node/node.exe", "lib/mate.mjs"]
+      : ["bin/mate", "node/bin/node", "lib/mate.mjs"];
+  const listedFile = (path: string) => ({
+    version: "2.0.0",
+    listed: [...regularFiles, path],
+    extra: [file(`mate-node/${path}`)],
+  });
   it.each<[string, Parameters<typeof writeBundle>[1]]>([
     ["does not match its checksum", { version: "2.0.0", checksum: "wrong" }],
     ["has no checksum file", { version: "2.0.0", checksum: "missing" }],
@@ -30,14 +39,38 @@ describe("mate node install and update check the bundle (MODULE_TESTS 9)", () =>
     ],
     [
       "lacks a file its manifest lists",
-      { version: "2.0.0", listed: ["bin/mate", "node/bin/node", "lib/mate.mjs", "lib/gone.mjs"] },
+      { version: "2.0.0", listed: [...regularFiles, "lib/gone.mjs"] },
     ],
-    ["was built for another platform", { version: "2.0.0", arch: "sparc" }],
+    ["holds backslash path separators", listedFile("lib\\..\\..\\escaped")],
+    ["holds a drive-qualified path", listedFile("C:/escaped")],
+    ["holds an alternate data stream", listedFile("lib/note:stream")],
+    ["holds a reserved device name", listedFile("lib/NUL.txt")],
+    ["holds a reserved device name with a space before its extension", listedFile("lib/NUL .txt")],
+    ["holds a reserved device name with a superscript digit", listedFile("lib/COM¹.log")],
+    ["holds a name ending in a dot", listedFile("lib/name.")],
+    ["holds a name ending in a space", listedFile("lib/name ")],
+    ["holds a file twice with different case", listedFile("lib/MATE.mjs")],
+    ["changes a directory's case", listedFile("LIB/another.mjs")],
+    ["replaces a directory with a file", listedFile("lib")],
+    [
+      "lists a file twice in its manifest",
+      { version: "2.0.0", listed: [...regularFiles, "lib/mate.mjs"] },
+    ],
+    [
+      "was built for another platform",
+      { version: "2.0.0", platform: process.platform === "linux" ? "darwin" : "linux" },
+    ],
+    [
+      "was built for another architecture",
+      { version: "2.0.0", arch: process.arch === "x64" ? "arm64" : "x64" },
+    ],
   ])("a bundle that %s is rejected without changing anything installed", (_, options) => {
     const h = host();
-    expect(h.mate("node", "install", writeBundle(h.inputs, { version: "1.0.0" })).status).toBe(0);
+    const installed = h.mate("node", "install", writeBundle(h.inputs, { version: "1.0.0" }));
+    expect(installed.status, installed.stderr).toBe(0);
     const before = snapshot(h.home);
-    expect(h.mate("node", "update", writeBundle(h.inputs, options)).status).toBe(1);
+    const updated = h.mate("node", "update", writeBundle(h.inputs, options));
+    expect(updated.status, updated.stderr).toBe(1);
     expect(snapshot(h.home)).toEqual(before);
 
     const fresh = host();

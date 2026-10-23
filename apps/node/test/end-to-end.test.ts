@@ -5,7 +5,16 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { createNodeGateway, type NodeGateway } from "@mate/gateway";
 import { loadOrCreateNodeIdentity, startNode } from "@mate/node";
-import { eventually, running, temporaryDirectory, textOf } from "./support.ts";
+import {
+  eventually,
+  longCommand,
+  pidsOf,
+  running,
+  scriptCommand,
+  temporaryDirectory,
+  textOf,
+  windows,
+} from "./support.ts";
 
 const never = new AbortController().signal;
 
@@ -70,7 +79,12 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
       agentId,
       {
         tool: "bash",
-        arguments: { command: "echo e2e-marker > marker.txt && echo e2e-streamed" },
+        arguments: {
+          command: scriptCommand(
+            join(workspacesRoot, agentId),
+            'import { writeFileSync } from "node:fs"; writeFileSync("marker.txt", "e2e-marker"); console.log("e2e-streamed");',
+          ),
+        },
       },
       (chunk) => chunks.push(chunk),
       never,
@@ -97,8 +111,7 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     const { gateway, nodeId, workspacesRoot } = await gatewayWithNode();
     for (const agentId of ["agent-a", "agent-b"]) await gateway.prepareWorkspace(nodeId, agentId);
     // The same command in both workspaces: it records its shell and a child, then waits for a signal file.
-    const command =
-      'sleep 30 & echo "$$ $!" > pids.tmp; mv pids.tmp pids; while [ ! -e go ]; do sleep 0.05; done; echo "done in $(basename "$PWD")"';
+    const command = longCommand("running");
     const abortA = new AbortController();
     const outputs = { "agent-a": [] as string[], "agent-b": [] as string[] };
     const callA = gateway.runTool(
@@ -115,12 +128,10 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
       (chunk) => outputs["agent-b"].push(chunk),
       never,
     );
-    const pidsOf = async (agentId: string) => {
-      const path = join(workspacesRoot, agentId, "pids");
-      await eventually(() => existsSync(path), `${agentId}'s command started`);
-      return readFileSync(path, "utf8").trim().split(" ").map(Number);
-    };
-    const [pidsA, pidsB] = [await pidsOf("agent-a"), await pidsOf("agent-b")];
+    const [pidsA, pidsB] = [
+      await pidsOf(join(workspacesRoot, "agent-a"), "running"),
+      await pidsOf(join(workspacesRoot, "agent-b"), "running"),
+    ];
 
     abortA.abort();
     const resultA = await callA;
@@ -131,11 +142,13 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     }
     expect(pidsB.every(running), "agent-b's command still runs").toBe(true);
 
-    writeFileSync(join(workspacesRoot, "agent-b", "go"), "");
+    writeFileSync(join(workspacesRoot, "agent-b", "running.go"), "");
     const resultB = await callB;
     expect(textOf(resultB), "agent-b gets its own result").toContain("done in agent-b");
     expect(outputs["agent-b"].join("")).toContain("done in agent-b");
-    expect(outputs["agent-a"].join(""), "nothing of agent-b's reached agent-a").toBe("");
+    expect(outputs["agent-a"].join(""), "nothing of agent-b's reached agent-a").not.toContain(
+      "done in agent-b",
+    );
   });
 
   it("browses an Agent's workspace read-only, refusing a link that points out, and refuses as offline once the node stops", async () => {
@@ -146,7 +159,7 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     writeFileSync(join(workspace, "plan.md"), "ship it");
     const outside = temporaryDirectory();
     writeFileSync(join(outside, "secret.txt"), "secret");
-    symlinkSync(outside, join(workspace, "out"));
+    symlinkSync(outside, join(workspace, "out"), windows ? "junction" : "dir");
 
     expect(await gateway.browse(nodeId, agentId, ".")).toEqual({
       ok: true,

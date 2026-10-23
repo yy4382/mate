@@ -6,9 +6,10 @@ import {
   randomUUID,
   sign,
 } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
+import { currentPlatform } from "./platforms/index.ts";
 
 const identitySchema = z.object({
   id: z.string().uuid(),
@@ -25,19 +26,20 @@ export function loadOrCreateNodeIdentity(dataDirectory: string): {
   identity: NodeIdentity;
   created: boolean;
 } {
-  mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+  const privacy = currentPlatform().privateFiles;
+  mkdirSync(dataDirectory, { recursive: true, mode: privacy.directoryMode });
   const directory = resolve(dataDirectory);
   const stat = lstatSync(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new Error("data directory must be a real directory");
   }
-  chmodSync(directory, 0o700);
+  privacy.protectDirectory(directory);
 
   const path = join(directory, "node-identity.json");
   try {
     const file = lstatSync(path);
-    if (!file.isFile() || file.isSymbolicLink() || (file.mode & 0o077) !== 0) {
-      throw new Error("node identity file must be a private regular file (mode 0600)");
+    if (!file.isFile() || file.isSymbolicLink() || !privacy.isPrivate(file)) {
+      throw new Error("node identity file must be a private regular file");
     }
     const parsed = identitySchema.parse(JSON.parse(readFileSync(path, "utf8")));
     const privateKey = createPrivateKey(parsed.privateKey);
@@ -56,7 +58,6 @@ export function loadOrCreateNodeIdentity(dataDirectory: string): {
     if (code !== "ENOENT") throw error;
   }
 
-  // Generate new identity
   const pair = generateKeyPairSync("ed25519", {
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
@@ -66,11 +67,11 @@ export function loadOrCreateNodeIdentity(dataDirectory: string): {
   writeFileSync(
     tempPath,
     `${JSON.stringify({ id: identity.id, privateKey: identity.privateKey })}\n`,
-    { mode: 0o600, flag: "wx" },
+    { mode: privacy.fileMode, flag: "wx" },
   );
-  chmodSync(tempPath, 0o600);
+  privacy.protectFile(tempPath);
   renameSync(tempPath, path);
-  chmodSync(path, 0o600);
+  privacy.protectFile(path);
   return { identity, created: true };
 }
 

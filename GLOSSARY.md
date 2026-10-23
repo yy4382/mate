@@ -249,7 +249,10 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 连接器提交给 runtime 的一条不含消息正文的提示，写明截至某个时间点至少有多少未读、分布在哪里、有没有 @ 你。同一时间最多只有一条还没交给模型的通知，新的会替换旧的。
 
 **node**
-以宿主机上一个普通账号（node 账号，不是控制面的账号，也不在 docker 组里）运行的执行进程，由 `mate node` CLI 管理成 systemd 用户服务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
+以宿主机上一个普通账号（node 账号，不是控制面的账号，也不在 docker 组里）运行的执行进程，由 `mate node` CLI 管理：Linux 是 systemd 用户服务，macOS 是 LaunchAgent，Windows 是当前账号登录时启动的计划任务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
+
+**平台表**（platform table）
+node 根据当前系统选择能力的唯一入口。Linux、macOS、Windows 各有一条记录，提供 shell、命令进程组、服务、布局、启动命令、私有文件保护和工作区路径规则。共同的安装流程、超时和输出处理不随平台复制。
 
 **node 名字**（node name）
 网关保存的、人读的机器名字，例如 `server`、`laptop`。名字在已配对 node 中唯一，有 1 到 32 个小写字母、数字或 `-`，以字母或数字开头。新配对时从 hostname 规范化生成，冲突加后缀，管理员之后可以改。UUID 继续用于身份和调用；改名不改 Agent 文件里的 node ID。
@@ -258,22 +261,22 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 node 每次配对或认证时现取的完整报告，包含 `platform`、`arch`、`hostname`、`osRelease`、`version`。`version` 是正在运行的 node 程序的发布版本，开发时为 `dev`。网关保存最近一次报告和报告时间，管理员不能修改；旧 node 没有报告时保留上次的值，从未报告则为 `null`。
 
 **链路**（link）
-`node run` 与网关之间的连接是否已经握手成功。node 在数据目录的 `link.json` 里记下 `{ pid, connected, since }`（握手成功或连接结束时原子替换；启动时先写 `connected: false`）。`mate node status` 的 `Link:` 行只在服务正在运行、且文件里的 pid 等于 systemd 报告的 `MainPID` 时读它，否则是 `Link: none`，所以崩溃进程留下的文件不会被当成已连接。自动部署用 `Link: connected` 判断新 node 起好了。
-避免：把服务 `active` 叫连上（systemd 只知道进程在跑）。
+`node run` 与网关之间的连接是否已经握手成功。node 在数据目录的 `link.json` 里记下 `{ pid, connected, since }`（握手成功或连接结束时原子替换；启动时先写 `connected: false`）。`mate node status` 的 `Link:` 行只在服务正在运行、且能确认文件属于它的执行进程时读它，否则是 `Link: none`。Linux 核对 systemd 的 MainPID，macOS 核对 launchctl 的 PID，Windows 核对任务实例与进程路径、参数、创建时间，所以崩溃进程留下的文件不会被当成已连接。自动部署用 `Link: connected` 判断新 node 起好了。
+避免：把服务正在运行叫连上（服务管理器只知道进程在跑）。
 
 **发布包**（bundle）
-node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-node/` 一个目录（Node 运行时、打成一个脚本的 node 程序和 CLI、`mate` 启动命令、清单），旁边是它的 `.sha256`。由 `pnpm bundle:node` 构建，`mate node install`/`update` 读取。
+node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-node/` 一个目录（Node 运行时、打成一个脚本的 node 程序和 CLI、`mate` 启动命令、清单），旁边是它的 `.sha256`。由 `pnpm bundle:node` 构建，`mate node install`/`update` 读取。Linux、macOS、Windows 各有 x64/arm64 包；文件名分别用 linux、darwin、win，清单的 Windows 平台值为 win32。
 避免：安装包、release（指 GitHub 的发布页时才用）。
 
 **自动部署**（deploy）
-推送 `v*` 标签发版之后，CI 的 Deploy 任务经一把只能执行 `mate-deploy` 的 SSH key，把同机部署的控制面和 node 升级到这个版本；先备份数据目录，失败就回退到原版本和这份备份（DEPLOYMENT 5.5）。
+推送 `v*` 标签发版之后，CI 的 Deploy 任务只针对 Linux 的同机部署，经一把只能执行 `mate-deploy` 的 SSH key，把同机部署的控制面和 node 升级到这个版本；先备份数据目录，失败就回退到原版本和这份备份（DEPLOYMENT 5.5）。
 避免：把推到 main 叫部署（只有发版才部署）。
 
 **清单**（manifest）
 发布包和程序目录里的 `manifest.json`：版本、平台、架构，以及其余每个文件的路径。它同时是"程序目录里哪些文件属于 Mate"的唯一依据。
 
 **程序目录**（program directory）
-`~/.local/lib/mate-node`，解开的发布包。只会被整个放入（暂存目录改名）或整个挪走，从不原地修改，所以要么是完整的某个版本，要么不存在。配置、node 身份和工作区都在它之外。
+POSIX 上是 `~/.local/lib/mate-node`，Windows 上是 `%LOCALAPPDATA%\Mate\program`，保存解开的发布包。只会被整个放入（暂存目录改名）或整个挪走，从不原地修改，所以要么是完整的某个版本，要么不存在。配置、node 身份和工作区都在它之外。
 
 **工作区宿主**（WorkspaceHost）
 Agent Manager 看到的"工作区在哪里"：在一个 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出这个 Agent 在那个 node 上的工作区端口（`port(nodeId, agentId)`）。Agent 的 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：准备工作区调 `prepareWorkspace`，端口的每次调用转给 `runTool` 并带上调用的 signal。Manager 的测试里用假的。
@@ -285,7 +288,7 @@ Agent Manager 看到的"工作区在哪里"：在一个 node 上为一个 Agent 
 Agent 在 node 上的工作目录。Agent 在里面自由组织记忆、文件和脚本。
 
 **命令进程组**（command process group）
-node 为每条 `bash` 命令开的会话和进程组（`/bin/sh -c` 以 `detached` 启动，组 ID 就是 shell 的 PID）。它是 node 对一条命令所启动的一切的唯一把手：超时、调用方停止这次调用、断线时杀掉进行中命令的组，node 关闭时杀掉所有还有活进程的组，包括命令已返回、只剩后台进程的组。只剩僵尸进程的组算已结束；组 ID 被系统复用给别的进程后（启动时间不同），node 不再碰它。用 `setsid` 等方式离开进程组的进程归 Agent 自己负责。
+node 对一条 `bash` 命令所启动进程的把手。Linux/macOS 为 `/bin/sh -c` 开独立会话和 POSIX 进程组，组 ID 是 shell 的 PID；超时、停止、断线时杀掉该组，正常关闭 node 时也清理命令已返回后的后台组。只剩僵尸时算结束，启动时间不同的复用 PID 不再属于旧组，`setsid` 等脱组进程由 Agent 自己负责。Windows 的对应物是仍存活的 PowerShell shell 及其当时可发现的子孙，用 taskkill /T /F 停止并核对 shell 身份；shell 退出后不再拿旧 PID 杀进程，也不能保证找到已失去父链的孤儿，结果将后台状态写成未知。
 避免：按单个 PID 跟踪命令、用 `kill -0` 判断组是否还在跑。
 
 **身份拒绝**（gateway.refused）
@@ -297,7 +300,7 @@ node 为每条 `bash` 命令开的会话和进程组（`/bin/sh -c` 以 `detache
 避免：结果未知（那是连接断开时的结果）。
 
 **工作区环境**（WorkspaceEnv）
-node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，浏览工作区也用它；每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。
+node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，浏览工作区也用它；每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。Windows 同时处理盘符、反斜线和大小写，拒绝经过任何符号链接或 junction；POSIX 保留指向工作区内部的链接。
 
 **浏览工作区**（browse）
 管理员在管理界面里只读地看 Agent 工作区里的一个路径：管理模块的 `browseWorkspace` 调网关的 `browse`，网关发 `gateway.browse`，node 回 `node.browse.result`。回答是一个**浏览结果**（`WorkspaceListing`：目录的条目、文件开头的文字，或者不是文字的文件的大小，各有上限并标明截断），或者一个拒绝（`outside-workspace`、`not-found`、`unreadable`，网关再加上 `node-offline`）。不经过 runtime，暂停的 Agent 也能看。

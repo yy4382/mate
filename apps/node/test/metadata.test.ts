@@ -7,7 +7,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createNodeGateway } from "@mate/gateway";
 import { describe, expect, it, onTestFinished } from "vitest";
-import { eventually, temporaryDirectory } from "./support.ts";
+import {
+  eventually,
+  nodeConfigDirectory,
+  nodeEnvironment,
+  temporaryDirectory,
+  windows,
+} from "./support.ts";
 
 describe("node system information over its process boundary", () => {
   it("reports the host facts and dev version when pairing and authenticating from source", async () => {
@@ -20,7 +26,7 @@ describe("node system information over its process boundary", () => {
       gateway.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     });
-    const configDirectory = join(home, ".config", "mate");
+    const configDirectory = nodeConfigDirectory(home);
     mkdirSync(configDirectory, { recursive: true });
     const config = {
       controlPlaneUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
@@ -41,7 +47,7 @@ describe("node system information over its process boundary", () => {
         JSON.stringify({ ...config, pairingToken }),
       );
       const child = spawn(process.execPath, ["--conditions=mate-source", main, "node", "run"], {
-        env: { ...process.env, HOME: home },
+        env: nodeEnvironment(home),
         stdio: ["ignore", "ignore", "pipe"],
       });
       let stderr = "";
@@ -59,7 +65,8 @@ describe("node system information over its process boundary", () => {
       ]);
       child.kill("SIGTERM");
       await exited;
-      expect(child.exitCode, stderr).toBe(0);
+      if (windows) expect(child.signalCode, stderr).toBe("SIGTERM");
+      else expect(child.exitCode, stderr).toBe(0);
       await eventually(
         () => gateway.nodes().every((node) => !node.online),
         "the node disconnected",

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
@@ -6,21 +6,15 @@ import { FakeGateway } from "@mate/testkit";
 import {
   connectedNode,
   eventually,
+  longCommand,
+  pidsOf,
   readPid,
   running,
   startNodeProcess,
+  temporaryDirectory,
   textOf,
+  windows,
 } from "./support.ts";
-
-/** A command that records its shell and a child in `<name>.pids`, then waits for the child. */
-const longCommand = (name: string) =>
-  `sleep 30 & echo "$$ $!" > ${name}.tmp; mv ${name}.tmp ${name}.pids; wait`;
-
-async function pidsOf(workspace: string, name: string): Promise<number[]> {
-  const path = join(workspace, `${name}.pids`);
-  await eventually(() => existsSync(path), `${name} started`);
-  return readFileSync(path, "utf8").trim().split(" ").map(Number);
-}
 
 describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
   it("stops the process groups of running tool calls when the connection drops", async () => {
@@ -60,12 +54,49 @@ describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
     expect(otherPids.every(running), "the other calls' commands still run").toBe(true);
 
     const next = await node.run(first.agentId, "bash", { command: "echo again" });
-    expect(textOf(next), "the Agent's next call runs normally").toBe("again\n");
+    expect(textOf(next).split(/\r?\n/)[0], "the Agent's next call runs normally").toBe("again");
     node.gateway.disconnect();
     await Promise.allSettled([sameAgent, otherAgent]);
   });
 
-  it("a stop that arrives after the command returned, while its background still holds the output, kills the background", async () => {
+  it.runIf(windows)(
+    "reports failed Windows tree termination and retries it on shutdown",
+    async () => {
+      const bin = temporaryDirectory();
+      const failingTaskkill = join(bin, "taskkill.exe");
+      copyFileSync(process.execPath, failingTaskkill);
+      const hostPath =
+        Object.entries(process.env).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "";
+      const node = await connectedNode({ env: { PATH: `${bin};${hostPath}` } });
+      const { agentId, workspace } = await node.agent();
+      const call = node.gateway.runTool("cannot-stop", agentId, "bash", {
+        command: longCommand("failed-stop"),
+      });
+      const pids = await pidsOf(workspace, "failed-stop");
+      try {
+        node.gateway.stopTool("cannot-stop");
+        const result = await Promise.race([
+          call,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("failed stop did not return")), 20_000),
+          ),
+        ]);
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain("Command could not be stopped");
+        expect(textOf(result)).toContain("processes may still be running");
+        expect(textOf(result)).not.toContain("Command could not start");
+        expect(pids.every(running), "the failure does not claim the tree was killed").toBe(true);
+      } finally {
+        rmSync(failingTaskkill);
+        await node.shutdown();
+      }
+      for (const pid of pids)
+        await eventually(() => !running(pid), `shutdown retried process ${pid}`);
+      expect(await node.exited).toEqual({ code: 0, signal: null });
+    },
+  );
+
+  it.skipIf(windows)("stops a POSIX background process after its shell has returned", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     const call = node.gateway.runTool("call-bg", agentId, "bash", {
@@ -83,39 +114,66 @@ describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
     await eventually(() => !running(background), "the background is killed", 2_000);
   });
 
-  it("on shutdown stops every group it started, including the background of commands that already returned", async () => {
+  it("on normal shutdown stops all running commands and their descendants", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    const finished = await node.run(agentId, "bash", {
-      command: "sleep 30 > /dev/null 2>&1 & echo $! > background.pid",
-    });
-    expect(finished.isError).toBe(false);
-    const background = readPid(join(workspace, "background.pid"));
-    void node.run(agentId, "bash", { command: longCommand("running") }).catch(() => {});
-    const runningPids = await pidsOf(workspace, "running");
-    expect(running(background), "the finished command's background still runs").toBe(true);
-
-    node.child.kill("SIGTERM");
+    const second = await node.agent();
+    void node.run(agentId, "bash", { command: longCommand("first") }).catch(() => {});
+    void node.run(second.agentId, "bash", { command: longCommand("second") }).catch(() => {});
+    const pids = [
+      ...(await pidsOf(workspace, "first")),
+      ...(await pidsOf(second.workspace, "second")),
+    ];
+    expect(pids.every(running)).toBe(true);
+    await node.shutdown();
     expect(await node.exited, "a requested shutdown is a clean exit").toEqual({
       code: 0,
       signal: null,
     });
-    for (const pid of [background, ...runningPids]) {
+    for (const pid of pids) {
       await eventually(() => !running(pid), `process ${pid} is stopped`);
     }
   });
+
+  it.skipIf(windows)(
+    "on shutdown stops POSIX background groups whose shell already returned",
+    async () => {
+      const node = await connectedNode();
+      const { agentId, workspace } = await node.agent();
+      const finished = await node.run(agentId, "bash", {
+        command: "sleep 30 > /dev/null 2>&1 & echo $! > background.pid",
+      });
+      expect(finished.isError).toBe(false);
+      const background = readPid(join(workspace, "background.pid"));
+      void node.run(agentId, "bash", { command: longCommand("running") }).catch(() => {});
+      const runningPids = await pidsOf(workspace, "running");
+      expect(running(background), "the finished command's background still runs").toBe(true);
+
+      await node.shutdown();
+      expect(await node.exited, "a requested shutdown is a clean exit").toEqual({
+        code: 0,
+        signal: null,
+      });
+      for (const pid of [background, ...runningPids]) {
+        await eventually(() => !running(pid), `process ${pid} is stopped`);
+      }
+    },
+  );
 
   it("runs commands the same after MEMORY.md is made unreadable or deleted", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     const memory = join(workspace, "MEMORY.md");
     expect(existsSync(memory), "preparing creates MEMORY.md").toBe(true);
-    chmodSync(memory, 0o000);
-    expect(textOf(await node.run(agentId, "bash", { command: "echo unreadable" }))).toBe(
-      "unreadable\n",
-    );
+    if (!windows) chmodSync(memory, 0o000);
+    expect(
+      textOf(await node.run(agentId, "bash", { command: "echo unreadable" })).split(/\r?\n/)[0],
+    ).toBe("unreadable");
+    if (windows) chmodSync(memory, 0o600);
     rmSync(memory);
-    expect(textOf(await node.run(agentId, "bash", { command: "echo deleted" }))).toBe("deleted\n");
+    expect(
+      textOf(await node.run(agentId, "bash", { command: "echo deleted" })).split(/\r?\n/)[0],
+    ).toBe("deleted");
     expect(
       (await node.run(agentId, "write", { path: "notes.txt", content: "x" })).isError,
       "file tools too",
@@ -180,7 +238,7 @@ describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
       node.gateway = second;
       const { agentId } = await node.agent();
       const result = await node.run(agentId, "bash", { command: "echo back" });
-      expect(textOf(result)).toBe("back\n");
+      expect(textOf(result).split(/\r?\n/)[0]).toBe("back");
     } finally {
       await second.close();
     }

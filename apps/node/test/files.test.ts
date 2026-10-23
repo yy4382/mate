@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { onTestFinished, describe, expect, it } from "vitest";
-import { connectedNode, temporaryDirectory, textOf } from "./support.ts";
+import { connectedNode, temporaryDirectory, textOf, windows } from "./support.ts";
 
 describe("node file tools (MODULE_TESTS 8.2)", () => {
   it("writes, edits, and reads files the way Durable's local tools do", async () => {
@@ -53,15 +53,13 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
     const { agentId, workspace } = await node.agent();
     const outside = temporaryDirectory();
     writeFileSync(join(outside, "secret.txt"), "secret");
-    symlinkSync(outside, join(workspace, "link"));
-    symlinkSync(join(outside, "secret.txt"), join(workspace, "secret-link.txt"));
-    symlinkSync(join(outside, "not-yet.txt"), join(workspace, "dangling.txt"));
-    const escapes = [
-      "../escaped.txt",
-      join(outside, "secret.txt"),
-      "link/secret.txt",
-      "secret-link.txt",
-    ];
+    symlinkSync(outside, join(workspace, "link"), windows ? "junction" : "dir");
+    const escapes = ["../escaped.txt", join(outside, "secret.txt"), "link/secret.txt"];
+    if (!windows) {
+      symlinkSync(join(outside, "secret.txt"), join(workspace, "secret-link.txt"));
+      symlinkSync(join(outside, "not-yet.txt"), join(workspace, "dangling.txt"));
+      escapes.push("secret-link.txt", "dangling.txt");
+    }
 
     for (const path of escapes) {
       const read = await node.run(agentId, "read", { path });
@@ -78,8 +76,6 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
     }
     const created = await node.run(agentId, "write", { path: "link/new.txt", content: "x" });
     expect(textOf(created)).toContain("is outside the workspace");
-    const dangling = await node.run(agentId, "write", { path: "dangling.txt", content: "x" });
-    expect(textOf(dangling)).toContain("is outside the workspace");
 
     expect(readFileSync(join(outside, "secret.txt"), "utf8"), "nothing outside changed").toBe(
       "secret",
@@ -89,19 +85,99 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
     expect(existsSync(join(workspace, "..", "escaped.txt"))).toBe(false);
 
     mkdirSync(join(workspace, "inside"));
-    symlinkSync(join(workspace, "inside"), join(workspace, "inner-link"));
+    symlinkSync(
+      join(workspace, "inside"),
+      join(workspace, "inner-link"),
+      windows ? "junction" : "dir",
+    );
     const inward = await node.run(agentId, "write", {
       path: join(workspace, "inner-link", "ok.txt"),
       content: "fine",
     });
-    expect(inward.isError, "an absolute path or link that stays inside is allowed").toBe(false);
-    expect(readFileSync(join(workspace, "inside", "ok.txt"), "utf8")).toBe("fine");
+    if (windows) {
+      expect(inward.isError, "junctions inside the workspace are refused too").toBe(true);
+      expect(textOf(inward)).toContain("is outside the workspace");
+      expect(existsSync(join(workspace, "inside", "ok.txt"))).toBe(false);
+    } else {
+      expect(inward.isError, "an absolute path or link that stays inside is allowed").toBe(false);
+      expect(readFileSync(join(workspace, "inside", "ok.txt"), "utf8")).toBe("fine");
+    }
   });
+
+  it.runIf(windows)(
+    "confines Windows drives, separators, aliases and case-insensitive paths",
+    async () => {
+      const node = await connectedNode();
+      const { agentId, workspace } = await node.agent();
+      const drive = parse(workspace).root.slice(0, 2);
+      const otherDrive = drive.toUpperCase() === "Z:" ? "Y:" : "Z:";
+      for (const path of [
+        "..\\outside.txt",
+        "inside\\..\\outside.txt",
+        `${otherDrive}\\outside.txt`,
+        `${drive}relative.txt`,
+        drive,
+        "\\outside.txt",
+        "\\\\localhost\\share\\outside.txt",
+        "notes.txt:stream",
+        "...\\outside.txt",
+        "notes. ",
+        "NUL",
+        "CON.txt",
+        "nested\\aux",
+        "PRN",
+        "COM1.log",
+        "LPT1",
+      ]) {
+        const result = await node.run(agentId, "write", { path, content: "refused" });
+        expect(result.isError, path).toBe(true);
+        expect(textOf(result), path).toContain("is outside the workspace");
+      }
+      const path = join(workspace, "MiXeD.txt").toUpperCase();
+      const written = await node.run(agentId, "write", { path, content: "inside" });
+      expect(written.isError, textOf(written)).toBe(false);
+      const read = await node.run(agentId, "read", { path: "mixed.txt" });
+      expect(textOf(read)).toBe("inside");
+    },
+  );
+
+  it.runIf(windows)(
+    "refuses Windows file symlinks, including dangling and inward links",
+    async (context) => {
+      const node = await connectedNode();
+      const { agentId, workspace } = await node.agent();
+      const outside = temporaryDirectory();
+      writeFileSync(join(workspace, "inside.txt"), "inside");
+      writeFileSync(join(outside, "secret.txt"), "outside");
+      try {
+        symlinkSync(join(workspace, "inside.txt"), join(workspace, "inward.txt"), "file");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+        context.skip(
+          "Windows file symlink creation requires Developer Mode or SeCreateSymbolicLinkPrivilege; junction confinement is tested without it",
+        );
+      }
+      symlinkSync(join(outside, "secret.txt"), join(workspace, "outward.txt"), "file");
+      symlinkSync(join(outside, "missing.txt"), join(workspace, "dangling.txt"), "file");
+      for (const path of ["inward.txt", "outward.txt", "dangling.txt"]) {
+        for (const tool of ["read", "write"] as const) {
+          const result = await node.run(agentId, tool, { path, content: "overwrite" });
+          expect(result.isError, `${tool} ${path}`).toBe(true);
+          expect(textOf(result)).toContain("is outside the workspace");
+        }
+      }
+      expect(readFileSync(join(workspace, "inside.txt"), "utf8")).toBe("inside");
+      expect(readFileSync(join(outside, "secret.txt"), "utf8")).toBe("outside");
+      expect(existsSync(join(outside, "missing.txt"))).toBe(false);
+    },
+  );
 
   it("treats names that only begin with two dots as ordinary names inside the workspace", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    for (const path of ["..notes.md", "...", "..cache/x.txt"]) {
+    const paths = ["..notes.md", "..cache/x.txt"];
+    if (!windows) paths.push("...");
+    for (const path of paths) {
       const written = await node.run(agentId, "write", { path, content: path });
       expect(written.isError, `write ${path}: ${textOf(written)}`).toBe(false);
       expect(readFileSync(join(workspace, path), "utf8")).toBe(path);
