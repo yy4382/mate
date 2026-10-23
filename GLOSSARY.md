@@ -4,11 +4,16 @@
 
 ## 人与 Agent
 
-**所有者**（owner）
-使用 Mate 的那一个人。在 Web 外壳里，所有者是唯一能登录的人；他的聊天账号是一个人类账号（聊天 app 里没有「所有者账号」这种特殊账号）。
+**管理员**（admin）
+角色为 `admin` 的人类：除了聊天，还能创建和配置 Agent、管理提供商和 API key、配对 node，以及添加、改角色、重置密码和停用其他人类。第一个人类是管理员，任何时候至少有一个有效的管理员（最后一个不能被降级或停用，回 409 `last-admin`）。普通人类调用这些操作回 403 `admin-only`。
+避免：所有者（Mate 里不止一个人；每个人类在聊天里是平等的账号，只有角色不同）。
+
+**角色**（role）
+Web 外壳记在 `humans` 表里的人类权限：`admin` 或 `member`。`member` 是普通人类，只聊天，并能改自己的显示名、handle 和密码。角色不在聊天账号上：聊天 app 不知道角色，每个人类账号读到的内容一样。
+避免：把普通人类叫"成员"（成员指会话的成员）。
 
 **人类**（human）
-账号的一种（`kind: "human"`）：能读所有会话，有实时视图和推送订阅，不由 Agent 管理器管理。可以有多个，各有各的已读位置、未读摘要和推送订阅。另一种是 Agent 账号（`kind: "agent"`）。账号的种类创建时定下，之后不能改。
+账号的一种（`kind: "human"`）：能读所有会话，有实时视图和推送订阅，不由 Agent 管理器管理。可以有多个，各有各的登录（handle 加密码）、已读位置、未读摘要和推送订阅。另一种是 Agent 账号（`kind: "agent"`）。账号的种类创建时定下，之后不能改。
 避免：用户、成员（成员指会话的成员）。
 
 **Agent**（agent）
@@ -182,31 +187,37 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 避免：说某个模块"拥有" `control.sqlite`；用 `PRAGMA user_version` 记控制库的版本（一个文件只有一个）。
 
 **Web 外壳**（shell）
-负责登录、HTTP 路由，以及把聊天和管理两个前端功能区挂在同一个网页里。后端在 `apps/control-plane`：`startControlPlane` 组装聊天 app、网关和管理模块，挂在一个 HTTP 服务器上；它在控制库里的模块名是 `shell`。
+负责人类的登录和管理、HTTP 路由，以及把聊天和管理两个前端功能区挂在同一个网页里。后端在 `apps/control-plane`：`startControlPlane` 组装聊天 app、网关和管理模块，挂在一个 HTTP 服务器上；它在控制库里的模块名是 `shell`。
 
 **前端**（web client）
 `apps/web` 的网页应用，登录页在 `/login`，其余页面在 `/app` 下。里面是聊天和管理两个互不 import 的功能区，只共享外壳的登录状态、导航和布局。服务端数据都放在 TanStack Query 的缓存里。
 避免：把它叫"Web 外壳"（外壳是后端 `apps/control-plane` 加上前端挂载的那一层）。
 
 **密码校验队列**
-登录里同时进行的 scrypt 校验最多 2 个，更多的按到达顺序排队（队列最长 64，排队最多 10 秒），超出的回 429；没有锁定，所以输错再多次所有者也进得来。
+登录里同时进行的 scrypt 校验最多 2 个，更多的按到达顺序排队（队列最长 64，排队最多 10 秒），超出的回 429；没有锁定，所以输错再多次，正确的密码也进得来。
 
 **登录会话**（Session）
-所有者用密码登录一次得到的会话：一个随机令牌放在 HttpOnly cookie 里，控制库只存它的 SHA-256。从登录起 30 天有效，退出登录立即失效，跨重启保留。
+一个人类用 handle 和密码登录一次得到的会话：一个随机令牌放在 HttpOnly cookie 里，控制库只存它的 SHA-256，并记着它属于哪个人类。从登录起 30 天有效，退出登录立即失效，跨重启保留；这个人类被停用、被管理员重置密码，或自己改了密码（改密码的那个会话除外）时结束。
 避免：会话（那是频道或私信）、session 指代聊天里的东西。
 
 **初始密码文件**（initial password file）
-第一次启动时所有者密码的来源。控制库里还没有密码时读一次，只存 scrypt 哈希，之后不再读；第一次启动没有它就拒绝启动。
+第一次启动时第一个管理员密码的来源。控制库里还没有任何人类时读一次，只存 scrypt 哈希，之后不再读；第一次启动没有它就拒绝启动。
+
+**初始 handle**（initial handle）
+第一个管理员的 handle，也是他的初始显示名：环境变量 `MATE_INITIAL_HANDLE`，缺省 `admin`，要符合聊天账号的 handle 规则。只在第一次启动时用，之后他可以自己改名。
+
+**人类名册**（Humans）
+Web 外壳里管理谁能登录的类（`apps/control-plane/src/humans.ts`）：人类的角色、密码哈希、是否有效，以及登录会话。它和聊天 app 靠聊天账号的 externalId 对上：名字和账号种类归聊天 app，登录和角色归外壳。
 
 **事件流**（EventStream）
-Web 外壳发给浏览器的一条 SSE 连接：所有者的实时事件流（`/api/chat/events`，SSE id 就是实时游标），或观察一个 Agent 的 agent 事件流。它只活在登录会话期间：会话结束后发 `login` 并关闭，不再发别的。
+Web 外壳发给浏览器的一条 SSE 连接：人类自己的实时事件流（`/api/chat/events`，SSE id 就是实时游标），或观察一个 Agent 的 agent 事件流。它只活在登录会话期间：会话结束后发 `login` 并关闭，不再发别的。
 避免：把它和实时事件本身混为一谈（事件是聊天 app 的日志，事件流只是把日志送出去的连接）。
 
 **VAPID 密钥**（VapidKeys）
 Web 外壳签名推送请求用的 P-256 密钥对，第一次启动时生成，存在控制库里，之后不变。浏览器用它的公钥订阅推送，所以换密钥会让所有订阅失效。
 
 **管理模块**（admin）
-所有者用来创建和配置 Agent、管理 API key、配对 node、查看对话记录和用量、浏览工作区的模块。它拥有 Agent Manager：`openAdmin` 打开 Manager，并把 node 网关接成 Manager 的工作区宿主，Web 外壳不直接碰 Manager。
+管理员用来创建和配置 Agent、管理 API key、配对 node、查看对话记录和用量、浏览工作区的模块。它拥有 Agent Manager：`openAdmin` 打开 Manager，并把 node 网关接成 Manager 的工作区宿主，Web 外壳不直接碰 Manager。
 
 **提供商**（provider）
 模型的提供方，在 pi-ai 模型目录里有一个 ID。只提供 `openai`（Responses API）和 `deepseek`。
@@ -274,11 +285,11 @@ node 为每条 `bash` 命令开的会话和进程组（`/bin/sh -c` 以 `detache
 node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，浏览工作区也用它；每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。
 
 **浏览工作区**（browse）
-所有者在管理界面里只读地看 Agent 工作区里的一个路径：管理模块的 `browseWorkspace` 调网关的 `browse`，网关发 `gateway.browse`，node 回 `node.browse.result`。回答是一个**浏览结果**（`WorkspaceListing`：目录的条目、文件开头的文字，或者不是文字的文件的大小，各有上限并标明截断），或者一个拒绝（`outside-workspace`、`not-found`、`unreadable`，网关再加上 `node-offline`）。不经过 runtime，暂停的 Agent 也能看。
+管理员在管理界面里只读地看 Agent 工作区里的一个路径：管理模块的 `browseWorkspace` 调网关的 `browse`，网关发 `gateway.browse`，node 回 `node.browse.result`。回答是一个**浏览结果**（`WorkspaceListing`：目录的条目、文件开头的文字，或者不是文字的文件的大小，各有上限并标明截断），或者一个拒绝（`outside-workspace`、`not-found`、`unreadable`，网关再加上 `node-offline`）。不经过 runtime，暂停的 Agent 也能看。
 避免：把它当成工具调用（它不是 `runTool`，没有输出流，也没有停止）。
 
 **部署冒烟**（deploy smoke）
-`pnpm smoke:deploy`：在 Docker 里用发布的镜像、Compose 文件和 node 发布包起一套控制面加 node，并以所有者的身份走一遍登录、配对、创建 Agent、私信回复和重启（MODULE_TESTS 第 13 节）。
+`pnpm smoke:deploy`：在 Docker 里用发布的镜像、Compose 文件和 node 发布包起一套控制面加 node，并以第一个管理员的身份走一遍登录、配对、创建 Agent、私信回复和重启（MODULE_TESTS 第 13 节）。
 
 **MEMORY.md**
 工作区里的一个文件，是 Agent 恢复时读的第一个入口。它只是一个约定，Mate 从不检查它。
@@ -311,11 +322,11 @@ node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 
 **网络代理**（NetworkProxy）
 `@mate/testkit` 里夹在 node 和网关之间的本地 TCP 代理，由测试切换三种模式：转发（`forward`）、黑洞（`blackhole`，连接不断但两个方向的数据都被吞掉）、断开（`disconnect`，断掉现有连接，新连接一到就断）。
 
-**所有者浏览器**（OwnerBrowser）
-`@mate/testkit` 里扮演所有者浏览器的 HTTP 客户端：保存服务器设的会话 cookie，请求体按 JSON 发，可以打开 SSE 事件流（`EventReader`）。控制面的测试和系统场景共用它。
+**人类浏览器**（HumanBrowser）
+`@mate/testkit` 里扮演某个人类的浏览器的 HTTP 客户端：用 handle 和密码登录（`logIn(handle, password)`），保存服务器设的会话 cookie，请求体按 JSON 发，可以打开 SSE 事件流（`EventReader`）。控制面的测试和系统场景共用它。
 
 **系统场景**（system scenario）
-`tests/system` 里的端到端测试：控制面和 node 以真实子进程启动（**进程夹具**），模型是脚本化提供商，所有者的操作经 HTTP 发出。只证明模块接在了一起，边界情况归各模块的测试。
+`tests/system` 里的端到端测试：控制面和 node 以真实子进程启动（**进程夹具**），模型是脚本化提供商，管理员的操作经 HTTP 发出。只证明模块接在了一起，边界情况归各模块的测试。
 避免：集成测试（那个词留给用真实提供商或真实 VPS 的检查）。
 
 **存储夹具**（store fixture）

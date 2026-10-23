@@ -36,6 +36,33 @@ describe("3.1 accounts and conversations", () => {
     app.close();
   });
 
+  it("findHuman finds a human by handle without regard to case, active or not, and never an Agent", () => {
+    const app = newApp();
+    const human = app.ensureAccount({
+      externalId: "ext-human",
+      displayName: "Alice",
+      handle: "Alice",
+      kind: "human",
+    });
+    app.ensureAccount({
+      externalId: "ext-agent",
+      displayName: "Bot",
+      handle: "bot",
+      kind: "agent",
+    });
+    expect(app.findHuman("alice")).toEqual({
+      accountId: human,
+      externalId: "ext-human",
+      active: true,
+    });
+    expect(app.findHuman("ALICE")?.accountId).toBe(human);
+    expect(app.findHuman("bot"), "an Agent's handle").toBeUndefined();
+    expect(app.findHuman("nobody")).toBeUndefined();
+    app.deactivateAccount(human, { requestId: rid() });
+    expect(app.findHuman("alice")?.active, "a deactivated human is still found").toBe(false);
+    app.close();
+  });
+
   it("a public channel can be read without joining but cannot be written to by a non-member", () => {
     const { app, alice, bob } = newAppWithTwo();
     const channel = app.createChannel(alice, {

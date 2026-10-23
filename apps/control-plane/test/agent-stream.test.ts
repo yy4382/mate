@@ -7,7 +7,7 @@ async function watched() {
   const env = environment();
   const site = await env.start();
   const owner = site.browser();
-  await owner.logIn();
+  await owner.logInAdmin();
   await owner.request("PUT", "/api/admin/providers/openai/credentials", { apiKey: "sk-test-0001" });
   const nodeId = await site.pairNode(owner);
   const { agentId } = (

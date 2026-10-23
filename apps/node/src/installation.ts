@@ -31,7 +31,7 @@ export type Layout = {
   config: string;
   /** The node's identity key. */
   data: string;
-  /** The workspaces root `configure` writes when the owner names none. */
+  /** The workspaces root `configure` writes when the admin names none. */
   workspaces: string;
 };
 

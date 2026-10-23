@@ -77,7 +77,7 @@ export class Owner {
   put = <T = unknown>(path: string, body?: unknown) => this.request<T>("PUT", path, body);
 
   async logIn(): Promise<this> {
-    await this.post("/api/login", { password: PASSWORD });
+    await this.post("/api/login", { handle: "admin", password: PASSWORD });
     return this;
   }
 
@@ -262,11 +262,12 @@ export async function newPage(
   return { page, context };
 }
 
-/** Log in through the login page, as the owner would, and wait for the app. */
+/** Log in through the login page, as the first admin would, and wait for the app. */
 export async function signIn(page: Page, site: Site, next?: string): Promise<void> {
   await page.goto(
     `${site.origin}/login${next === undefined ? "" : `?next=${encodeURIComponent(next)}`}`,
   );
+  await page.getByLabel("Handle").fill("admin");
   await page.getByLabel("密码").fill(PASSWORD);
   await page.getByRole("button", { name: "登录" }).click();
   await page.waitForURL(/\/app/);

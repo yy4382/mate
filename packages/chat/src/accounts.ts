@@ -83,6 +83,19 @@ export function accountByExternalId(db: ChatDatabase, externalId: string): numbe
   return db.get(AccountRow, `${SELECT_ACCOUNT} WHERE external_id = ?`, externalId)?.id;
 }
 
+/** The human account whose handle is `handle`, compared without regard to case, if there is one. */
+export function humanByHandle(
+  db: ChatDatabase,
+  handle: string,
+): { accountId: number; externalId: string; active: boolean } | undefined {
+  const row = db.get(
+    AccountRow,
+    `${SELECT_ACCOUNT} WHERE handle_key = ? AND kind = 'human'`,
+    handle.toLowerCase(),
+  );
+  return row && { accountId: row.id, externalId: row.external_id, active: row.active };
+}
+
 /** Deactivation is permanent: the account can no longer act and is no longer notified. Its history stays. */
 export function deactivateAccount(db: ChatDatabase, account: number): void {
   if (accountById(db, account) === undefined)

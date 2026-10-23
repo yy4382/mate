@@ -8,10 +8,11 @@ import { createNodeGateway } from "@mate/gateway";
 import { z } from "zod";
 import { EventStream } from "./event-stream.ts";
 import { Frontend } from "./frontend.ts";
-import { cookie, HttpError, readJson, refusal, requireSameOrigin, sendJson } from "./http.ts";
-import { OwnerLogin, SESSION_TTL_MS, type Session } from "./login.ts";
+import { humanRoutes } from "./human-routes.ts";
+import { cookie, parseBody, readJson, refusal, requireSameOrigin, sendJson } from "./http.ts";
+import { Humans, bootstrapHumans, SESSION_TTL_MS, type Session } from "./humans.ts";
 import { vapidKeys, webPushSender } from "./push.ts";
-import { adminRoutes, chatRoutes, matchRoute } from "./routes.ts";
+import { adminRoutes, chatRoutes, matchRoute, requireRole } from "./routes.ts";
 import { openShellTables } from "./store.ts";
 
 /** `__Host-` makes the browser accept the cookie only from this origin, over HTTPS, for every path. */
@@ -27,8 +28,10 @@ export type ControlPlaneOptions = {
   /** 0 or absent picks a free port. */
   readonly port?: number | undefined;
   readonly host?: string | undefined;
-  /** Read only on the first start, when no owner password is stored yet; required then. */
+  /** Read only on the first start, when there is no human yet; required then. */
   readonly initialPasswordFile?: string | undefined;
+  /** The first human's handle, used only on the first start. Defaults to `admin`. */
+  readonly initialHandle?: string | undefined;
   /** The built web client. Without it the API still works and pages answer 404. */
   readonly webDirectory?: string | undefined;
   /** The contact a push service may use about this control plane's pushes: a `mailto:` or `https:` URL. */
@@ -45,11 +48,15 @@ export type ControlPlane = {
   close(): Promise<void>;
 };
 
-const LoginInput = z.object({ password: z.string().max(1024), next: z.string().optional() });
+const LoginInput = z.object({
+  handle: z.string().max(256),
+  password: z.string().max(1024),
+  next: z.string().optional(),
+});
 
 /**
- * Start the control plane on `dataDirectory`: the chat app with the owner's account, the node gateway, and the admin
- * module with every Agent, behind the owner's login on one HTTP server.
+ * Start the control plane on `dataDirectory`: the chat app with a human account for everyone who may log in, the node
+ * gateway, and the admin module with every Agent, behind the humans' login on one HTTP server.
  */
 export async function startControlPlane(options: ControlPlaneOptions): Promise<ControlPlane> {
   const { dataDirectory } = options;
@@ -58,7 +65,7 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
   try {
     const store = openShellTables(dataDirectory);
     closers.push(() => store.close());
-    const login = await OwnerLogin.open(store, clock, options.initialPasswordFile);
+    const humans = new Humans(store, clock);
     const keys = vapidKeys(store);
     const chat = new ChatApp(join(dataDirectory, "chat.sqlite"), {
       clock,
@@ -66,11 +73,9 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
         options.push ?? webPushSender(keys, options.vapidSubject ?? "mailto:owner@mate.invalid"),
     });
     closers.push(() => chat.close());
-    const owner = chat.ensureAccount({
-      externalId: "owner",
-      displayName: "Owner",
-      handle: "owner",
-      kind: "human",
+    await bootstrapHumans(humans, chat, {
+      initialPasswordFile: options.initialPasswordFile,
+      initialHandle: options.initialHandle,
     });
     const gateway = createNodeGateway({ dataDirectory, clock });
     closers.push(() => gateway.close());
@@ -83,7 +88,11 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
     });
     closers.push(() => admin.close());
 
-    const routes = [...chatRoutes(chat, owner, keys.publicKey), ...adminRoutes(admin)];
+    const routes = [
+      ...chatRoutes(chat, keys.publicKey),
+      ...humanRoutes(chat, humans),
+      ...adminRoutes(admin),
+    ];
     const frontend =
       options.webDirectory === undefined ? undefined : new Frontend(options.webDirectory);
 
@@ -92,37 +101,50 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
       const token = cookie(request, SESSION_COOKIE);
       if (method !== "GET") requireSameOrigin(request);
       if (method === "POST" && url.pathname === "/api/login") {
-        const input = LoginInput.safeParse(await readJson(request));
-        if (!input.success) throw new HttpError(400, "invalid-input", input.error.message);
-        const result = await login.logIn(input.data.password);
+        const input = parseBody(LoginInput, await readJson(request));
+        const account = chat.findHuman(input.handle);
+        const result = await humans.logIn(
+          account?.active === true ? account.externalId : undefined,
+          input.password,
+        );
         if (result.status === "limited")
           return sendJson(response, 429, { error: "too-many-attempts" }, { "retry-after": "1" });
         if (result.status === "wrong") return sendJson(response, 401, { error: "wrong-password" });
         return sendJson(
           response,
           200,
-          { next: appPathOr(input.data.next) },
+          { next: appPathOr(input.next) },
           { "set-cookie": sessionCookie(result.session) },
         );
       }
       if (method === "POST" && url.pathname === "/api/logout") {
-        if (token !== undefined) login.logOut(token);
+        if (token !== undefined) humans.logOut(token);
         return sendJson(response, 204, undefined, { "set-cookie": sessionCookie(undefined) });
       }
-      const session = login.session(token);
+      const session = humans.session(token);
       if (session === undefined) return sendJson(response, 401, { error: "login-required" });
       const matched = matchRoute(routes, method, url.pathname);
       if (matched === undefined) return sendJson(response, 404, { error: "no-route" });
       const { route, params } = matched;
+      const account = chat.findAccount(session.externalId);
+      if (account === undefined) throw new Error(`human ${session.externalId} has no chat account`);
+      const human = {
+        account,
+        externalId: session.externalId,
+        role: session.role,
+        token: session.token,
+      };
+      requireRole(route, human);
       const lastEventId = request.headers["last-event-id"];
       const input = {
+        human,
         params,
         query: url.searchParams,
         body: method === "GET" ? undefined : await readJson(request),
         lastEventId: typeof lastEventId === "string" ? lastEventId : undefined,
       };
       if ("json" in route) return sendJson(response, 200, await route.json(input));
-      await route.stream(input, new EventStream(response, login, session.token, clock));
+      await route.stream(input, new EventStream(response, humans, session.token, clock));
       response.end();
     }
 
@@ -133,7 +155,7 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
       if (frontend !== undefined && asset !== undefined && asset !== frontend.index)
         return frontend.serve(response, asset);
       if (url.pathname === "/") return redirect(response, APP_PATH);
-      if (isAppPath(url.pathname) && login.session(cookie(request, SESSION_COOKIE)) === undefined)
+      if (isAppPath(url.pathname) && humans.session(cookie(request, SESSION_COOKIE)) === undefined)
         return redirect(response, `/login?next=${encodeURIComponent(url.pathname + url.search)}`);
       const index = frontend?.index;
       if (frontend === undefined || index === undefined)

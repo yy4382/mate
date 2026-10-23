@@ -7,8 +7,8 @@ export type Answer = {
   readonly text: string;
 };
 
-/** A browser's view of the control plane: it keeps the session cookie the server sets, as a browser would. */
-export class OwnerBrowser {
+/** A human's browser, the control plane as it sees it: it keeps the session cookie the server sets, as a browser would. */
+export class HumanBrowser {
   readonly #url: string;
   cookie: string | undefined;
 
@@ -16,8 +16,8 @@ export class OwnerBrowser {
     this.#url = url;
   }
 
-  async logIn(password: string, next?: string): Promise<Answer> {
-    return this.post("/api/login", { password, ...(next === undefined ? {} : { next }) });
+  async logIn(handle: string, password: string, next?: string): Promise<Answer> {
+    return this.post("/api/login", { handle, password, ...(next === undefined ? {} : { next }) });
   }
 
   get(path: string): Promise<Answer> {

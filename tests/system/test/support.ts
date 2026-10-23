@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   NetworkProxy,
-  OwnerBrowser,
+  HumanBrowser,
   ScriptedProvider,
   type ScriptedRequest,
   type ScriptedRequestBody,
@@ -202,14 +202,14 @@ export async function startSystem(options: { proxied?: boolean } = {}) {
     onTestFinished(() => proxy.close());
   }
 
-  const owner = new OwnerBrowser(plane.url);
+  const owner = new HumanBrowser(plane.url);
   const api = async <T = any>(method: string, path: string, body?: unknown, status = 200) => {
     const answer = await owner.request(method, path, body);
     if (answer.status !== status)
       throw new Error(`${method} ${path} answered ${answer.status}: ${answer.text}`);
     return answer.json as T;
   };
-  const login = await owner.logIn(PASSWORD);
+  const login = await owner.logIn("admin", PASSWORD);
   if (login.status !== 200) throw new Error(`login answered ${login.status}: ${login.text}`);
   await api(
     "PUT",

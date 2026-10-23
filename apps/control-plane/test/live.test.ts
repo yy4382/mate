@@ -34,7 +34,7 @@ describe("the owner's live stream", () => {
   it("sends what is committed after the snapshot's cursor, each batch identified by the cursor after it", async () => {
     const site = await environment().start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     const conversation = await general(owner);
     await post(owner, conversation, "before the snapshot");
     const { cursor } = (await owner.get("/api/chat/snapshot")).json as Snapshot;
@@ -60,7 +60,7 @@ describe("the owner's live stream", () => {
   it("carries the owner's unread summary with each batch", async () => {
     const site = await environment().start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     const { cursor } = (await owner.get("/api/chat/snapshot")).json as Snapshot;
     const stream = await owner.stream(`/api/chat/events?cursor=${encodeURIComponent(cursor)}`);
     await general(owner);
@@ -71,7 +71,7 @@ describe("the owner's live stream", () => {
   it("tells the client to load a new snapshot when its cursor cannot be followed, and closes", async () => {
     const site = await environment().start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     const stream = await owner.stream("/api/chat/events?cursor=not-a-cursor");
     await stream.ended;
     expect(stream.events.map((event) => event.event)).toEqual(["resnapshot"]);
@@ -81,7 +81,7 @@ describe("the owner's live stream", () => {
     const site = await environment().start();
     const owner = site.browser();
     await expect(owner.stream("/api/chat/events?cursor=x"), "no session").rejects.toThrow(/401/);
-    await owner.logIn();
+    await owner.logInAdmin();
     await expect(owner.stream("/api/chat/events"), "no cursor").rejects.toThrow(/400/);
   });
 
@@ -89,7 +89,7 @@ describe("the owner's live stream", () => {
     const env = environment();
     const site = await env.start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     const conversation = await general(owner);
     const { cursor } = (await owner.get("/api/chat/snapshot")).json as Snapshot;
     const stream = await owner.stream(`/api/chat/events?cursor=${encodeURIComponent(cursor)}`);
@@ -98,7 +98,7 @@ describe("the owner's live stream", () => {
     env.clock.advance(30 * DAY_MS);
     await stream.ended;
     const later = site.browser();
-    await later.logIn();
+    await later.logInAdmin();
     await post(later, conversation, "after expiry");
     await settle();
     expect(
@@ -110,9 +110,9 @@ describe("the owner's live stream", () => {
   it("sends 'login' instead of the next event once the owner has logged out", async () => {
     const site = await environment().start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     const other = site.browser();
-    await other.logIn();
+    await other.logInAdmin();
     const conversation = await general(other);
     const { cursor } = (await owner.get("/api/chat/snapshot")).json as Snapshot;
     const stream = await owner.stream(`/api/chat/events?cursor=${encodeURIComponent(cursor)}`);

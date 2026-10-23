@@ -2,7 +2,7 @@ import type { ServerResponse } from "node:http";
 import type { AgentEvent, EventWatch } from "@mate/admin";
 import type { ChatApp } from "@mate/chat";
 import type { Clock } from "@mate/clock";
-import type { OwnerLogin } from "./login.ts";
+import type { Humans } from "./humans.ts";
 
 /**
  * A comment line this often keeps proxies from closing an idle stream. Each heartbeat checks the session first, so an
@@ -11,7 +11,7 @@ import type { OwnerLogin } from "./login.ts";
 const HEARTBEAT_MS = 25_000;
 
 /**
- * A server-sent event stream that lives only as long as the owner's session. Every event is sent only while the
+ * A server-sent event stream that lives only as long as the human's session. Every event is sent only while the
  * session is live; once it has ended (expired or logged out) the stream sends `login` and closes, and sends nothing
  * after. A stream with nothing to send notices the session's end at its next heartbeat.
  *
@@ -19,12 +19,12 @@ const HEARTBEAT_MS = 25_000;
  */
 export class EventStream {
   readonly #response: ServerResponse;
-  readonly #login: OwnerLogin;
+  readonly #login: Humans;
   readonly #token: string;
   readonly #clock: Clock;
   readonly #closed = new AbortController();
 
-  constructor(response: ServerResponse, login: OwnerLogin, token: string, clock: Clock) {
+  constructor(response: ServerResponse, login: Humans, token: string, clock: Clock) {
     this.#response = response;
     this.#login = login;
     this.#token = token;
@@ -44,7 +44,7 @@ export class EventStream {
 
   /** Send one event; false when the stream has ended, which this send may have done because the session ended. */
   send(event: string, data: unknown, id?: string): boolean {
-    if (!this.#live()) return false;
+    if (!this.live()) return false;
     this.#response.write(
       `${id === undefined ? "" : `id: ${id}\n`}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
     );
@@ -61,16 +61,16 @@ export class EventStream {
    * the client leaves or the session ends.
    */
   async wait(signal: AbortSignal): Promise<boolean> {
-    if (!this.#live()) return false;
+    if (!this.live()) return false;
     await this.#clock.sleep(HEARTBEAT_MS, AbortSignal.any([signal, this.#closed.signal]));
     if (signal.aborted) return !this.#closed.signal.aborted;
-    if (!this.#live()) return false;
+    if (!this.live()) return false;
     this.#response.write(": ping\n\n");
     return true;
   }
 
   /** Whether the stream is open and its session live. When the session has ended, the stream ends with `login`. */
-  #live(): boolean {
+  live(): boolean {
     if (this.#closed.signal.aborted) return false;
     this.open();
     if (this.#login.session(this.#token) !== undefined) return true;
@@ -81,14 +81,14 @@ export class EventStream {
 }
 
 /**
- * The owner's live chat view after `cursor`: each read of `liveEvents` is one `events` event whose id is the cursor
+ * A human's live chat view after `cursor`: each read of `liveEvents` is one `events` event whose id is the cursor
  * after it, so a client reconnecting with `Last-Event-ID` resumes exactly there. A cursor that cannot be followed gets
  * `resnapshot` and the stream closes; the client loads a new snapshot and follows its cursor.
  */
 export async function streamLive(
   stream: EventStream,
   chat: ChatApp,
-  owner: number,
+  viewer: number,
   cursor: string,
 ): Promise<void> {
   stream.open();
@@ -99,7 +99,9 @@ export async function streamLive(
       // A signal during the reads below aborts this controller, so the wait after them returns at once.
       wake = new AbortController();
       for (;;) {
-        const read = chat.liveEvents(owner, cursor);
+        // A human deactivated since the last read has no session left: say so before the chat app refuses them.
+        if (!stream.live()) return;
+        const read = chat.liveEvents(viewer, cursor);
         if (read.status === "resnapshot") return stream.finish("resnapshot");
         cursor = read.cursor;
         if (read.events.length === 0) break;

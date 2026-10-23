@@ -3,7 +3,7 @@ import type { PushSender } from "@mate/chat";
 import webPush from "web-push";
 import { z } from "zod";
 
-/** A push not delivered within a day is dropped by the push service: the owner has long since looked. */
+/** A push not delivered within a day is dropped by the push service: the human has long since looked. */
 const PUSH_TTL_SECONDS = 24 * 60 * 60;
 /** The chat app delivers one push at a time, so each must settle within a bounded time. */
 const PUSH_TIMEOUT_MS = 10_000;

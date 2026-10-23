@@ -5,6 +5,7 @@ import {
   accountByExternalId,
   deactivateAccount,
   ensureAccount,
+  humanByHandle,
   listAccounts,
   requireActor,
   requireHuman,
@@ -226,6 +227,16 @@ export class ChatApp {
    */
   findAccount(externalId: string): number | undefined {
     return this.#db.transaction("read", () => accountByExternalId(this.#db, externalId));
+  }
+
+  /**
+   * The human account with `handle` (case-insensitive), active or deactivated, or undefined if there is none or the
+   * handle is an Agent's. How a login finds the account a handle names.
+   */
+  findHuman(
+    handle: string,
+  ): { accountId: number; externalId: string; active: boolean } | undefined {
+    return this.#db.transaction("read", () => humanByHandle(this.#db, handle));
   }
 
   /** Every account, deactivated ones included, since their messages stay readable. */

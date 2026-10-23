@@ -51,7 +51,7 @@ function Heading({ children, action }: { children: string; action?: ReactNode })
   );
 }
 
-/** The conversations the owner can see, grouped by kind, with search and "new conversation". */
+/** The conversations the human can see, grouped by kind, with search and "new conversation". */
 export function ConversationList() {
   const route = useRoute();
   const activeId = route.page === "chat" ? route.conversation : null;

@@ -344,7 +344,7 @@ function useVisible(): boolean {
   return visible;
 }
 
-/** Looking at a timeline is reading it: ask the server to move the owner's position once per newest entry. */
+/** Looking at a timeline is reading it: ask the server to move the human's position once per newest entry. */
 function useMarkRead(ref: TimelineRef, newest: number) {
   const unread = useUnread().data;
   const key = timelineKey(ref);
@@ -624,7 +624,7 @@ function Composer({
   );
 }
 
-/** One timeline: its messages and, when the owner may write there, the composer. */
+/** One timeline: its messages and, when the human may write there, the composer. */
 export function Timeline(props: {
   timelineRef: TimelineRef;
   conversation: number;

@@ -14,7 +14,7 @@ describe("the owner's HTTP operations", () => {
   it("sends once per requestId and maps chat refusals to stable statuses", async () => {
     const site = await environment().start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     const general = (
       await owner.post("/api/chat/channels", {
         requestId: "c",
@@ -68,7 +68,7 @@ describe("the owner's HTTP operations", () => {
   it("reads forward and advances the owner's read position", async () => {
     const site = await environment().start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     const { conversationId } = (
       await owner.post("/api/chat/channels", { requestId: "c", name: "dev", visibility: "private" })
     ).json as { conversationId: number };
@@ -84,7 +84,7 @@ describe("the owner's HTTP operations", () => {
   it("maps admin refusals to stable statuses", async () => {
     const site = await environment().start();
     const owner = site.browser();
-    await owner.logIn();
+    await owner.logInAdmin();
     const settings = { model: { provider: "openai", modelId: "gpt-4.1" } };
 
     expect(refusal(await owner.get("/api/admin/agents/nobody/assistants"))).toEqual([
@@ -162,7 +162,7 @@ describe("the web client", () => {
     for (const path of ["/..%2fsecret", "/assets/..%2f..%2fsecret", "/../secret"])
       expect(await raw(site.url, path), path).not.toContain("outside the client");
 
-    await browser.logIn();
+    await browser.logInAdmin();
     const page = await browser.get("/app/chat/general");
     expect([page.status, page.text]).toEqual([200, "<!doctype html><title>Mate</title>"]);
   });
@@ -170,7 +170,7 @@ describe("the web client", () => {
   it("answers pages with 404 when the client is not built, and the API still works", async () => {
     const site = await environment().start();
     const browser = site.browser();
-    await browser.logIn();
+    await browser.logInAdmin();
     expect((await browser.get("/app")).status).toBe(404);
     expect((await browser.get("/api/chat/unread")).status).toBe(200);
   });

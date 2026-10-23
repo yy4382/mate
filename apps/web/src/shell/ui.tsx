@@ -218,7 +218,7 @@ const avatarSizes: Record<AvatarSize, string> = {
 
 const avatarUrl = (account: number) => `https://api.dicebear.com/10.x/thumbs/svg?seed=${account}`;
 
-/** The owner shows the name's initial. An Agent (`agentAccount` is its chat account ID) shows its generated picture, and the initial if that fails to load. */
+/** A human shows the name's initial. An Agent (`agentAccount` is its chat account ID) shows its generated picture, and the initial if that fails to load. */
 export function Avatar({
   name,
   size = "md",

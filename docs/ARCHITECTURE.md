@@ -4,7 +4,7 @@
 
 ## 1. Mate 是什么
 
-Mate 是一个人（所有者）使用的个人环境。所有者在里面和若干个持续存在的 AI Agent 同事一起工作。Agent 有稳定的身份，有一个跨频道、私信、讨论串一直延续的上下文，还有自己的工作目录。它能聊天、执行命令、读写文件、设提醒，并委派工作助手。
+Mate 是几个人共用的小环境：每个人是一个人类账号，角色是管理员或普通人类。他们在里面和若干个持续存在的 AI Agent 同事一起工作。Agent 有稳定的身份，有一个跨频道、私信、讨论串一直延续的上下文，还有自己的工作目录。它能聊天、执行命令、读写文件、设提醒，并委派工作助手。
 
 Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 的职责是让这些选择都能做到，能被观察到，并且崩溃之后能接着做。
 
@@ -33,7 +33,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 ## 3. 总览
 
 ```
-                         浏览器（所有者）
+                         浏览器（人类）
                                │  HTTPS
 ┌──────────────────────────────┼────────────────────────────────────────┐
 │ 控制面进程（一个 Docker 容器）                                         │
@@ -147,6 +147,7 @@ interface ChatApp {
   ensureAccount({ externalId, displayName, handle, kind }): AccountId
   listAccounts(): AccountView[] // 只读；每个账号（停用的也列出）的 accountId、handle、displayName、kind、active
   findAccount(externalId): AccountId | undefined // 只读；停用的账号也能找到。Manager 打开 Agent 时用它找账号，不另存账号 ID
+  findHuman(handle): { accountId, externalId, active } | undefined // 只读；handle 不分大小写，只找人类账号（Agent 的 handle 找不到），停用的也找到。Web 外壳的登录用它从 handle 找到人类
   deactivateAccount(account, { requestId })
   // 绑定到一个账号的读写方法（readUnread、readHistory、search、send、join、leave、openDm、listConversations、
   // createTask、changeTask），参数与上面相同、去掉 account。结构上满足 runtime 的聊天端口，Agent Manager 用它
@@ -185,7 +186,7 @@ interface ChatApp {
 
    这项检查是 `send` 的一个选项，由调用方的程序决定开不开，而不是由模型决定：
    - Agent 的聊天工具总是开启，并且不把这个选项暴露给模型；
-   - 网页客户端关闭它，因为所有者一直实时看着屏幕。网页把消息显示出来时，就推进所有者的已读位置。
+   - 网页客户端关闭它，因为人类一直实时看着屏幕。网页把消息显示出来时，就推进这个人类的已读位置。
 3. **每个写操作和每次 `readUnread` 都带 `requestId`，按 (账号, requestId) 幂等。** 聊天 app 把第一次的结果存成回执。同一个 ID 再来一次，原样返回那份结果，包括 `readUnread` 返回的那一页消息。这样崩溃后重做工具调用，既不会重复发消息，也不会因为已读位置已经推进而丢掉一页。Agent 的 `requestId` 是 Durable 的工具调用 ID；人类在网页上的操作由浏览器生成 ID。
 4. **一条消息相关的一切在一个事务里提交：** 消息本身、收件事件、推送队列、随消息创建的任务、实时事件。任何一步失败都整体回滚。会被拒绝的请求（参数非法、@ 了不存在的账号、没有权限）在写入开始之前就被拒绝，写入过程中不再有拒绝分支。
 5. **消息不能编辑，也不能删除。**
@@ -359,7 +360,7 @@ interface AgentManager {
 
 ### 4.5 Node 网关与 Node
 
-**Node** 是一台 Linux 机器上，以所有者现有账号运行的进程，由 `mate node` CLI 管理成 systemd 用户服务。它只负责执行：在 Agent 的工作目录里跑命令、读写文件。node 从不接触模型凭据和对话记录。
+**Node** 是一台 Linux 机器上，以宿主现有账号运行的进程，由 `mate node` CLI 管理成 systemd 用户服务。它只负责执行：在 Agent 的工作目录里跑命令、读写文件。node 从不接触模型凭据和对话记录。
 
 **Node 网关** 在控制面里，负责 node 的配对、认证、心跳，并把工具调用转发过去。
 
@@ -415,7 +416,7 @@ interface NodeGateway {
 
 ### 4.6 管理模块
 
-**职责：** 所有者用来管理 Agent 和环境：
+**职责：** 管理员用来管理 Agent 和环境：
 - 创建、删除、暂停、恢复 Agent（调用 Agent Manager）；
 - 设置模型、thinking 级别、说明文字（调用 `manager.configure`）；
 - 管理各提供商的 API key；
@@ -435,7 +436,7 @@ interface NodeGateway {
 openAdmin({ dataDirectory, chat, gateway, clock?, report? }): Admin
 interface Admin {
   // 每个 Agent：聊天账号 ID、显示名和 handle（聊天账号的）、nodeId、state（open | paused | closed）、settings、usage。
-  // 文件读不出来的 Agent 以 state: "unreadable" 和 problem 列出，所有者可以删掉它
+  // 文件读不出来的 Agent 以 state: "unreadable" 和 problem 列出，管理员可以删掉它
   agents(): AgentView[]
   createAgent({ agentId?, nodeId, displayName, handle, settings }): AgentId // node 必须已配对；名字、handle 和 agentId（必须是小写 UUID）在边界检查；中途失败时 reject AgentCreationFailed
   pauseAgent(id) / resumeAgent(id) / deleteAgent(id)
@@ -467,16 +468,19 @@ interface Admin {
 
 ### 4.7 Web 外壳
 
-**后端（`apps/control-plane`）：** 负责组装、登录（只有一个所有者账号）、登录会话 cookie、HTTP 路由、事件流、推送发送器和前端静态文件。入口是 `startControlPlane({ dataDirectory, port?, host?, initialPasswordFile?, webDirectory?, vapidSubject?, clock?, push? })`，`main.ts` 从环境变量读这些（`MATE_DATA_DIRECTORY`、`MATE_PORT`、`MATE_HOST`、`MATE_INITIAL_PASSWORD_FILE`、`MATE_WEB_DIRECTORY`、`MATE_VAPID_SUBJECT`），收到 SIGTERM 或 SIGINT 时关闭后退出。
+**后端（`apps/control-plane`）：** 负责组装、人类的登录和管理（谁能登录、角色、密码）、登录会话 cookie、HTTP 路由、事件流、推送发送器和前端静态文件。入口是 `startControlPlane({ dataDirectory, port?, host?, initialPasswordFile?, initialHandle?, webDirectory?, vapidSubject?, clock?, push? })`，`main.ts` 从环境变量读这些（`MATE_DATA_DIRECTORY`、`MATE_PORT`、`MATE_HOST`、`MATE_INITIAL_PASSWORD_FILE`、`MATE_INITIAL_HANDLE`、`MATE_WEB_DIRECTORY`、`MATE_VAPID_SUBJECT`），收到 SIGTERM 或 SIGINT 时关闭后退出。
 
-- **组装。** 先打开外壳自己在控制库里的表（模块名 `shell`），再 `new ChatApp(chat.sqlite, { clock, push })`，`ensureAccount` 启动时的那个人类账号（`kind: "human"`，`externalId: "owner"`，handle `owner`；之后的版本会让每个人各有一个账号），建网关并把 HTTP 服务器上路径为 `/api/nodes/connect` 的 upgrade 交给 `handleUpgrade`（别的路径直接断开），最后 `openAdmin`。关闭时先停止 HTTP 服务（断开所有连接，事件流随之结束），再依次关闭管理模块、网关、聊天 app 和外壳的表。启动中途失败时，已打开的部分按相反顺序关闭。
-- **登录。** 密码只存 scrypt 哈希。没有存密码时（第一次启动）从 `initialPasswordFile` 读初始密码（去掉末尾换行，至少 12 字节），之后再也不读这个文件；第一次启动没有这个文件就拒绝启动。同时进行的密码校验最多 2 个，更多的按到达顺序排队（先进先出，空出的名额直接交给队首），不拒绝；队列最长 64，超出的立即回 429（`Retry-After: 1`）；排队超过 10 秒仍未轮到的也回 429。不做锁定，也不按客户端计数，所以连续输错再多次所有者也进得来。上限是有意的取舍：几十个并发客户端持续把 64 的队列填满时，所有者这次登录也可能回 429，重试即可；已有的登录会话不受影响，也不会因此被锁定或泄露什么。登录成功发一个随机令牌，cookie 为 `__Host-mate_session`（`HttpOnly; Secure; SameSite=Lax; Path=/`），库里只存令牌的 SHA-256；登录会话从登录起 30 天有效，不随使用延长，跨重启保留。退出登录删掉这一行，令牌立即失效，别的登录会话不受影响。
-- **路由。** 除了 `POST /api/login`（`{ password, next? }`，回 `{ next }`：`next` 是站内 `/app` 下的路径时原样返回，否则是 `/app`）和 `POST /api/logout`，`/api/*` 都要登录，未登录回 401。页面请求：前端目录里存在的文件（脚本、样式、图标）不需要登录；`/` 跳到 `/app`；`/app` 及其下的页面未登录时跳到 `/login?next=<原地址>`；其余页面路径都回前端的 `index.html`，由前端路由。没有前端目录时页面回 404，API 照常工作。
-  - `/api/chat/*` 一个路由对应聊天 app 的一个所有者操作，账号固定为所有者。读：`GET snapshot`（可带 `conversation=` 或 `thread=`）、`conversations`、`unread`、`history`（`conversation=`/`thread=`、`before`、`limit`）、`search?q=`。写都带浏览器生成的 `requestId`：`POST read`（读未读，推进所有者的已读位置）、`messages`、`channels`、`dms`、`conversations/:id/join|leave|archive|invite`、`tasks`、`tasks/:id/change`。发送和任务操作总是关闭新鲜度检查（4.1 规则 2），请求里不接受这一项。推送：`GET push/key`（VAPID 公钥）、`POST push/subscribe`、`POST push/unsubscribe`。
-  - `/api/admin/*` 一个路由对应管理模块的一个操作：`GET|POST agents`、`POST agents/:id/pause|resume`、`DELETE agents/:id`、`PUT agents/:id/settings`、`GET agents/:id/assistants`、`GET agents/:id/events`（事件流，可带 `assistant=`）、`GET agents/:id/workspace?path=`、`GET providers`、`PUT|DELETE providers/:provider/credentials`、`GET models`、`GET nodes`、`POST pairing-tokens`。
-  - **跨站防护。** 请求体必须声明 `content-type: application/json`（可带 charset），否则回 415 `unsupported-media-type`：别的站点的表单或不预检的 `fetch` 只能发 `text/plain` 之类，所以带着所有者的 cookie 也伪造不出请求。带 `Origin` 头的非 GET 请求，`Origin` 的 host 必须等于请求的 `Host`，否则回 403 `cross-origin`（登录、退出也一样）；没有 `Origin`（脚本、curl）不是浏览器页面发的，放行。路径参数里不合法的百分号编码回 400 `invalid-input`。
-  - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`human-only`、`outside-workspace` 为 403；`archived`、`request-conflict`、`handle-taken`、`no-credentials`、`agent-closed`、`agent-exists` 为 409；`unreadable` 为 422；`node-offline` 为 503。创建 Agent 在文件改名之前中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做；没有创建任何东西的拒绝（不合法的名字、handle 被占用、ID 已存在）回上面各自的状态，不带 `agentId`。成功的操作回 200 加结果，没有结果的回 204。
-- **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, cursor, unread }`），SSE 的 id 是这批读到的游标 `cursor`，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前都查一次登录会话；会话已过期或已退出登录，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
+- **组装。** 先打开外壳自己在控制库里的表（模块名 `shell`），再 `new ChatApp(chat.sqlite, { clock, push })`，建 `Humans`，第一次启动时创建第一个人类（见"登录"），建网关并把 HTTP 服务器上路径为 `/api/nodes/connect` 的 upgrade 交给 `handleUpgrade`（别的路径直接断开），最后 `openAdmin`。关闭时先停止 HTTP 服务（断开所有连接，事件流随之结束），再依次关闭管理模块、网关、聊天 app 和外壳的表。启动中途失败时，已打开的部分按相反顺序关闭。
+- **登录。** 谁能登录由外壳自己的 `humans` 表管（`Humans`，控制库里的模块 `shell`）：每行一个人类，以聊天账号的 `externalId` 为键，带角色（`admin` 或 `member`）、scrypt 密码哈希和是否有效；显示名、handle 和账号种类在聊天账号里，聊天 app 不知道登录和角色，两边靠 `externalId` 对上。登录用 handle 加密码：控制面先让聊天 app 按 handle 找到人类账号（`findHuman`），再检查这个人类的密码。handle 不存在、是 Agent 的、或这个人类已停用，都和密码错了一样回 401 `wrong-password`（状态和正文都相同），并且照样做一次 scrypt 校验（对一个固定的假哈希），所以从回答和耗时都看不出哪些 handle 存在。**第一次启动**（`humans` 表是空的）：从 `initialPasswordFile` 读初始密码（去掉末尾换行，至少 12 字节；没有这个文件就拒绝启动），用 `initialHandle`（`MATE_INITIAL_HANDLE`，缺省 `admin`，要符合聊天账号的 handle 规则，否则拒绝启动）建聊天账号（`externalId: "human:initial"`，`kind: "human"`，显示名同 handle），再插入管理员行；两步都以这个固定的 `externalId` 为键，所以停在两步之间，下一次启动会补完。有了第一个人类之后再也不读这个文件。同时进行的密码校验最多 2 个，更多的按到达顺序排队（先进先出，空出的名额直接交给队首），不拒绝；队列最长 64，超出的立即回 429（`Retry-After: 1`）；排队超过 10 秒仍未轮到的也回 429。不做锁定，也不按客户端计数，所以连续输错再多次，正确的密码也进得来。上限是有意的取舍：几十个并发客户端持续把 64 的队列填满时，一次正确的登录也可能回 429，重试即可；已有的登录会话不受影响，也不会因此被锁定或泄露什么。登录成功发一个随机令牌，cookie 为 `__Host-mate_session`（`HttpOnly; Secure; SameSite=Lax; Path=/`），库里只存令牌的 SHA-256 和它属于哪个人类；登录会话从登录起 30 天有效，不随使用延长，跨重启保留，并且只对有效的人类有效。退出登录删掉这一行，令牌立即失效，别的登录会话不受影响。
+- **人类的管理。** 每个人类可以改自己的显示名、handle 和密码；管理员还能添加人类、改别人的角色、重置别人的密码和停用别人。任何时候至少有一个有效的管理员：降级或停用最后一个有效管理员回 409 `last-admin`，什么都不改。停用是永久的（同聊天的 `deactivateAccount`）：先在外壳标记无效并删掉他所有的登录会话，再停用聊天账号，所以他开着的事件流在下一个事件或心跳发出前就以 `login` 结束，登录也立即不可能；已经标记无效而聊天账号还没停用（中途崩溃）时，重做同一个请求会补完。他的消息照常可读。添加人类以管理员给的 `requestId` 幂等：externalId 是 `human:request:<requestId>`，外壳里已有这一行就原样返回这个人类，不再改动（包括他后来自己改的名字）；没有就先建聊天账号（handle 被占用在任何外壳写入之前就拒绝），再插入外壳的行，两步之间崩溃，重发同一个请求会补完。
+- **路由。** 除了 `POST /api/login`（`{ handle, password, next? }`，回 `{ next }`：`next` 是站内 `/app` 下的路径时原样返回，否则是 `/app`）和 `POST /api/logout`，`/api/*` 都要登录，未登录回 401。页面请求：前端目录里存在的文件（脚本、样式、图标）不需要登录；`/` 跳到 `/app`；`/app` 及其下的页面未登录时跳到 `/login?next=<原地址>`；其余页面路径都回前端的 `index.html`，由前端路由。没有前端目录时页面回 404，API 照常工作。
+  - `/api/chat/*` 一个路由对应聊天 app 的一个操作，账号固定为发出请求的人类自己的账号：每个人类读到全部会话，有自己的实时视图、未读摘要和推送订阅。读：`GET snapshot`（可带 `conversation=` 或 `thread=`）、`conversations`、`unread`、`history`（`conversation=`/`thread=`、`before`、`limit`）、`search?q=`。写都带浏览器生成的 `requestId`：`POST read`（读未读，推进这个人类的已读位置）、`messages`、`channels`、`dms`、`conversations/:id/join|leave|archive|invite`、`tasks`、`tasks/:id/change`。发送和任务操作总是关闭新鲜度检查（4.1 规则 2），请求里不接受这一项。推送：`GET push/key`（VAPID 公钥）、`POST push/subscribe`、`POST push/unsubscribe`。
+  - `/api/me`：`GET` 回 `{ accountId, handle, displayName, role }`；`PATCH { displayName, handle }` 改自己的名字（经聊天 app 的 `ensureAccount`，handle 被占用回 409 `handle-taken`）；`POST password { current, next }` 改自己的密码（`current` 不对回 403 `wrong-password`，`next` 至少 12 字节），他其他的登录会话随之结束，当前这个保留。
+  - `/api/humans`（只有管理员）：`GET` 回每个人类的 `{ accountId, handle, displayName, role, active }`；`POST { requestId, handle, displayName, password, role }` 添加；`POST :accountId/role { role }`、`POST :accountId/password { password }`（结束那个人类所有的登录会话）、`POST :accountId/deactivate`。
+  - `/api/admin/*`（只有管理员）一个路由对应管理模块的一个操作：`GET|POST agents`、`POST agents/:id/pause|resume`、`DELETE agents/:id`、`PUT agents/:id/settings`、`GET agents/:id/assistants`、`GET agents/:id/events`（事件流，可带 `assistant=`）、`GET agents/:id/workspace?path=`、`GET providers`、`PUT|DELETE providers/:provider/credentials`、`GET models`、`GET nodes`、`POST pairing-tokens`。
+  - **跨站防护。** 请求体必须声明 `content-type: application/json`（可带 charset），否则回 415 `unsupported-media-type`：别的站点的表单或不预检的 `fetch` 只能发 `text/plain` 之类，所以带着人类的 cookie 也伪造不出请求。带 `Origin` 头的非 GET 请求，`Origin` 的 host 必须等于请求的 `Host`，否则回 403 `cross-origin`（登录、退出也一样）；没有 `Origin`（脚本、curl）不是浏览器页面发的，放行。路径参数里不合法的百分号编码回 400 `invalid-input`。
+  - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`human-only`、`outside-workspace` 为 403；`archived`、`request-conflict`、`handle-taken`、`no-credentials`、`agent-closed`、`agent-exists` 为 409；`unreadable` 为 422；`node-offline` 为 503。外壳自己的拒绝：`admin-only`（普通人类调用管理员的路由，在读请求体之前）403，`wrong-password` 在登录时 401、在改密码时 403，`last-admin` 409，`too-many-attempts` 429，`unknown-account`（`:accountId` 不是人类）404。创建 Agent 在文件改名之前中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做；没有创建任何东西的拒绝（不合法的名字、handle 被占用、ID 已存在）回上面各自的状态，不带 `agentId`。成功的操作回 200 加结果，没有结果的回 204。
+- **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, cursor, unread }`），SSE 的 id 是这批读到的游标 `cursor`，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前、读聊天 app 之前都查一次登录会话；会话已过期、已退出登录或这个人类已被停用，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
 - **推送发送器。** VAPID 密钥对在第一次启动时生成，存在外壳的表里，之后不变：浏览器用公钥订阅，换了密钥所有订阅都会失效。`PushSender` 用 `web-push` 发出（加密、VAPID 签名、TTL 一天、请求超时 10 秒），推送服务的回答原样作为状态码交回聊天 app，连不上时抛错。VAPID 的联系地址来自 `MATE_VAPID_SUBJECT`，缺省为 `mailto:owner@mate.invalid`。
 
 **前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。样式用 Tailwind CSS v4，对话框、菜单、标签页等交互组件用 Base UI，界面原语集中在 `src/shell/ui.tsx`；外观和交互规则见 [界面规范](DESIGN.md)。页面在 `/login` 和 `/app` 下，`apps/web` 用 Vite 构建，`MATE_WEB_DIRECTORY` 指向构建产物（`apps/web/dist`）。
@@ -490,9 +494,9 @@ interface Admin {
 
 ## 5. 关键流程
 
-### 5.1 所有者发消息，Agent 回复
+### 5.1 人类发消息，Agent 回复
 
-1. 所有者在 #general 发了一条 @A 的消息。浏览器带上自己生成的 `requestId`。
+1. 人类在 #general 发了一条 @A 的消息。浏览器带上自己生成的 `requestId`。
 2. 聊天 app 在一个事务里写入消息，并给 A 和其他成员追加收件事件（A 的那条带"提及"标记）。
 3. A 的连接器看到新事件，生成通知并提交给 A 的 runtime。
 4. A 空闲，所以 Durable 开始一次 run。模型看到通知，决定调用 `readUnread(#general)`。
@@ -505,11 +509,11 @@ A 正在执行一条长命令时，B 在 #dev 发了消息。连接器提交一�
 
 ### 5.3 发送被拦下
 
-A 读完 #general 之后、发送之前，所有者又发了一条。A 的 `send` 返回"未发送：你上次读取后有 1 条新消息"，附上那条消息，并推进 A 的已读位置。A 可以改了再发，或者原样再发。
+A 读完 #general 之后、发送之前，人类又发了一条。A 的 `send` 返回"未发送：你上次读取后有 1 条新消息"，附上那条消息，并推进 A 的已读位置。A 可以改了再发，或者原样再发。
 
 ### 5.4 暂停与恢复
 
-所有者点了暂停。Manager 在 A 的队列里执行：关闭 runtime（中止模型请求，请网关停掉 A 在 node 上的调用），然后在 A 的文件里记下"已暂停"。恢复时清除这个标记，打开 runtime，Durable 从停下的地方接着跑，被中止的工具调用以"已中断"交给模型。
+管理员点了暂停。Manager 在 A 的队列里执行：关闭 runtime（中止模型请求，请网关停掉 A 在 node 上的调用），然后在 A 的文件里记下"已暂停"。恢复时清除这个标记，打开 runtime，Durable 从停下的地方接着跑，被中止的工具调用以"已中断"交给模型。
 
 ### 5.5 控制面崩溃重启
 
@@ -527,7 +531,7 @@ Manager 扫描 `data/agents/`，打开所有没有暂停的 Agent：
 
 ```
 data/
-  control.sqlite              所有者的密码哈希和登录会话、VAPID 密钥、API key、node 注册表（0600）
+  control.sqlite              人类的角色和密码哈希、登录会话、VAPID 密钥、API key、node 注册表（0600）
   chat.sqlite                 聊天 app 的全部数据（含附件元数据和推送队列）
   attachments/                附件文件（还没有实现）
   agents/<agentId>.sqlite     每个 Agent 的 Durable 存储（含配置、提醒、连接器位置）
@@ -535,12 +539,12 @@ data/
 
 搬到另一台 VPS：停掉容器，复制 `data/`，启动。
 
-**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@mate/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
+**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@mate/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5；外壳的第 2 版用 `humans` 和 `sessions` 取代 `owner_password` 和 `owner_sessions`：原来的所有者成为 externalId 为 `owner` 的管理员，密码哈希和登录会话原样保留（已登录的 cookie 继续有效），他的聊天账号本来就是 externalId `owner` 的人类账号，名字和 handle 不变，之后可以自己改。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
 
 ## 7. 部署
 
 - **控制面**：Docker 镜像加单服务 Compose，容器以一个专用的无登录系统账号的 UID/GID 运行，数据目录只属于它。node 账号（Agent 命令的身份）读不到模型凭据和对话库，也不在 docker 组里。
-- **node**：完整发布包，自带 Node 运行时和 `mate node` CLI，以宿主现有账号的 systemd 用户服务运行。发布包是一个 ustar 归档加旁边的 `.sha256`：官方 Node 24 二进制（构建脚本里钉死校验和），esbuild 把 node 程序和 CLI 打成的一个脚本，`mate` 启动命令，以及列出所有文件的清单。没有原生依赖，所以两种架构都在任何机器上构建。CLI 没有下载步骤，发布包由所有者自己拷到机器上。
+- **node**：完整发布包，自带 Node 运行时和 `mate node` CLI，以宿主现有账号的 systemd 用户服务运行。发布包是一个 ustar 归档加旁边的 `.sha256`：官方 Node 24 二进制（构建脚本里钉死校验和），esbuild 把 node 程序和 CLI 打成的一个脚本，`mate` 启动命令，以及列出所有文件的清单。没有原生依赖，所以两种架构都在任何机器上构建。CLI 没有下载步骤，发布包由管理员自己拷到机器上。
 - **`mate node` 不记"做到哪一步"**（第 11 节第 1 条）。程序目录 `~/.local/lib/mate-node` 由暂存目录改名放入、改名挪开再删，所以要么是完整的某个版本，要么不存在；`install`、`update`、`uninstall` 只看程序目录、`~/.local/bin/mate`、单元文件和服务状态这几样现有状态决定做什么，配置、身份和工作区在程序目录之外，它们从不碰。清单同时说明程序目录里哪些文件是 Mate 的：有别的文件时 `update` 和 `uninstall` 拒绝，不删别人的东西。`install` 从不启动服务，`update` 只在服务完全停止时动手，之后也不启动。状态到动作的完整对照见 DEPLOYMENT §3.2。
 
 Mate 不创建用户、不切换身份、不安装系统软件、不配置 linger。Agent 自己在命令里写 `sudo` 的话，能不能成功由宿主的 sudo 策略决定。
@@ -570,7 +574,7 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 | 改配置后要用配置哈希作废已准备的请求 | 哈希、全部中止、重新配置 | 不追溯，下一次请求起生效 |
 | 用量统计反复重写 | 从原始 SSE 里抠数字 | 只读 Durable 的 `pi.usage`，只做观察 |
 | Agent 改了 `MEMORY.md` 的权限，自己的命令就全部失败 | 每次执行前检查 Agent 能改的文件 | 只检查工作目录是否存在 |
-| 所有者重发消息会产生重复消息 | 没有幂等键 | 浏览器生成 `requestId` |
+| 人类重发消息会产生重复消息 | 没有幂等键 | 浏览器生成 `requestId` |
 | 浏览器的事件游标超前于服务端时检测不到 | 只检查游标是否太旧 | 事件流带一个"纪元"ID，数据重置后纪元改变，客户端重新拉快照 |
 | 提醒是否已处理靠两个时间戳相等来判断 | `completed_at = handled_at` | 提醒存在 Agent 的 Durable 文档里，触发时按 `reminder:<id>` 去重 |
 | 一个 Agent 同时可能有两个 runtime | 关闭旧 Harness 后才能打开新的这条规则 | Manager 是唯一的构造者，每个 Agent 一条串行队列 |
@@ -584,8 +588,8 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 - 不做逐条命令审批，不做 Mate 自己的提权。
 - 不限制 Agent 读同事的工作区，只在提示里请它不要读。
 - 不使用 `pi-coding-agent`。
-- 一个所有者，中文界面，适配手机。
-- 规模很小：一个所有者，少量 Agent（模型费用决定了不会多），消息量不大。不为数据量做性能优化或分页之类的设计，除非测量证明确实有问题；结构简单优先。
+- 几个人共用，每人自己的登录；角色只有管理员和普通人类两种（管理员管理 Agent、提供商和 API key、node 和其他人类，普通人类只聊天）；中文界面，适配手机。
+- 规模很小：几个人，少量 Agent（模型费用决定了不会多），消息量不大。不为数据量做性能优化或分页之类的设计，除非测量证明确实有问题；结构简单优先。
 
 ## 11. 决定记录
 
@@ -602,3 +606,4 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 | 7 | 要不要 Web Push 和附件？ | 要推送；聊天接口接受附件元数据，但附件文件的上传和存储还没有实现 | 4.1 |
 | 8 | 数据库结构变了怎么升级？ | 原地向前迁移：每个存储的结构是一串按版本递增的迁移；比代码新、或版本不在列表里的存储拒绝启动；已发布版本的存储夹具证明升级可行 | 第 6 节、4.5 |
 | 9 | 要不要 CI？ | 要。GitHub Actions 在每次推送时跑 `pnpm check` 和 `pnpm test:linux`；`v*` 标签在两者通过后发布镜像和 node 发布包 | `.github/workflows/ci.yml` |
+| 10 | 几个人怎么共用？ | 每个人是一个人类账号，各有登录（handle 加密码）、名字、已读位置和推送。角色只有管理员和普通人类两种：角色和登录归外壳的 `humans` 表，名字和账号种类归聊天 app，两边靠 externalId 对上。任何时候至少有一个有效的管理员；第一个人类（管理员）由初始密码文件和初始 handle 在第一次启动时创建；原来的所有者升级后成为 handle 为 `owner` 的管理员 | 4.7、第 6 节 |

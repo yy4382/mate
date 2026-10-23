@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { AdminError, AgentCreationFailed, type AdminErrorReason } from "@mate/admin";
 import { ChatError, type ChatErrorReason } from "@mate/chat";
+import { z } from "zod";
 
 /** Request bodies are small JSON documents; the largest is a message of at most 20,000 characters. */
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -95,7 +96,7 @@ export function sendJson(
 
 /**
  * The request's JSON body, or undefined when it has none. A body must be declared `application/json`: a cross-site
- * form or `fetch` without a preflight can only send `text/plain` and the like, so it cannot put words in the owner's
+ * form or `fetch` without a preflight can only send `text/plain` and the like, so it cannot put words in a human's
  * mouth even if the browser attaches the cookie.
  */
 export async function readJson(request: IncomingMessage): Promise<unknown> {
@@ -125,6 +126,13 @@ export function cookie(request: IncomingMessage, name: string): string | undefin
       return part.slice(separator + 1).trim();
   }
   return undefined;
+}
+
+/** A body the shell itself handles, checked against `schema`; a mismatch is a 400 `invalid-input`. */
+export function parseBody<S extends z.ZodType>(schema: S, body: unknown): z.output<S> {
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) throw new HttpError(400, "invalid-input", z.prettifyError(parsed.error));
+  return parsed.data;
 }
 
 /**

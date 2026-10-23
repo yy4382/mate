@@ -12,7 +12,7 @@ export class ApiError extends Error {
   }
 }
 
-/** Where login sends the owner back to: the page they were on. */
+/** Where login sends the human back to: the page they were on. */
 export function loginPath(): string {
   return `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
 }
@@ -24,7 +24,7 @@ export function redirectToLogin(): void {
 type Method = "GET" | "POST" | "PUT" | "DELETE";
 
 /**
- * One call to the control plane. The body is always JSON with its content type; a 401 anywhere sends the owner to the
+ * One call to the control plane. The body is always JSON with its content type; a 401 anywhere sends the human to the
  * login page, which brings them back here.
  */
 export async function api<T>(method: Method, path: string, body?: unknown): Promise<T> {

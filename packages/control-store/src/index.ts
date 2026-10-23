@@ -75,7 +75,7 @@ export function openControlTables(dataDirectory: string, tables: ControlTables):
 }
 
 /**
- * The store holds the owner's password hash, sessions and API keys, so only the account Mate runs as may read it.
+ * The store holds the humans' password hashes, sessions and API keys, so only the account Mate runs as may read it.
  * The file is created empty with mode 0600 before SQLite opens it; SQLite gives its -wal and -shm files the main file's
  * mode.
  */
