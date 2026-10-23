@@ -17,7 +17,12 @@ export function loginPath(): string {
   return `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
 }
 
+let leavingForLogin = false;
+
+/** An ended session reaches every open request and stream at once; the page leaves once, since a second assign aborts the first navigation. */
 export function redirectToLogin(): void {
+  if (leavingForLogin) return;
+  leavingForLogin = true;
   location.assign(loginPath());
 }
 
