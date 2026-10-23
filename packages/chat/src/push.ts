@@ -53,12 +53,21 @@ const FIRST_RETRY_MS = 30_000;
 /** A push whose delivery failed this many times in a row is dropped. */
 const MAX_FAILURES = 10;
 
-/** Add the human's subscription, or bring an endpoint already subscribed up to date and give it to this human. */
+/**
+ * Add the human's subscription, or bring an endpoint already subscribed up to date and give it to this human. An
+ * endpoint is a browser, so one that moves to another human takes none of the previous human's queued pushes along.
+ */
 export function subscribePush(
   db: ChatDatabase,
   human: Actor,
   subscription: PushSubscription,
 ): void {
+  db.run(
+    `DELETE FROM push_deliveries WHERE subscription_id IN
+       (SELECT id FROM push_subscriptions WHERE endpoint = ? AND account_id != ?)`,
+    subscription.endpoint,
+    human.id,
+  );
   db.run(
     `INSERT INTO push_subscriptions (account_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)
      ON CONFLICT (endpoint) DO UPDATE SET
@@ -70,9 +79,13 @@ export function subscribePush(
   );
 }
 
-/** Remove the subscription and every delivery still queued for it. */
-export function unsubscribePush(db: ChatDatabase, endpoint: string): void {
-  db.run("DELETE FROM push_subscriptions WHERE endpoint = ?", endpoint);
+/** Remove the human's subscription and every delivery still queued for it. An endpoint of another human stays. */
+export function unsubscribePush(db: ChatDatabase, human: Actor, endpoint: string): void {
+  db.run(
+    "DELETE FROM push_subscriptions WHERE endpoint = ? AND account_id = ?",
+    endpoint,
+    human.id,
+  );
 }
 
 /**
@@ -103,6 +116,7 @@ const DueRow = z.object({
   failures: z.number(),
   due_at: z.number(),
   endpoint: z.string(),
+  active: SqlBoolean,
   p256dh: z.string(),
   auth: z.string(),
   seq: z.number(),
@@ -121,6 +135,7 @@ function nextDelivery(db: ChatDatabase): DueRow | undefined {
   return db.get(
     DueRow,
     `SELECT d.entry_id, d.subscription_id, d.failures, d.due_at, s.endpoint, s.p256dh, s.auth,
+       (SELECT o.active FROM accounts o WHERE o.id = s.account_id) AS active,
        e.seq, e.created_at, t.conversation_id, t.root_entry_id, c.kind, c.name, a.handle AS sender,
        EXISTS (SELECT 1 FROM mentions m
                WHERE m.entry_id = e.id AND m.account_id = s.account_id) AS mentioned
@@ -237,6 +252,7 @@ export class PushDelivery {
     if (due === undefined) return this.#sleep(undefined);
     const wait = due.due_at - this.#clock.now();
     if (wait > 0) return this.#sleep(wait);
+    if (!due.active) return this.#db.transaction("write", () => settle(this.#db, due, "refused"));
     const status = await attempt(this.#send, due);
     if (this.#closed) return;
     this.#db.transaction("write", () => settle(this.#db, due, outcomeOf(status)));
