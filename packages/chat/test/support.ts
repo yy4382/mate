@@ -45,7 +45,7 @@ export function newAppWithOwner(options: AppOptions = {}) {
     externalId: "owner-ext",
     displayName: "Owner",
     handle: "owner",
-    role: "owner",
+    kind: "human",
   });
   return { app, ownerId };
 }
@@ -56,11 +56,13 @@ export function newAppWithTwo() {
     externalId: "alice-ext",
     displayName: "Alice",
     handle: "alice",
+    kind: "agent",
   });
   const bob = app.ensureAccount({
     externalId: "bob-ext",
     displayName: "Bob",
     handle: "bob",
+    kind: "agent",
   });
   return { app, alice, bob };
 }

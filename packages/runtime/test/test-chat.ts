@@ -12,12 +12,13 @@ export function testChat() {
     externalId: "owner",
     displayName: "Owner",
     handle: "owner",
-    role: "owner",
+    kind: "human",
   });
   const self = chat.ensureAccount({
     externalId: "agent-1",
     displayName: "Richard",
     handle: "richard",
+    kind: "agent",
   });
   const general = chat.createChannel(owner, {
     requestId: "setup:general",

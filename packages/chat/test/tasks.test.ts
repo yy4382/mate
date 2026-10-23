@@ -122,6 +122,7 @@ describe("3.7 tasks", () => {
       externalId: "outsider",
       displayName: "Outsider",
       handle: "outsider",
+      kind: "agent",
     });
     const channel = app.createChannel(alice, {
       requestId: rid(),

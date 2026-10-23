@@ -92,7 +92,7 @@ export async function environment() {
     externalId: "owner",
     displayName: "Owner",
     handle: "owner",
-    role: "owner",
+    kind: "human",
   });
   const general = chat.createChannel(owner, {
     requestId: "setup:general",
@@ -116,7 +116,6 @@ export async function environment() {
       const admin = await openAdmin({
         dataDirectory: data,
         chat,
-        owner,
         gateway,
         clock,
         report: (error, agentId) => reports.push({ agentId, error }),

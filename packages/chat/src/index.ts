@@ -5,9 +5,11 @@ import {
   accountByExternalId,
   deactivateAccount,
   ensureAccount,
+  listAccounts,
   requireActor,
-  requireOwner,
+  requireHuman,
   EnsureAccountInput,
+  type AccountView,
 } from "./accounts.ts";
 import { ChatError, parseInput } from "./chat-error.ts";
 import {
@@ -71,7 +73,7 @@ import { resolveTimeline, TimelineRef } from "./timelines.ts";
 
 export { ChatError, type ChatErrorReason } from "./chat-error.ts";
 export { ChatStoreIncompatible } from "./database.ts";
-export { AccountNames, type AccountView } from "./accounts.ts";
+export { AccountKind, AccountNames, type AccountView } from "./accounts.ts";
 export type { ConversationView } from "./conversations.ts";
 export type { Entry, MessageEntry, TaskEntry } from "./entries.ts";
 export type { ReadPage } from "./forward-reading.ts";
@@ -224,6 +226,11 @@ export class ChatApp {
    */
   findAccount(externalId: string): number | undefined {
     return this.#db.transaction("read", () => accountByExternalId(this.#db, externalId));
+  }
+
+  /** Every account, deactivated ones included, since their messages stay readable. */
+  listAccounts(): AccountView[] {
+    return this.#db.transaction("read", () => listAccounts(this.#db));
   }
 
   /** Deactivation is permanent. The account's messages stay readable. */
@@ -406,14 +413,14 @@ export class ChatApp {
   // ── Live view ───────────────────────────────────────────────────────────────
 
   /**
-   * What the owner's client shows, and the cursor it follows from, read together: whatever was committed before is
+   * What the human's client shows, and the cursor it follows from, read together: whatever was committed before is
    * in the snapshot, whatever is committed after arrives from `liveEvents(cursor)`. With `timeline`, the snapshot
    * also holds that timeline's newest page, so the timeline a client opens with needs no second read.
    */
   liveSnapshot(account: number, request?: z.input<typeof SnapshotRequest>): LiveSnapshot {
-    const owner = requireOwner(this.#db, account);
+    const viewer = requireHuman(this.#db, account);
     const { timeline } = parseInput(SnapshotRequest, request ?? {});
-    return this.#db.transaction("read", () => liveSnapshot(this.#db, owner, timeline));
+    return this.#db.transaction("read", () => liveSnapshot(this.#db, viewer, timeline));
   }
 
   /**
@@ -422,9 +429,9 @@ export class ChatApp {
    * or not one this store issued: the client must load a new snapshot.
    */
   liveEvents(account: number, cursor: string): LiveEvents {
-    const owner = requireOwner(this.#db, account);
+    const viewer = requireHuman(this.#db, account);
     const after = parseInput(LiveCursor, cursor);
-    return this.#db.transaction("read", () => liveEvents(this.#db, owner, after));
+    return this.#db.transaction("read", () => liveEvents(this.#db, viewer, after));
   }
 
   /**
@@ -442,18 +449,19 @@ export class ChatApp {
   // ── Push ────────────────────────────────────────────────────────────────────
 
   /**
-   * Push the owner's DMs and mentions to this browser from now on. Idempotent on the endpoint rather than on a
-   * requestId: the endpoint is the subscription's natural key, so subscribing again only refreshes its keys.
+   * Push the human's DMs and mentions to this browser from now on. Idempotent on the endpoint rather than on a
+   * requestId: the endpoint is the subscription's natural key, so subscribing again refreshes its keys and, from
+   * another human, moves it to that human.
    */
   subscribePush(account: number, subscription: z.input<typeof PushSubscription>): void {
-    requireOwner(this.#db, account);
+    const human = requireHuman(this.#db, account);
     const parsed = parseInput(PushSubscription, subscription);
-    this.#write(() => subscribePush(this.#db, parsed));
+    this.#write(() => subscribePush(this.#db, human, parsed));
   }
 
   /** Stop pushing to the endpoint, dropping its queued pushes. Unsubscribing an unknown endpoint changes nothing. */
   unsubscribePush(account: number, request: z.input<typeof PushEndpoint>): void {
-    requireOwner(this.#db, account);
+    requireHuman(this.#db, account);
     const { endpoint } = parseInput(PushEndpoint, request);
     this.#write(() => unsubscribePush(this.#db, endpoint));
   }

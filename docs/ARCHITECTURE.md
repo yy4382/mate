@@ -91,25 +91,25 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 
 ### 4.1 聊天 app
 
-**职责：** 一个类 Slack 的聊天系统，包括账号、频道、私信、讨论串、消息、附件、消息上的任务、已读位置，以及给所有者的推送通知。
+**职责：** 一个类 Slack 的聊天系统，包括账号、频道、私信、讨论串、消息、附件、消息上的任务、已读位置，以及给人类账号的推送通知。
 
-**不负责：** 它不知道 runtime、run、模型的存在。它分不出一个账号背后是人还是 Agent，也不需要分。唯一的特殊角色是所有者账号：它能看到所有会话。
+**不负责：** 它不知道 runtime、run、模型的存在。账号分两种，**人类**和 **Agent**，创建时定下、之后不变。人类账号能看到所有会话，也只有人类账号有实时视图和推送；可以有多个人类账号，各有各的已读位置、未读摘要和推送订阅。聊天 app 不管谁登录、谁是管理员，那是 Web 外壳的事。
 
 **核心概念：**
 
-- **账号**：人或 Agent 在聊天里的身份。
+- **账号**：人或 Agent 在聊天里的身份，种类（`kind`）是 `human` 或 `agent`。
 - **会话**：频道（公开或私有）或私信。
 - **时间线**：一串按顺序编号的消息。每个会话的顶层消息是一条时间线，每个讨论串也是一条时间线。每条消息在所属时间线内有一个只增不减的序号。
 - **已读位置**：每个账号在每条时间线上一个序号，表示"这个账号已经看到了这里"。这是聊天 app 记录"谁看过什么"的**唯一**方式。
 - **收件事件**：消息提交时，聊天 app 为每个应被通知的账号追加一条收件事件，写在同一个事务里。事件有全局递增的 ID，并带上标记：是否提及了你、是否私信、是否讨论串。
-- **实时事件**：所有者的浏览器实时显示聊天所依靠的日志。每条记下所有者看到的一个变化：新条目、会话或成员变化、账号变化、所有者的已读位置前进。它由 `chat.sqlite` 里的触发器在改动这个事实的同一个事务里追加，所以任何写路径都不可能改了浏览器显示的东西却不留事件。
+- **实时事件**：人类账号的浏览器实时显示聊天所依靠的日志，全局一条。每条记下一个变化：新条目、会话或成员变化、账号变化、某个人类账号的已读位置前进，并带受众（`audience`）：空表示每个人类账号都看到，否则只有那个账号看到（已读位置属于前进的那个人类账号）。它由 `chat.sqlite` 里的触发器在改动这个事实的同一个事务里追加，所以任何写路径都不可能改了浏览器显示的东西却不留事件。
 
 **谁会被通知：**
 
 - 频道的顶层消息：通知该频道的所有成员，作者本人除外。
 - 讨论串回复：只通知**关注**这个讨论串、并且还能读这个会话的人。关注者是根消息的作者、回复过的人，以及在这个讨论串里被 @ 过的人（包括这条回复 @ 的人）。
 - 私信：通知对方。
-- 所有者能读所有会话，但和别的账号一样，只在上面这些情况下收到通知：没加入的频道里的顶层消息不通知所有者。
+- 人类账号能读所有会话，但和别的账号一样，只在上面这些情况下收到通知：没加入的频道里的顶层消息不通知人类账号。
 - 不做静音。
 - "谁关注哪条时间线"只有一个定义（`chat.sqlite` 里的 `followed_timelines` 视图）：会话顶层由成员关注，讨论串由上面的关注者关注。收件事件发给关注者，未读摘要列的也正是关注的时间线，两者不会不一致。"谁能读哪个会话"同样只有一个定义（`readable_conversations` 视图），所有可见性判断都从它查。
 
@@ -142,27 +142,29 @@ interface ChatApp {
     // kind：public | private | dm；label：频道名，私信为对方的 handle；latestSender：最新一条未读的发送者 handle
   }
   // 账号管理，给 Agent Manager 用；以 externalId 幂等
-  // role：owner | member，缺省 member；owner 最多一个，在账号创建时定下。名字和 handle 不合法为 invalid-input；handle 被别的账号占着为 handle-taken；
-  // 已停用的账号（Agent 被删除）为 inactive-account，停用是永久的，它的 externalId 不能再用
-  ensureAccount({ externalId, displayName, handle, role? }): AccountId
+  // kind：human | agent，必填，在账号创建时定下；对已有账号换一个 kind 为 invalid-input。名字和 handle 不合法为 invalid-input；
+  // handle 被别的账号占着为 handle-taken；已停用的账号（Agent 被删除）为 inactive-account，停用是永久的，它的 externalId 不能再用
+  ensureAccount({ externalId, displayName, handle, kind }): AccountId
+  listAccounts(): AccountView[] // 只读；每个账号（停用的也列出）的 accountId、handle、displayName、kind、active
   findAccount(externalId): AccountId | undefined // 只读；停用的账号也能找到。Manager 打开 Agent 时用它找账号，不另存账号 ID
   deactivateAccount(account, { requestId })
   // 绑定到一个账号的读写方法（readUnread、readHistory、search、send、join、leave、openDm、listConversations、
   // createTask、changeTask），参数与上面相同、去掉 account。结构上满足 runtime 的聊天端口，Agent Manager 用它
   forAccount(account): AccountChat
-  // 给 Web 外壳用：所有者的实时视图（规则 9）。liveSnapshot、liveEvents、subscribePush、unsubscribePush 只有所有者能调，
-  // 别的账号得到 owner-only。
+  // 给 Web 外壳用：人类账号的实时视图（规则 9）。liveSnapshot、liveEvents、subscribePush、unsubscribePush 只有人类账号能调，
+  // Agent 账号得到 human-only。
   // 快照和游标在同一次读取中得到：之前提交的都在快照里，之后提交的都在 liveEvents(cursor) 里。
-  // 带 timeline 时，page 是这条时间线最新的一页（同 readHistory 的默认值）和所有者在那里的已读位置
-  liveSnapshot(account, { timeline? }): { cursor, accounts, conversations, unread, page }
+  // 带 timeline 时，page 是这条时间线最新的一页（同 readHistory 的默认值）和调用者在那里的已读位置；me 是调用者自己的账号 ID，客户端不必猜自己是谁
+  liveSnapshot(account, { timeline? }): { cursor, me, accounts, conversations, unread, page }
   // cursor 之后的实时事件，旧的在前，一次最多 500 条；从最后一条的 cursor 接着读，直到读不到为止。
   // 每条带自己的 cursor 和 type：entry（新条目，带全文）、conversation（会话或成员变了，带它现在的样子）、
-  // account（账号变了）、read（所有者在某条时间线上的已读位置）。unread 是同一次读取里所有者的未读摘要，
-  // 客户端直接替换自己的未读数，不必自己判断所有者关注哪些时间线
-  liveEvents(account, cursor): { status: "events", events, unread } | { status: "resnapshot" }
+  // account（账号变了）、read（调用者在某条时间线上的已读位置）。只返回受众为空或为调用者的事件，
+  // cursor 仍是全局位置：返回的 cursor 越过了不属于调用者的事件，所以事件稀少的人类账号也会往前走。
+  // unread 是同一次读取里调用者的未读摘要，客户端直接替换自己的未读数，不必自己判断关注哪些时间线
+  liveEvents(account, cursor): { status: "events", events, cursor, unread } | { status: "resnapshot" }
   // 实时信号：每个提交后追加了实时事件的写操作触发一次，不带参数；触发时机和监听者出错的处理同 watchInbox
   watchLive(listener: () => void): () => void
-  // 所有者的推送订阅（规则 8）。以 endpoint 幂等，再订阅一次只更新密钥；只接受 https 的 endpoint
+  // 人类账号的推送订阅（规则 8），记在订阅它的账号名下。以 endpoint 幂等，再订阅一次更新密钥，由另一个人类账号再订阅则归到那个账号；只接受 https 的 endpoint
   subscribePush(account, { endpoint, keys: { p256dh, auth } })
   unsubscribePush(account, { endpoint }) // 连同它还在排队的推送一起删除；不认识的 endpoint 什么都不改
 }
@@ -184,7 +186,7 @@ interface ChatApp {
    这项检查是 `send` 的一个选项，由调用方的程序决定开不开，而不是由模型决定：
    - Agent 的聊天工具总是开启，并且不把这个选项暴露给模型；
    - 网页客户端关闭它，因为所有者一直实时看着屏幕。网页把消息显示出来时，就推进所有者的已读位置。
-3. **每个写操作和每次 `readUnread` 都带 `requestId`，按 (账号, requestId) 幂等。** 聊天 app 把第一次的结果存成回执。同一个 ID 再来一次，原样返回那份结果，包括 `readUnread` 返回的那一页消息。这样崩溃后重做工具调用，既不会重复发消息，也不会因为已读位置已经推进而丢掉一页。Agent 的 `requestId` 是 Durable 的工具调用 ID；所有者在网页上的操作由浏览器生成 ID。
+3. **每个写操作和每次 `readUnread` 都带 `requestId`，按 (账号, requestId) 幂等。** 聊天 app 把第一次的结果存成回执。同一个 ID 再来一次，原样返回那份结果，包括 `readUnread` 返回的那一页消息。这样崩溃后重做工具调用，既不会重复发消息，也不会因为已读位置已经推进而丢掉一页。Agent 的 `requestId` 是 Durable 的工具调用 ID；人类在网页上的操作由浏览器生成 ID。
 4. **一条消息相关的一切在一个事务里提交：** 消息本身、收件事件、推送队列、随消息创建的任务、实时事件。任何一步失败都整体回滚。会被拒绝的请求（参数非法、@ 了不存在的账号、没有权限）在写入开始之前就被拒绝，写入过程中不再有拒绝分支。
 5. **消息不能编辑，也不能删除。**
 6. **可见与可操作分开判断。** 公开频道不加入也能读；发言、建任务、上传附件都必须是成员。私有频道和私信只有成员能读。拥有任务不额外授予任何权限。
@@ -194,17 +196,17 @@ interface ChatApp {
      - 第 2 条的新鲜度检查同样覆盖任务操作：自上次读取以来，别人新建或认领了任务，你的任务操作或发言就会被拦下，并返回这些变化。
    - 任务条目不产生收件事件，也就是不会单独触发通知，但会出现在读取结果里，并参与新鲜度检查。
    - 已经不是任务主人的人迟到的"让出"，不会撤销别人新的认领。只有当前主人能转交。
-8. **推送（Web Push）只给所有者。**
-   - **哪些消息推送：** 通知了所有者（产生了所有者的收件事件）、并且是发给所有者的私信或 @ 了所有者的消息。推送是所有者通知的一部分，"谁会被通知"仍只有一个定义：没加入的频道里 @ 所有者的顶层消息不通知所有者，也就不推送；所有者自己的消息不通知自己，也不推送。提及只来自 `send` 的 `mentions`（账号 ID），正文里的文字不算，所以邮箱地址里的 `@owner` 不是提及。
+8. **推送（Web Push）只给人类账号，每个订阅只推它自己账号的通知。**
+   - **哪些消息推送：** 对一个订阅，通知了它的账号（产生了该账号的收件事件）、并且是发给该账号的私信或 @ 了该账号的消息，而且该账号仍然有效（已停用的账号的订阅什么也收不到）。推送是通知的一部分，"谁会被通知"仍只有一个定义：没加入的频道里 @ 某个人类账号的顶层消息不通知它，也就不推送；自己的消息不通知自己，也不推送；发给 A 的私信只推 A 的订阅，不推 B 的。提及只来自 `send` 的 `mentions`（账号 ID），正文里的文字不算，所以邮箱地址里的 `@owner` 不是提及。
    - **推送队列：** 在消息提交的同一个事务里，为每个推送订阅追加一条待投递记录。被拦下的发送、回滚、按回执返回的重复调用都不追加。
    - **投递：** 聊天 app 里的投递循环按到期时间逐条投递，经调用方给的 `PushSender` 发出（Web 外壳用 VAPID 密钥加密签名），用时钟等待。推送服务回 2xx 算送达；回 404 或 410 说明订阅已失效，删除这个订阅和它的待投递记录；连不上、408、429、5xx 是暂时失败，30 秒后重试，之后每次等待翻倍，一共失败 10 次就放弃；其他状态码不重试。重试时间存在队列里，重启后照原计划继续；关闭时正在发送的那条留在队列里，重启后以同一个 tag 重发。记录投递结果时存储出错，投递循环报告错误，30 秒后再试，不会就此停下。投递只改推送队列和订阅，永远不会影响已提交的消息。`PushSender` 必须在有限时间内返回（例如设请求超时），因为投递是一条一条进行的。
-   - **推送内容不含消息正文**，只带定位和显示所需的：消息 ID、会话、时间线、序号、会话类型、频道名、发送者的 handle、是否 @ 了所有者、消息的发送时间，以及 `tag`。同一条消息的每次投递 tag 相同，重复投递只会替换通知，不会叠加。
-9. **实时事件流只给所有者。** 所有者能读所有会话，所以实时事件不按账号过滤，只有所有者能读。
-   - 事件只记下它的对象（条目、会话、账号、所有者已读位置所在的时间线），内容在读取时从对象现查：条目不可变，所以带全文；其他种类带对象现在的样子，旧的或重复的事件套用到客户端上，结果都一样。
+   - **推送内容不含消息正文**，只带定位和显示所需的：消息 ID、会话、时间线、序号、会话类型、频道名、发送者的 handle、是否 @ 了这个订阅的账号、消息的发送时间，以及 `tag`。同一条消息的每次投递 tag 相同，重复投递只会替换通知，不会叠加。
+9. **实时事件流只给人类账号。** 人类账号能读所有会话，所以除已读位置外的事件不按账号过滤；已读位置属于前进的那个人类账号，只出现在它自己的事件里（受众）。读取时按受众过滤，游标不过滤：它仍是全局位置。
+   - 事件只记下它的对象（条目、会话、账号、已读位置所在的时间线），内容在读取时从对象现查：条目不可变，所以带全文；其他种类带对象现在的样子，旧的或重复的事件套用到客户端上，结果都一样。
    - 游标是一个不透明字符串，由**纪元**和事件 ID 组成，可以直接用作 SSE 的事件 ID。纪元在新建 `chat.sqlite` 时随机生成，之后不变：数据重置（换了新文件）后纪元不同，旧游标随之作废。
    - 事件保留一天，过期的在之后的写操作里删掉。游标的纪元不对、早于保留的事件、超前于库里最新的事件（例如恢复了旧备份）或者根本不是游标，`liveEvents` 都回答 `resnapshot`，客户端重新拉快照。恢复旧备份只在库里的事件追上客户端的游标之前能被发现；追上之后同一个纪元下的事件 ID 已经指向别的变化，所以恢复备份后应当让浏览器重新加载。
 
-**持久化：** `data/chat.sqlite`，包括推送订阅、推送队列和实时事件。
+**持久化：** `data/chat.sqlite`，包括推送订阅（带订阅它的账号）、推送队列和实时事件（带受众）。
 
 ### 4.2 Agent runtime
 
@@ -422,7 +424,7 @@ interface NodeGateway {
 - 查看 token 用量；
 - 浏览 Agent 的工作区。
 
-**不负责：** 聊天。Agent 的显示名和 handle 归聊天账号，管理模块以所有者的身份从聊天 app 读（`liveSnapshot(owner).accounts`），自己不另存；创建 Agent 时由 Manager 调 `ensureAccount` 开账号。
+**不负责：** 聊天。Agent 的显示名和 handle 归聊天账号，管理模块从聊天 app 读（`listAccounts()`），自己不另存；创建 Agent 时由 Manager 调 `ensureAccount` 开账号。
 
 **它拥有 Agent Manager。** `openAdmin` 先打开自己在控制库里的凭据表，再打开 `data/agents/` 上的 Manager：Manager 的工作区宿主是网关（准备工作区调 `prepareWorkspace`，工作区端口的每次调用转给 `runTool`，带上调用的 signal），凭据查找读凭据表。所以 Web 外壳只组装聊天 app、网关和管理模块，不直接碰 Manager。
 
@@ -430,7 +432,7 @@ interface NodeGateway {
 
 ```ts
 // gateway 只需 nodes、createPairingToken、prepareWorkspace、runTool、browse
-openAdmin({ dataDirectory, chat, owner, gateway, clock?, report? }): Admin
+openAdmin({ dataDirectory, chat, gateway, clock?, report? }): Admin
 interface Admin {
   // 每个 Agent：聊天账号 ID、显示名和 handle（聊天账号的）、nodeId、state（open | paused | closed）、settings、usage。
   // 文件读不出来的 Agent 以 state: "unreadable" 和 problem 列出，所有者可以删掉它
@@ -467,14 +469,14 @@ interface Admin {
 
 **后端（`apps/control-plane`）：** 负责组装、登录（只有一个所有者账号）、登录会话 cookie、HTTP 路由、事件流、推送发送器和前端静态文件。入口是 `startControlPlane({ dataDirectory, port?, host?, initialPasswordFile?, webDirectory?, vapidSubject?, clock?, push? })`，`main.ts` 从环境变量读这些（`MATE_DATA_DIRECTORY`、`MATE_PORT`、`MATE_HOST`、`MATE_INITIAL_PASSWORD_FILE`、`MATE_WEB_DIRECTORY`、`MATE_VAPID_SUBJECT`），收到 SIGTERM 或 SIGINT 时关闭后退出。
 
-- **组装。** 先打开外壳自己在控制库里的表（模块名 `shell`），再 `new ChatApp(chat.sqlite, { clock, push })`，`ensureAccount` 所有者（`externalId: "owner"`，handle `owner`），建网关并把 HTTP 服务器上路径为 `/api/nodes/connect` 的 upgrade 交给 `handleUpgrade`（别的路径直接断开），最后 `openAdmin`。关闭时先停止 HTTP 服务（断开所有连接，事件流随之结束），再依次关闭管理模块、网关、聊天 app 和外壳的表。启动中途失败时，已打开的部分按相反顺序关闭。
+- **组装。** 先打开外壳自己在控制库里的表（模块名 `shell`），再 `new ChatApp(chat.sqlite, { clock, push })`，`ensureAccount` 启动时的那个人类账号（`kind: "human"`，`externalId: "owner"`，handle `owner`；之后的版本会让每个人各有一个账号），建网关并把 HTTP 服务器上路径为 `/api/nodes/connect` 的 upgrade 交给 `handleUpgrade`（别的路径直接断开），最后 `openAdmin`。关闭时先停止 HTTP 服务（断开所有连接，事件流随之结束），再依次关闭管理模块、网关、聊天 app 和外壳的表。启动中途失败时，已打开的部分按相反顺序关闭。
 - **登录。** 密码只存 scrypt 哈希。没有存密码时（第一次启动）从 `initialPasswordFile` 读初始密码（去掉末尾换行，至少 12 字节），之后再也不读这个文件；第一次启动没有这个文件就拒绝启动。同时进行的密码校验最多 2 个，更多的按到达顺序排队（先进先出，空出的名额直接交给队首），不拒绝；队列最长 64，超出的立即回 429（`Retry-After: 1`）；排队超过 10 秒仍未轮到的也回 429。不做锁定，也不按客户端计数，所以连续输错再多次所有者也进得来。上限是有意的取舍：几十个并发客户端持续把 64 的队列填满时，所有者这次登录也可能回 429，重试即可；已有的登录会话不受影响，也不会因此被锁定或泄露什么。登录成功发一个随机令牌，cookie 为 `__Host-mate_session`（`HttpOnly; Secure; SameSite=Lax; Path=/`），库里只存令牌的 SHA-256；登录会话从登录起 30 天有效，不随使用延长，跨重启保留。退出登录删掉这一行，令牌立即失效，别的登录会话不受影响。
 - **路由。** 除了 `POST /api/login`（`{ password, next? }`，回 `{ next }`：`next` 是站内 `/app` 下的路径时原样返回，否则是 `/app`）和 `POST /api/logout`，`/api/*` 都要登录，未登录回 401。页面请求：前端目录里存在的文件（脚本、样式、图标）不需要登录；`/` 跳到 `/app`；`/app` 及其下的页面未登录时跳到 `/login?next=<原地址>`；其余页面路径都回前端的 `index.html`，由前端路由。没有前端目录时页面回 404，API 照常工作。
   - `/api/chat/*` 一个路由对应聊天 app 的一个所有者操作，账号固定为所有者。读：`GET snapshot`（可带 `conversation=` 或 `thread=`）、`conversations`、`unread`、`history`（`conversation=`/`thread=`、`before`、`limit`）、`search?q=`。写都带浏览器生成的 `requestId`：`POST read`（读未读，推进所有者的已读位置）、`messages`、`channels`、`dms`、`conversations/:id/join|leave|archive|invite`、`tasks`、`tasks/:id/change`。发送和任务操作总是关闭新鲜度检查（4.1 规则 2），请求里不接受这一项。推送：`GET push/key`（VAPID 公钥）、`POST push/subscribe`、`POST push/unsubscribe`。
   - `/api/admin/*` 一个路由对应管理模块的一个操作：`GET|POST agents`、`POST agents/:id/pause|resume`、`DELETE agents/:id`、`PUT agents/:id/settings`、`GET agents/:id/assistants`、`GET agents/:id/events`（事件流，可带 `assistant=`）、`GET agents/:id/workspace?path=`、`GET providers`、`PUT|DELETE providers/:provider/credentials`、`GET models`、`GET nodes`、`POST pairing-tokens`。
   - **跨站防护。** 请求体必须声明 `content-type: application/json`（可带 charset），否则回 415 `unsupported-media-type`：别的站点的表单或不预检的 `fetch` 只能发 `text/plain` 之类，所以带着所有者的 cookie 也伪造不出请求。带 `Origin` 头的非 GET 请求，`Origin` 的 host 必须等于请求的 `Host`，否则回 403 `cross-origin`（登录、退出也一样）；没有 `Origin`（脚本、curl）不是浏览器页面发的，放行。路径参数里不合法的百分号编码回 400 `invalid-input`。
-  - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`owner-only`、`outside-workspace` 为 403；`archived`、`request-conflict`、`handle-taken`、`no-credentials`、`agent-closed`、`agent-exists` 为 409；`unreadable` 为 422；`node-offline` 为 503。创建 Agent 在文件改名之前中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做；没有创建任何东西的拒绝（不合法的名字、handle 被占用、ID 已存在）回上面各自的状态，不带 `agentId`。成功的操作回 200 加结果，没有结果的回 204。
-- **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, unread }`），SSE 的 id 是这批最后一条的游标，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前都查一次登录会话；会话已过期或已退出登录，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
+  - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`human-only`、`outside-workspace` 为 403；`archived`、`request-conflict`、`handle-taken`、`no-credentials`、`agent-closed`、`agent-exists` 为 409；`unreadable` 为 422；`node-offline` 为 503。创建 Agent 在文件改名之前中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做；没有创建任何东西的拒绝（不合法的名字、handle 被占用、ID 已存在）回上面各自的状态，不带 `agentId`。成功的操作回 200 加结果，没有结果的回 204。
+- **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, cursor, unread }`），SSE 的 id 是这批读到的游标 `cursor`，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前都查一次登录会话；会话已过期或已退出登录，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
 - **推送发送器。** VAPID 密钥对在第一次启动时生成，存在外壳的表里，之后不变：浏览器用公钥订阅，换了密钥所有订阅都会失效。`PushSender` 用 `web-push` 发出（加密、VAPID 签名、TTL 一天、请求超时 10 秒），推送服务的回答原样作为状态码交回聊天 app，连不上时抛错。VAPID 的联系地址来自 `MATE_VAPID_SUBJECT`，缺省为 `mailto:owner@mate.invalid`。
 
 **前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。样式用 Tailwind CSS v4，对话框、菜单、标签页等交互组件用 Base UI，界面原语集中在 `src/shell/ui.tsx`；外观和交互规则见 [界面规范](DESIGN.md)。页面在 `/login` 和 `/app` 下，`apps/web` 用 Vite 构建，`MATE_WEB_DIRECTORY` 指向构建产物（`apps/web/dist`）。
@@ -533,7 +535,7 @@ data/
 
 搬到另一台 VPS：停掉容器，复制 `data/`，启动。
 
-**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@mate/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
+**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@mate/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
 
 ## 7. 部署
 

@@ -8,6 +8,7 @@ describe("3.6 inbox events and unread summary", () => {
       externalId: "charlie",
       displayName: "Charlie",
       handle: "charlie",
+      kind: "agent",
     });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
     app.join(bob, { requestId: rid(), conversationId: channel.conversationId });
@@ -25,6 +26,7 @@ describe("3.6 inbox events and unread summary", () => {
       externalId: "alice-ext",
       displayName: "Alice",
       handle: "alice",
+      kind: "agent",
     });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
     app.send(alice, { conversation: channel.conversationId }, { requestId: "s1", body: "hello" });
@@ -39,8 +41,14 @@ describe("3.6 inbox events and unread summary", () => {
       externalId: "charlie",
       displayName: "Charlie",
       handle: "charlie",
+      kind: "agent",
     });
-    const dave = app.ensureAccount({ externalId: "dave", displayName: "Dave", handle: "dave" });
+    const dave = app.ensureAccount({
+      externalId: "dave",
+      displayName: "Dave",
+      handle: "dave",
+      kind: "agent",
+    });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
     for (const member of [bob, charlie, dave]) {
       app.join(member, { requestId: rid(), conversationId: channel.conversationId });
@@ -82,6 +90,7 @@ describe("3.6 inbox events and unread summary", () => {
       externalId: "charlie",
       displayName: "Charlie",
       handle: "charlie",
+      kind: "agent",
     });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
     app.join(bob, { requestId: rid(), conversationId: channel.conversationId });
@@ -183,7 +192,12 @@ describe("3.6 inbox events and unread summary", () => {
   });
   it("an account that joins after a message was sent never receives its inbox event", () => {
     const { app, alice } = newAppWithTwo();
-    const late = app.ensureAccount({ externalId: "late", displayName: "Late", handle: "late" });
+    const late = app.ensureAccount({
+      externalId: "late",
+      displayName: "Late",
+      handle: "late",
+      kind: "agent",
+    });
     const channel = app.createChannel(alice, {
       requestId: rid(),
       name: "c",

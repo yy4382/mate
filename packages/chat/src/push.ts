@@ -1,5 +1,6 @@
 import type { Clock } from "@mate/clock";
 import { z } from "zod";
+import type { Actor } from "./accounts.ts";
 import { ConversationKind } from "./conversations.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
@@ -34,7 +35,7 @@ export type PushNotice = {
   name: string | null;
   /** Handle of the message's author. */
   sender: string;
-  /** Whether the message mentions the owner; a DM to the owner may not. */
+  /** Whether the message mentions the subscription's account; a DM to it may not. */
   mentioned: boolean;
   /** When the message was sent, so a late delivery can say so and the sender can bound the push's lifetime. */
   at: number;
@@ -52,11 +53,17 @@ const FIRST_RETRY_MS = 30_000;
 /** A push whose delivery failed this many times in a row is dropped. */
 const MAX_FAILURES = 10;
 
-/** Add the subscription, or bring the keys of an endpoint already subscribed up to date. */
-export function subscribePush(db: ChatDatabase, subscription: PushSubscription): void {
+/** Add the human's subscription, or bring an endpoint already subscribed up to date and give it to this human. */
+export function subscribePush(
+  db: ChatDatabase,
+  human: Actor,
+  subscription: PushSubscription,
+): void {
   db.run(
-    `INSERT INTO push_subscriptions (endpoint, p256dh, auth) VALUES (?, ?, ?)
-     ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth`,
+    `INSERT INTO push_subscriptions (account_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)
+     ON CONFLICT (endpoint) DO UPDATE SET
+       account_id = excluded.account_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+    human.id,
     subscription.endpoint,
     subscription.keys.p256dh,
     subscription.keys.auth,
@@ -69,20 +76,20 @@ export function unsubscribePush(db: ChatDatabase, endpoint: string): void {
 }
 
 /**
- * Queue, in the transaction that appended them, a push to every subscription for each of the owner's inbox events
- * after `mark` whose message is a DM to the owner or mentions the owner. Pushing only what notifies the owner keeps one
- * definition of who is notified (`followed_timelines`); the author is never notified, so the owner's own messages
- * never push. Returns how many deliveries were queued.
+ * Queue, in the transaction that appended them, a push to each subscription of an active human for each of that
+ * human's inbox events after `mark` whose message is a DM to the human or mentions the human. Pushing only what
+ * notifies the human keeps one definition of who is notified (`followed_timelines`); the author is never notified, so
+ * a human's own messages never push. Returns how many deliveries were queued.
  */
 export function enqueuePushes(db: ChatDatabase, mark: number): number {
   return db.run(
     `INSERT INTO push_deliveries (entry_id, subscription_id, due_at)
      SELECT ev.entry_id, s.id, ? FROM inbox_events ev
-     JOIN accounts o ON o.id = ev.account_id AND o.role = 'owner'
+     JOIN accounts o ON o.id = ev.account_id AND o.kind = 'human' AND o.active = 1
      JOIN entries e ON e.id = ev.entry_id
      JOIN timelines t ON t.id = e.timeline_id
      JOIN conversations c ON c.id = t.conversation_id
-     CROSS JOIN push_subscriptions s
+     JOIN push_subscriptions s ON s.account_id = o.id
      WHERE ev.id > ? AND (o.id IN (c.dm_low, c.dm_high)
        OR EXISTS (SELECT 1 FROM mentions m WHERE m.entry_id = e.id AND m.account_id = o.id))`,
     db.now(),
@@ -115,8 +122,8 @@ function nextDelivery(db: ChatDatabase): DueRow | undefined {
     DueRow,
     `SELECT d.entry_id, d.subscription_id, d.failures, d.due_at, s.endpoint, s.p256dh, s.auth,
        e.seq, e.created_at, t.conversation_id, t.root_entry_id, c.kind, c.name, a.handle AS sender,
-       EXISTS (SELECT 1 FROM mentions m JOIN accounts o ON o.id = m.account_id
-               WHERE m.entry_id = e.id AND o.role = 'owner') AS mentioned
+       EXISTS (SELECT 1 FROM mentions m
+               WHERE m.entry_id = e.id AND m.account_id = s.account_id) AS mentioned
      FROM push_deliveries d
      JOIN push_subscriptions s ON s.id = d.subscription_id
      JOIN entries e ON e.id = d.entry_id

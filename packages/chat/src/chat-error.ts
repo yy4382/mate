@@ -13,8 +13,8 @@ import type { z } from "zod";
  *   transferred to yourself or to a non-member, or joining a DM.
  * - `request-conflict`: the requestId was already used by this account for a different request.
  * - `handle-taken`: another account already uses that handle.
- * - `owner-only`: the operation belongs to the owner alone, such as the live view and push subscriptions.
- * - `invalid-input`: the input does not match the operation's schema.
+ * - `human-only`: the operation belongs to human accounts alone, such as the live view and push subscriptions.
+ * - `invalid-input`: the input does not match the operation's schema, or asks to change an account's kind.
  */
 export type ChatErrorReason =
   | "unknown-account"
@@ -25,7 +25,7 @@ export type ChatErrorReason =
   | "invalid-target"
   | "request-conflict"
   | "handle-taken"
-  | "owner-only"
+  | "human-only"
   | "invalid-input";
 
 export class ChatError extends Error {

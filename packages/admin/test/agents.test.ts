@@ -125,7 +125,12 @@ describe("listing Agents", () => {
     const { agentId } = await env.hire(first, node.nodeId);
     await first.close();
     const broken = randomUUID();
-    env.chat.ensureAccount({ externalId: broken, displayName: "Lin", handle: "lin" });
+    env.chat.ensureAccount({
+      externalId: broken,
+      displayName: "Lin",
+      handle: "lin",
+      kind: "agent",
+    });
     writeFileSync(join(env.data, "agents", `${broken}.sqlite`), "this is not a database");
 
     const admin = await env.open();

@@ -19,7 +19,7 @@ import { keys } from "./cache.ts";
 import {
   avatarOf,
   conversationLabel,
-  ownerOf,
+  useMe,
   useAccounts,
   useConversations,
   useUnread,
@@ -29,13 +29,14 @@ import type { AccountView, ConversationView } from "./types.ts";
 function KindIcon({
   conversation,
   accounts,
+  me,
 }: {
   conversation: ConversationView;
   accounts: readonly AccountView[];
+  me: number | undefined;
 }) {
   if (conversation.kind === "dm") {
-    const ownerId = ownerOf(accounts)?.accountId;
-    const otherId = conversation.members.find((id) => id !== ownerId);
+    const otherId = conversation.members.find((id) => id !== me);
     return <Avatar size="xs" {...avatarOf(accounts, otherId ?? 0)} />;
   }
   return conversation.kind === "private" ? <Lock aria-hidden /> : <Hash aria-hidden />;
@@ -55,6 +56,7 @@ export function ConversationList() {
   const route = useRoute();
   const activeId = route.page === "chat" ? route.conversation : null;
   const accounts = useAccounts().data ?? [];
+  const me = useMe().data;
   const conversations = useConversations().data ?? [];
   const unread = useUnread().data;
   const [creating, setCreating] = useState(false);
@@ -74,9 +76,9 @@ export function ConversationList() {
             conversation.member ? "text-foreground" : "text-muted",
           )}
         >
-          <KindIcon conversation={conversation} accounts={accounts} />
+          <KindIcon conversation={conversation} accounts={accounts} me={me} />
           <span className="min-w-0 flex-1 truncate">
-            {conversationLabel(conversation, accounts)}
+            {conversationLabel(conversation, accounts, me)}
           </span>
           {conversation.archived ? <Badge>已归档</Badge> : null}
           {count > 0 ? (
@@ -143,7 +145,7 @@ export function ConversationList() {
 function NewConversation({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const accounts = useAccounts().data ?? [];
-  const owner = ownerOf(accounts);
+  const me = useMe().data;
   const [mode, setMode] = useState<"channel" | "dm">("channel");
   const [name, setName] = useState("");
   const [visibility, setVisibility] = useState<"public" | "private">("public");
@@ -210,7 +212,7 @@ function NewConversation({ onClose }: { onClose: () => void }) {
             <Select value={other} onChange={(event) => setOther(event.target.value)} required>
               <option value="">选择…</option>
               {accounts
-                .filter((a) => a.active && a.accountId !== owner?.accountId)
+                .filter((a) => a.active && a.accountId !== me)
                 .map((a) => (
                   <option key={a.accountId} value={a.accountId}>
                     {a.displayName}（@{a.handle}）

@@ -95,7 +95,7 @@ export async function environment() {
     externalId: "owner",
     displayName: "Owner",
     handle: "owner",
-    role: "owner",
+    kind: "human",
   });
   const general = chat.createChannel(owner, {
     requestId: "setup:general",

@@ -133,14 +133,14 @@ export function invite(
   return conversationView(db, actor, channel);
 }
 
-/** Make a channel read-only, for good. Any member, or the owner, may archive it. */
+/** Make a channel read-only, for good. Any member, or a human, may archive it. */
 export function archiveChannel(
   db: ChatDatabase,
   actor: Actor,
   conversationId: number,
 ): ConversationView {
   const channel = readableChannel(db, actor, conversationId);
-  if (!actor.owner && !isMember(db, actor.id, channel.id))
+  if (actor.kind !== "human" && !isMember(db, actor.id, channel.id))
     throw new ChatError(
       "not-member",
       `account ${actor.id} is not a member of conversation ${channel.id}`,

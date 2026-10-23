@@ -5,8 +5,18 @@ import { ChatError } from "../src/index.ts";
 describe("3.1 accounts and conversations", () => {
   it("ensureAccount with the same externalId twice returns the same account id", () => {
     const app = newApp();
-    const id1 = app.ensureAccount({ externalId: "ext-1", displayName: "Alice", handle: "alice" });
-    const id2 = app.ensureAccount({ externalId: "ext-1", displayName: "Alice2", handle: "alice" });
+    const id1 = app.ensureAccount({
+      externalId: "ext-1",
+      displayName: "Alice",
+      handle: "alice",
+      kind: "agent",
+    });
+    const id2 = app.ensureAccount({
+      externalId: "ext-1",
+      displayName: "Alice2",
+      handle: "alice",
+      kind: "agent",
+    });
     expect(id1).toBe(id2);
     app.close();
   });
@@ -14,7 +24,12 @@ describe("3.1 accounts and conversations", () => {
   it("findAccount returns the account ensureAccount created for an externalId, even after deactivation", () => {
     const app = newApp();
     expect(app.findAccount("ext-1"), "no account before ensureAccount").toBeUndefined();
-    const id = app.ensureAccount({ externalId: "ext-1", displayName: "Alice", handle: "alice" });
+    const id = app.ensureAccount({
+      externalId: "ext-1",
+      displayName: "Alice",
+      handle: "alice",
+      kind: "agent",
+    });
     expect(app.findAccount("ext-1")).toBe(id);
     app.deactivateAccount(id, { requestId: rid() });
     expect(app.findAccount("ext-1"), "a deactivated account is still found").toBe(id);
@@ -60,9 +75,9 @@ describe("3.1 accounts and conversations", () => {
 
   it("a DM is unreadable by a third account", () => {
     const app = newApp();
-    const a = app.ensureAccount({ externalId: "a", displayName: "A", handle: "aa" });
-    const b = app.ensureAccount({ externalId: "b", displayName: "B", handle: "bb" });
-    const c = app.ensureAccount({ externalId: "c", displayName: "C", handle: "cc" });
+    const a = app.ensureAccount({ externalId: "a", displayName: "A", handle: "aa", kind: "agent" });
+    const b = app.ensureAccount({ externalId: "b", displayName: "B", handle: "bb", kind: "agent" });
+    const c = app.ensureAccount({ externalId: "c", displayName: "C", handle: "cc", kind: "agent" });
     const dm = app.openDm(a, { requestId: rid(), other: b });
     expect(() =>
       app.readUnread(c, { conversation: dm.conversationId }, { requestId: "r1" }),
@@ -86,8 +101,8 @@ describe("3.1 accounts and conversations", () => {
 
   it("the owner account can read every conversation, including a private channel and a DM it is not a member of", () => {
     const { app, ownerId } = newAppWithOwner();
-    const a = app.ensureAccount({ externalId: "a", displayName: "A", handle: "aa" });
-    const b = app.ensureAccount({ externalId: "b", displayName: "B", handle: "bb" });
+    const a = app.ensureAccount({ externalId: "a", displayName: "A", handle: "aa", kind: "agent" });
+    const b = app.ensureAccount({ externalId: "b", displayName: "B", handle: "bb", kind: "agent" });
     const secret = app.createChannel(a, {
       requestId: rid(),
       name: "agents-only",

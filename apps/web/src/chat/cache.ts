@@ -17,6 +17,7 @@ import { timelineKey } from "./types.ts";
  */
 export const keys = {
   all: ["chat"] as const,
+  me: ["chat", "me"] as const,
   accounts: ["chat", "accounts"] as const,
   conversations: ["chat", "conversations"] as const,
   unread: ["chat", "unread"] as const,
@@ -95,6 +96,7 @@ export function applyLive(qc: QueryClient, batch: Extract<LiveEvents, { status: 
 
 /** Fill the cache from a snapshot: the starting point the live stream continues from. */
 export function seed(qc: QueryClient, snapshot: LiveSnapshot): void {
+  qc.setQueryData(keys.me, snapshot.me);
   qc.setQueryData(keys.accounts, snapshot.accounts);
   qc.setQueryData(keys.conversations, snapshot.conversations);
   qc.setQueryData(keys.unread, snapshot.unread);

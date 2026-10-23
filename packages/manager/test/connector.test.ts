@@ -50,6 +50,7 @@ function agentAccount(env: Environment) {
     externalId: "agent",
     displayName: "Richard",
     handle: "richard",
+    kind: "agent",
   });
   env.chat.invite(env.owner, {
     requestId: "invite",

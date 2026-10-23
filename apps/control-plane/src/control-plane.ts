@@ -70,14 +70,13 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
       externalId: "owner",
       displayName: "Owner",
       handle: "owner",
-      role: "owner",
+      kind: "human",
     });
     const gateway = createNodeGateway({ dataDirectory, clock });
     closers.push(() => gateway.close());
     const admin = await openAdmin({
       dataDirectory,
       chat,
-      owner,
       gateway,
       clock,
       report: (error, agentId) => console.error(`Agent ${agentId}:`, error),

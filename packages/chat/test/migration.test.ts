@@ -2,9 +2,9 @@ import { statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { storeFixture, temporaryDirectory } from "@mate/testkit";
+import { FakeClock, storeFixture, temporaryDirectory } from "@mate/testkit";
 import { ChatApp, ChatStoreIncompatible } from "../src/index.ts";
-import { openAppAt } from "./support.ts";
+import { FakePushService, openAppAt, rid } from "./support.ts";
 
 describe("the chat store opened by newer code (MODULE_TESTS 3.10)", () => {
   it("keeps the accounts, conversations, messages, thread, task and the owner's unread summary of a v0.1.0-alpha.2 store", () => {
@@ -82,6 +82,71 @@ describe("the chat store opened by newer code (MODULE_TESTS 3.10)", () => {
       { requestId: "s1", body: "after the upgrade" },
     );
     expect(sent.status).toBe("sent");
+    app.close();
+  });
+
+  it("turns the owner into a human and the Agents into Agents, and a human added after the upgrade reads everything the owner reads", () => {
+    const { dataDirectory, facts } = storeFixture("v0.1.0-alpha.2");
+    const app = openAppAt(join(dataDirectory, "chat.sqlite"));
+    const owner = app.findAccount("owner")!;
+    const ada = app.findAccount(facts.agentExternalIds[0]!)!;
+    const bo = app.findAccount(facts.agentExternalIds[1]!)!;
+
+    expect(app.listAccounts().map((account) => [account.accountId, account.kind])).toEqual([
+      [owner, "human"],
+      [ada, "agent"],
+      [bo, "agent"],
+    ]);
+    expect(app.liveSnapshot(owner).me).toBe(owner);
+
+    const second = app.ensureAccount({
+      externalId: "second",
+      displayName: "Second",
+      handle: "second",
+      kind: "human",
+    });
+    expect(
+      app.listConversations(second).map((c) => c.conversationId),
+      "the second human reads the same conversations, the Agents' DM included",
+    ).toEqual(app.listConversations(owner).map((c) => c.conversationId));
+    const agentsDm = app
+      .listConversations(second)
+      .find((c) => c.kind === "dm" && c.members.includes(ada) && c.members.includes(bo))!;
+    expect(
+      app.readHistory(second, { conversation: agentsDm.conversationId }),
+      "and its history",
+    ).toEqual(app.readHistory(owner, { conversation: agentsDm.conversationId }));
+    expect(app.unreadSummary(owner).total, "the owner's count is untouched").toBe(
+      facts.ownerUnread.total,
+    );
+    app.close();
+  });
+
+  it("keeps the owner's Web Push subscription: a new DM to the owner still pushes to it, and not to a second human's", async () => {
+    const { dataDirectory, facts } = storeFixture("v0.1.0-alpha.2");
+    const clock = new FakeClock();
+    const service = new FakePushService(clock);
+    const app = openAppAt(join(dataDirectory, "chat.sqlite"), { clock, push: service.send });
+    const owner = app.findAccount("owner")!;
+    const ada = app.findAccount(facts.agentExternalIds[0]!)!;
+    const second = app.ensureAccount({
+      externalId: "second",
+      displayName: "Second",
+      handle: "second",
+      kind: "human",
+    });
+
+    const dm = app
+      .listConversations(owner)
+      .find((c) => c.kind === "dm" && c.members.includes(ada))!;
+    app.send(
+      ada,
+      { conversation: dm.conversationId },
+      { requestId: rid(), body: "after the upgrade", freshness: false },
+    );
+    await service.received(1);
+    expect(service.endpoints()).toEqual([facts.pushEndpoint]);
+    expect(service.requests, "not to the second human").toHaveLength(1);
     app.close();
   });
 

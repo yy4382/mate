@@ -21,11 +21,13 @@ const LIVE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const EVENTS_PER_READ = 500;
 
 /**
- * Everything the owner's client renders, as of one moment, and the cursor of that moment. `page` is the newest page
- * of the timeline the client opened (newest first, as `readHistory` returns it) with the owner's read position there.
+ * Everything a human's client renders, as of one moment, and the cursor of that moment. `me` is the viewer's account.
+ * `page` is the newest page of the timeline the client opened (newest first, as `readHistory` returns it) with the
+ * viewer's read position there.
  */
 export type LiveSnapshot = {
   cursor: string;
+  me: number;
   accounts: AccountView[];
   conversations: ConversationView[];
   unread: UnreadSummary;
@@ -33,7 +35,7 @@ export type LiveSnapshot = {
 };
 
 /**
- * One change to what the owner's client shows. An entry is immutable, so its event carries it in full; the other
+ * One change to what a human's client shows. An entry is immutable, so its event carries it in full; the other
  * kinds carry their subject's current state, so applying a stale or repeated one converges on the same view.
  * `cursor` is the position just after this event.
  */
@@ -45,21 +47,23 @@ export type LiveEvent = { cursor: string } & (
 );
 
 /**
- * Events after a cursor, with the owner's unread summary as of the same read, so a client replaces its unread counts
- * instead of working out which timelines the owner follows. `resnapshot` when the cursor does not name a position the
- * log still holds.
+ * Events after a cursor, with the viewer's unread summary as of the same read, so a client replaces its unread counts
+ * instead of working out which timelines the viewer follows. `resnapshot` when the cursor does not name a position the
+ * log still holds. `cursor` is where the read got to, past every event that is not for this viewer, so a viewer who is
+ * rarely addressed still moves forward; asking again from it returns what came after.
  */
 export type LiveEvents =
-  { status: "events"; events: LiveEvent[]; unread: UnreadSummary } | { status: "resnapshot" };
+  | { status: "events"; events: LiveEvent[]; cursor: string; unread: UnreadSummary }
+  | { status: "resnapshot" };
 
 type LivePayload<K extends LiveEvent["type"]> = Omit<Extract<LiveEvent, { type: K }>, "cursor">;
 
-/** How each kind of event reads its payload from its subject. The owner reads every conversation. */
+/** How each kind of event reads its payload from its subject. A human reads every conversation. */
 const PAYLOADS: {
-  [K in LiveEvent["type"]]: (db: ChatDatabase, owner: Actor, subject: number) => LivePayload<K>;
+  [K in LiveEvent["type"]]: (db: ChatDatabase, viewer: Actor, subject: number) => LivePayload<K>;
 } = {
-  entry: (db, owner, entryId) => {
-    const timeline = timelineOfEntry(db, owner, entryId);
+  entry: (db, viewer, entryId) => {
+    const timeline = timelineOfEntry(db, viewer, entryId);
     const [entry] = loadEntries(db, { where: "e.id = ?", order: "e.id" }, entryId);
     if (entry === undefined) throw new Error(`entry ${entryId} vanished`);
     return {
@@ -69,18 +73,18 @@ const PAYLOADS: {
       entry,
     };
   },
-  conversation: (db, owner, conversationId) => ({
+  conversation: (db, viewer, conversationId) => ({
     type: "conversation",
-    conversation: conversationView(db, owner, conversationById(db, conversationId)),
+    conversation: conversationView(db, viewer, conversationById(db, conversationId)),
   }),
-  account: (db, _owner, accountId) => ({ type: "account", account: accountView(db, accountId) }),
-  read: (db, owner, timelineId) => {
-    const timeline = timelineById(db, owner, timelineId);
+  account: (db, _viewer, accountId) => ({ type: "account", account: accountView(db, accountId) }),
+  read: (db, viewer, timelineId) => {
+    const timeline = timelineById(db, viewer, timelineId);
     return {
       type: "read",
       conversationId: timeline.conversation.id,
       timeline: timeline.ref,
-      position: readPosition(db, owner.id, timelineId),
+      position: readPosition(db, viewer.id, timelineId),
     };
   },
 };
@@ -117,22 +121,23 @@ function positionOf(cursor: string, state: LiveState): number | undefined {
 
 export function liveSnapshot(
   db: ChatDatabase,
-  owner: Actor,
+  viewer: Actor,
   timeline: TimelineRef | undefined,
 ): LiveSnapshot {
   const state = liveState(db);
   return {
     cursor: cursorOf(state.epoch, state.head),
+    me: viewer.id,
     accounts: listAccounts(db),
-    conversations: listConversations(db, owner),
-    unread: unreadSummary(db, owner),
+    conversations: listConversations(db, viewer),
+    unread: unreadSummary(db, viewer),
     page:
       timeline === undefined
         ? null
         : {
             timeline,
-            entries: readHistory(db, owner, timeline, HistoryQuery.parse({})),
-            position: readPosition(db, owner.id, resolveTimeline(db, owner, timeline).id),
+            entries: readHistory(db, viewer, timeline, HistoryQuery.parse({})),
+            position: readPosition(db, viewer.id, resolveTimeline(db, viewer, timeline).id),
           },
   };
 }
@@ -145,23 +150,27 @@ const LiveRow = z.object({
   subject: Id,
 });
 
-export function liveEvents(db: ChatDatabase, owner: Actor, cursor: string): LiveEvents {
+export function liveEvents(db: ChatDatabase, viewer: Actor, cursor: string): LiveEvents {
   const state = liveState(db);
   const after = positionOf(cursor, state);
   if (after === undefined) return { status: "resnapshot" };
   const rows = db.all(
     LiveRow,
-    "SELECT id, kind, subject FROM live_events WHERE id > ? ORDER BY id LIMIT ?",
+    `SELECT id, kind, subject FROM live_events
+     WHERE id > ? AND (audience IS NULL OR audience = ?) ORDER BY id LIMIT ?`,
     after,
+    viewer.id,
     EVENTS_PER_READ,
   );
+  const last = rows.length === EVENTS_PER_READ ? rows.at(-1) : undefined;
   return {
     status: "events",
     events: rows.map((row): LiveEvent => ({
       cursor: cursorOf(state.epoch, row.id),
-      ...PAYLOADS[row.kind](db, owner, row.subject),
+      ...PAYLOADS[row.kind](db, viewer, row.subject),
     })),
-    unread: unreadSummary(db, owner),
+    cursor: cursorOf(state.epoch, last?.id ?? state.head),
+    unread: unreadSummary(db, viewer),
   };
 }
 

@@ -38,7 +38,12 @@ function appFailingAtReceipt(requestId: string, options: Parameters<typeof openA
 describe("3.5 atomic commit", () => {
   it("a send whose task title the schema rejects is refused before anything is written", () => {
     const app = openAppAt(join(temporaryDirectory(), "chat.sqlite"));
-    const alice = app.ensureAccount({ externalId: "alice", displayName: "Alice", handle: "alice" });
+    const alice = app.ensureAccount({
+      externalId: "alice",
+      displayName: "Alice",
+      handle: "alice",
+      kind: "agent",
+    });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
     const reason = refusalReason(() =>
       app.send(
@@ -54,7 +59,12 @@ describe("3.5 atomic commit", () => {
 
   it("a send mentioning an account that does not exist is refused before anything is written", () => {
     const app = openAppAt(join(temporaryDirectory(), "chat.sqlite"));
-    const alice = app.ensureAccount({ externalId: "alice", displayName: "Alice", handle: "alice" });
+    const alice = app.ensureAccount({
+      externalId: "alice",
+      displayName: "Alice",
+      handle: "alice",
+      kind: "agent",
+    });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
     const reason = refusalReason(() =>
       app.send(
@@ -70,8 +80,18 @@ describe("3.5 atomic commit", () => {
 
   it("a send that fails after its message, inbox events and task were written leaves none of them, and no signal", () => {
     const { app, heal, close } = appFailingAtReceipt("doomed");
-    const alice = app.ensureAccount({ externalId: "alice", displayName: "Alice", handle: "alice" });
-    const bob = app.ensureAccount({ externalId: "bob", displayName: "Bob", handle: "bob" });
+    const alice = app.ensureAccount({
+      externalId: "alice",
+      displayName: "Alice",
+      handle: "alice",
+      kind: "agent",
+    });
+    const bob = app.ensureAccount({
+      externalId: "bob",
+      displayName: "Bob",
+      handle: "bob",
+      kind: "agent",
+    });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
     const timeline = { conversation: channel.conversationId };
     app.join(bob, { requestId: rid(), conversationId: channel.conversationId });
@@ -116,9 +136,14 @@ describe("3.5 atomic commit", () => {
       externalId: "owner",
       displayName: "Owner",
       handle: "owner",
-      role: "owner",
+      kind: "human",
     });
-    const ada = app.ensureAccount({ externalId: "ada", displayName: "Ada", handle: "ada" });
+    const ada = app.ensureAccount({
+      externalId: "ada",
+      displayName: "Ada",
+      handle: "ada",
+      kind: "agent",
+    });
     app.subscribePush(owner, subscription("phone"));
     const dm = { conversation: app.openDm(ada, { requestId: rid(), other: owner }).conversationId };
     const cursor = app.liveSnapshot(owner).cursor;
