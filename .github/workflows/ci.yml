@@ -85,10 +85,11 @@ jobs:
         run: gh release create "$VERSION" dist/node-bundles/* --title "$VERSION" --generate-notes
 
   # Runs deploy/auto-update/mate-deploy on the production host through its forced-command SSH key
-  # (DEPLOYMENT.md 5.5). Skipped until the repository variable DEPLOY_HOST is set.
+  # (DEPLOYMENT.md 5.5). The host, key and host key live only in the production environment's secrets;
+  # until DEPLOY_HOST is set there, the job does nothing.
   deploy:
     name: Deploy
-    if: startsWith(github.ref, 'refs/tags/v') && vars.DEPLOY_HOST != ''
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [release]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -100,15 +101,23 @@ jobs:
       VERSION: ${{ github.ref_name }}
       ARCH: ${{ vars.DEPLOY_NODE_ARCH || 'x64' }}
     steps:
+      - name: Check that a host is configured
+        id: configured
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          if [ -n "$HOST" ]; then echo "yes=true" >> "$GITHUB_OUTPUT"; else echo "DEPLOY_HOST is not set; not deploying"; fi
       - name: Download the node bundle
+        if: steps.configured.outputs.yes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "mate-node-${VERSION#v}-linux-$ARCH.tar.gz"
       - name: Upgrade the host
+        if: steps.configured.outputs.yes == 'true'
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-          HOST: ${{ vars.DEPLOY_HOST }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
           install -m 0700 -d ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy

@@ -244,7 +244,7 @@ ssh-keygen -t ed25519 -N '' -C mate-deploy -f mate-deploy-key   # 私钥交给 G
 echo "restrict,command=\"/usr/local/sbin/mate-deploy\" $(cat mate-deploy-key.pub)" >> /root/.ssh/authorized_keys
 ```
 
-`restrict,command=` 让这把 key 只能执行 `mate-deploy`，没有 shell、转发和终端；拿到它的人最多能把这台机器升级到一个已发布的版本。GitHub 仓库里建一个 `production` 环境，放两个 secret：`DEPLOY_SSH_KEY`（私钥）和 `DEPLOY_KNOWN_HOSTS`（`ssh-keyscan` 得到、和你已知的主机指纹核对过的那一行）；再设仓库变量 `DEPLOY_HOST`（例如 `root@203.0.113.7`），不是 x86_64 时再设 `DEPLOY_NODE_ARCH=arm64`。没有 `DEPLOY_HOST` 时 Deploy 任务跳过。
+`restrict,command=` 让这把 key 只能执行 `mate-deploy`，没有 shell、转发和终端；拿到它的人最多能把这台机器升级到一个已发布的版本。GitHub 仓库里建一个 `production` 环境，放三个 secret：`DEPLOY_HOST`（例如 `root@203.0.113.7`）、`DEPLOY_SSH_KEY`（私钥）和 `DEPLOY_KNOWN_HOSTS`（`ssh-keyscan` 得到、和你已知的主机指纹核对过的那一行）。主机地址、key 和主机指纹只放在这里，不写进仓库，Action 日志里也被遮掉。不是 x86_64 时再设仓库变量 `DEPLOY_NODE_ARCH=arm64`。没有 `DEPLOY_HOST` 时 Deploy 任务什么都不做。
 
 ## 6. 在开发机上运行
 
