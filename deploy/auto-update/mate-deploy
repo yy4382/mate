@@ -23,6 +23,10 @@ VERSION=${request[1]}
 SHA256=${request[2]}
 
 mkdir -p "$STATE/bundles" "$MATE_PLANE_DIR/backups"
+# A caller that disconnects mid-deploy must not kill it halfway: output keeps going to the log after the pipe breaks.
+trap '' HUP PIPE
+exec > >(tee -a -p "$STATE/deploy.log") 2>&1
+echo "== $(date -Is) deploy $VERSION"
 exec 9>"$STATE/lock"
 flock -n 9 || { echo "another deploy is running" >&2; exit 1; }
 
@@ -55,6 +59,13 @@ update_node() {
 healthy() {
   [ "$(curl -s -o /dev/null -w '%{http_code}' "$MATE_HEALTH_URL/api/me")" = 401 ] &&
     [ "$(curl -s -o /dev/null -w '%{http_code}' "$MATE_HEALTH_URL/login")" = 200 ]
+}
+wait_healthy() {
+  for _ in $(seq 30); do
+    healthy && return 0
+    sleep 1
+  done
+  return 1
 }
 
 tmp=$(mktemp "$NEW_BUNDLE.XXXXXX")
@@ -93,7 +104,7 @@ rollback() {
   compose up -d --wait
   [ "$(node_version)" = "$OLD_VERSION" ] || update_node "$OLD_BUNDLE"
   mate_node start
-  healthy && echo "rolled back; $OLD_VERSION is running" >&2 || echo "ROLLBACK FAILED; see docker compose logs" >&2
+  wait_healthy && echo "rolled back; $OLD_VERSION is running" >&2 || echo "ROLLBACK FAILED; see docker compose logs" >&2
   exit 1
 }
 trap rollback ERR
@@ -110,7 +121,7 @@ BACKUP=$copy
 echo "== start control plane $NEW_IMAGE"
 set_image "$NEW_IMAGE"
 compose up -d --wait
-healthy || { compose logs --tail 50; false; }
+wait_healthy || { compose logs --tail 50; false; }
 
 echo "== update and start node"
 update_node "$NEW_BUNDLE"
