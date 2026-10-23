@@ -133,12 +133,9 @@ describe("node visits (MODULE_TESTS 8)", () => {
         "visit",
       );
       expect(result.isError, textOf(result)).toBe(false);
-      expect(textOf(result).split(/\r?\n/).slice(0, 4)).toEqual([
-        node.home,
-        node.home,
-        originalHome,
-        originalHome,
-      ]);
+      const [cwd, ...environment] = textOf(result).split(/\r?\n/).slice(0, 4);
+      expect(realpathSync.native(cwd!)).toBe(realpathSync.native(node.home));
+      expect(environment).toEqual([node.home, originalHome, originalHome]);
       expect(existsSync(originalHome)).toBe(false);
       expect(existsSync(node.workspacesRoot)).toBe(false);
     },
@@ -156,7 +153,9 @@ describe("node visits (MODULE_TESTS 8)", () => {
         "visit",
       );
       expect(result.isError, textOf(result)).toBe(false);
-      expect(textOf(result).split(/\r?\n/).slice(0, 3)).toEqual([node.home, "False", node.home]);
+      const [cwd, ...environment] = textOf(result).split(/\r?\n/).slice(0, 3);
+      expect(realpathSync.native(cwd!)).toBe(realpathSync.native(node.home));
+      expect(environment).toEqual(["False", node.home]);
       expect(existsSync(node.workspacesRoot)).toBe(false);
     },
   );
@@ -170,20 +169,14 @@ describe("node visits (MODULE_TESTS 8)", () => {
       const command = "(Get-Location).Path; $env:HOME; $HOME; $env:PWD";
       const home = await node.run(agentId, "bash", { command });
       expect(home.isError, textOf(home)).toBe(false);
-      expect(textOf(home).split(/\r?\n/).slice(0, 4)).toEqual([
-        workspace,
-        workspace,
-        workspace,
-        workspace,
-      ]);
+      const [homeCwd, ...homeEnvironment] = textOf(home).split(/\r?\n/).slice(0, 4);
+      expect(realpathSync.native(homeCwd!)).toBe(realpathSync.native(workspace));
+      expect(homeEnvironment).toEqual([workspace, workspace, workspace]);
       const visit = await node.run(agentId, "bash", { command }, undefined, "visit");
       expect(visit.isError, textOf(visit)).toBe(false);
-      expect(textOf(visit).split(/\r?\n/).slice(0, 4)).toEqual([
-        node.home,
-        originalHome,
-        originalHome,
-        node.home,
-      ]);
+      const [visitCwd, ...visitEnvironment] = textOf(visit).split(/\r?\n/).slice(0, 4);
+      expect(realpathSync.native(visitCwd!)).toBe(realpathSync.native(node.home));
+      expect(visitEnvironment).toEqual([originalHome, originalHome, node.home]);
     },
   );
 });
