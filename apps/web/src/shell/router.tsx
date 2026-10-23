@@ -12,7 +12,8 @@ export type Route =
       dm: string | null;
     }
   | { page: "search"; query: string }
-  | { page: "admin"; section: "agents" | "providers" | "nodes"; agentId: string | null }
+  | { page: "profile" }
+  | { page: "admin"; section: "agents" | "providers" | "nodes" | "humans"; agentId: string | null }
   | { page: "none" };
 
 const number = (text: string | undefined): number | null => {
@@ -39,10 +40,11 @@ export function parseRoute(pathname: string, search: string): Route {
       dm: null,
     };
   }
+  if (parts[1] === "profile") return { page: "profile" };
   if (parts[1] === "search") return { page: "search", query: query.get("q") ?? "" };
   if (parts[1] === "admin") {
     const section = parts[2] ?? "agents";
-    if (section === "providers" || section === "nodes")
+    if (section === "providers" || section === "nodes" || section === "humans")
       return { page: "admin", section, agentId: null };
     if (section === "agents")
       return { page: "admin", section, agentId: parts[3] === undefined ? null : parts[3] };

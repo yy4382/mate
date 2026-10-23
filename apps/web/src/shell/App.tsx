@@ -8,11 +8,12 @@ import { ConversationList } from "../chat/ConversationList.tsx";
 import { ChatLive } from "../chat/live.tsx";
 import { SearchPage } from "../chat/Search.tsx";
 import { useUnread } from "../chat/data.ts";
-import { post } from "./api.ts";
+import { useCurrentHuman } from "./humans.ts";
 import { Login } from "./Login.tsx";
 import { usePush } from "./Push.tsx";
-import { Link, useRoute, type Route } from "./router.tsx";
-import { Badge, Menu, MenuItem, buttonClass, cx } from "./ui.tsx";
+import { ProfilePage, logOut } from "./Profile.tsx";
+import { Link, navigate, useRoute, type Route } from "./router.tsx";
+import { Avatar, Badge, Menu, MenuItem, buttonClass, cx } from "./ui.tsx";
 
 /** The brand mark, shared by the sidebar and the login page. */
 export function Mark({ className }: { className?: string }) {
@@ -39,7 +40,7 @@ const phoneSlotClass: Record<PhoneSlot, string> = {
 };
 
 /** What the sidebar shows under the main navigation for the current page. */
-function sectionOf(route: Route): { slot: ReactNode; phone: PhoneSlot } {
+function sectionOf(route: Route, isAdmin: boolean): { slot: ReactNode; phone: PhoneSlot } {
   switch (route.page) {
     case "chat":
       return {
@@ -49,7 +50,7 @@ function sectionOf(route: Route): { slot: ReactNode; phone: PhoneSlot } {
     case "search":
       return { slot: <ConversationList />, phone: "hidden" };
     case "admin":
-      return { slot: <AdminNav />, phone: "strip" };
+      return isAdmin ? { slot: <AdminNav />, phone: "strip" } : { slot: null, phone: "hidden" };
     default:
       return { slot: null, phone: "hidden" };
   }
@@ -64,6 +65,7 @@ const bar =
 function MainNav() {
   const route = useRoute();
   const unread = useUnread().data;
+  const isAdmin = useCurrentHuman().data?.role === "admin";
   const admin = route.page === "admin";
   return (
     <nav
@@ -83,27 +85,31 @@ function MainNav() {
           </Badge>
         ) : null}
       </Link>
-      <Link to="/app/admin/agents" aria-current={admin ? "page" : undefined} className={navItem}>
-        <Settings2 aria-hidden />
-        管理
-      </Link>
+      {isAdmin ? (
+        <Link to="/app/admin/agents" aria-current={admin ? "page" : undefined} className={navItem}>
+          <Settings2 aria-hidden />
+          管理
+        </Link>
+      ) : null}
     </nav>
   );
 }
 
 function AccountMenu() {
   const push = usePush();
+  const me = useCurrentHuman().data;
+  const name = me?.displayName ?? "账号";
   return (
     <div className={cx(bar, "col-start-2 row-start-3 flex md:flex-col md:p-2")}>
       <Menu
-        label="所有者"
+        label={name}
         side="top"
         align="start"
         triggerClassName={cx(navItem, "cursor-pointer data-popup-open:text-foreground")}
         trigger={
           <>
-            <CircleUser aria-hidden />
-            所有者
+            {me === undefined ? <CircleUser aria-hidden /> : <Avatar name={name} size="sm" />}
+            <span className="max-w-full truncate">{name}</span>
             {push.problem === null ? null : (
               <span
                 aria-hidden
@@ -127,13 +133,10 @@ function AccountMenu() {
             {push.label}
           </MenuItem>
         ) : null}
-        <MenuItem
-          icon={<LogOut aria-hidden />}
-          onClick={async () => {
-            await post("/api/logout");
-            location.assign("/login");
-          }}
-        >
+        <MenuItem icon={<CircleUser aria-hidden />} onClick={() => navigate("/app/profile")}>
+          个人资料
+        </MenuItem>
+        <MenuItem icon={<LogOut aria-hidden />} onClick={() => void logOut()}>
           退出
         </MenuItem>
       </Menu>
@@ -148,7 +151,8 @@ function AccountMenu() {
 
 function Pages() {
   const route = useRoute();
-  const { slot, phone } = sectionOf(route);
+  const isAdmin = useCurrentHuman().data?.role === "admin";
+  const { slot, phone } = sectionOf(route, isAdmin);
   return (
     <div className="grid h-dvh grid-cols-[minmax(0,2fr)_minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] md:grid-cols-[15rem_minmax(0,1fr)] md:grid-rows-1">
       <div className="contents md:col-start-1 md:row-start-1 md:flex md:min-h-0 md:flex-col md:border-r md:border-border md:bg-subtle">
@@ -180,6 +184,7 @@ function Pages() {
         {route.page === "chat" ? <ChatPage /> : null}
         {route.page === "search" ? <SearchPage /> : null}
         {route.page === "admin" ? <AdminPage route={route} /> : null}
+        {route.page === "profile" ? <ProfilePage /> : null}
         {route.page === "none" ? (
           <main className="mx-auto grid max-w-4xl gap-4 px-4 py-6 md:px-8 md:py-8">
             <h1 className="text-2xl font-semibold tracking-tight">找不到这个页面</h1>

@@ -1,14 +1,15 @@
-import { Bot, KeyRound, Server } from "lucide-react";
+import { Bot, KeyRound, Server, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useRoute } from "../shell/router.tsx";
 import { cx } from "../shell/ui.tsx";
 
-type Section = "agents" | "providers" | "nodes";
+type Section = "agents" | "providers" | "nodes" | "humans";
 
 const sections: { section: Section; label: string; icon: ReactNode }[] = [
   { section: "agents", label: "Agent", icon: <Bot aria-hidden /> },
   { section: "providers", label: "提供商", icon: <KeyRound aria-hidden /> },
   { section: "nodes", label: "Node", icon: <Server aria-hidden /> },
+  { section: "humans", label: "人类", icon: <Users aria-hidden /> },
 ];
 
 /** The admin section's links: a tab row above the page on phones, a list in the sidebar on desktop. */
