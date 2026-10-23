@@ -21,7 +21,7 @@ MATE_IMAGE_REPO=repo/plane
 MATE_HEALTH_URL=http://127.0.0.1:1
 MATE_KEEP_BACKUPS=2
 MATE_HEALTH_WAIT=2
-MATE_NODE_SETTLE=1
+MATE_NODE_CONNECT_WAIT=2
 EOF
 mkdir -p /var/lib/mate-deploy/bundles
 fails=0
@@ -54,7 +54,7 @@ check "a control plane that never gets healthy rolls back, data included" '[ $co
 
 bundle 0.4.0-nostart
 deploy 0.4.0-nostart; code=$?
-check "a node that does not stay up rolls back the node too" '[ $code = 1 ] && [ "$(state)" = "repo/plane:0.2.0 0.2.0 migrated by repo/plane:0.2.0 active" ] && grep -q "rolled back" /tmp/out'
+check "a node that never connects rolls back the node too" '[ $code = 1 ] && grep -q "(node logs)" /tmp/out && [ "$(state)" = "repo/plane:0.2.0 0.2.0 migrated by repo/plane:0.2.0 active" ] && grep -q "rolled back" /tmp/out'
 
 bundle 0.5.0; deploy 0.5.0; sleep 1; bundle 0.6.0; deploy 0.6.0
 check "later versions deploy after a rollback" '[ "$(state)" = "repo/plane:0.6.0 0.6.0 migrated by repo/plane:0.6.0 active" ]'

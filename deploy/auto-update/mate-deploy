@@ -12,7 +12,7 @@ CONFIG=${MATE_DEPLOY_CONFIG:-/etc/mate-deploy.env}
 STATE=${MATE_DEPLOY_STATE:-/var/lib/mate-deploy}
 KEEP=${MATE_KEEP_BACKUPS:-5}
 HEALTH_WAIT=${MATE_HEALTH_WAIT:-30}
-NODE_SETTLE=${MATE_NODE_SETTLE:-15}
+CONNECT_WAIT=${MATE_NODE_CONNECT_WAIT:-60}
 
 read -r -a request <<<"${SSH_ORIGINAL_COMMAND:-$*}"
 if [ "${#request[@]}" -ne 3 ] || [ "${request[0]}" != deploy ] ||
@@ -65,6 +65,15 @@ healthy() {
 wait_healthy() {
   for _ in $(seq "$HEALTH_WAIT"); do
     healthy && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# The node is up when it reports being linked to the control plane, not merely when systemd says it is running.
+wait_linked() {
+  for _ in $(seq "$CONNECT_WAIT"); do
+    mate_node status | grep '^Link: connected' >/dev/null && return 0
     sleep 1
   done
   return 1
@@ -128,8 +137,7 @@ wait_healthy || { compose logs --tail 50; false; }
 echo "== update and start node"
 update_node "$NEW_BUNDLE"
 mate_node start
-sleep "$NODE_SETTLE"
-mate_node status | grep -x 'Service: active, enabled' >/dev/null || { mate_node logs --lines 50; false; }
+wait_linked || { mate_node logs --lines 50; false; }
 healthy
 trap - ERR
 

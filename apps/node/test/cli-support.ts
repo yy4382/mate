@@ -21,6 +21,8 @@ export type FakeSystemd = {
   available: boolean;
   active: string;
   enabled: string;
+  /** What the unit's `MainPID` reports; 0 when nothing runs. */
+  mainPid: number;
   calls: string[][];
   journal: string[][];
 };
@@ -40,7 +42,7 @@ if (scope !== "--user") exit(1);
 const now = rest.includes("--now");
 if (verb === "show") {
   const loaded = fs.existsSync(unit);
-  process.stdout.write("LoadState=" + (loaded ? "loaded" : "not-found") + "\\nActiveState=" + state.active + "\\nUnitFileState=" + (loaded ? state.enabled : "") + "\\n");
+  process.stdout.write("LoadState=" + (loaded ? "loaded" : "not-found") + "\\nActiveState=" + state.active + "\\nUnitFileState=" + (loaded ? state.enabled : "") + "\\nMainPID=" + state.mainPid + "\\n");
 } else if (verb === "enable" && fs.existsSync(unit)) {
   state.enabled = "enabled";
   if (now) state.active = "active";
@@ -89,7 +91,14 @@ export function host(): Host {
   const state = join(root, "systemd.json");
   writeFileSync(
     state,
-    JSON.stringify({ available: true, active: "inactive", enabled: "", calls: [], journal: [] }),
+    JSON.stringify({
+      available: true,
+      active: "inactive",
+      enabled: "",
+      mainPid: 0,
+      calls: [],
+      journal: [],
+    }),
   );
   for (const [name, script] of [
     ["systemctl", FAKE_SYSTEMCTL],

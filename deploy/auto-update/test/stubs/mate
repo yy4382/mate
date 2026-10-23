@@ -1,13 +1,14 @@
 #!/bin/bash
-# Stub `mate node`, keeping the installed version in ~/ver; a version containing "nostart" never stays active.
+# Stub `mate node`, keeping the installed version in ~/ver; a version containing "nostart" never connects to the control plane.
 set -e
 shift
 case "$1" in
   status)
     echo "Program: $(cat ~/ver) (linux-x64) in ~/.local/lib/mate-node"
-    if [ -f ~/active ]; then echo "Service: active, enabled"; else echo "Service: inactive, disabled"; fi ;;
+    if [ -f ~/active ]; then echo "Service: active, enabled"; else echo "Service: inactive, disabled"; fi
+    if [ -f ~/active ] && ! grep -q nostart ~/ver; then echo "Link: connected since 2026-01-01T00:00:00.000Z"; else echo "Link: none"; fi ;;
   stop) rm -f ~/active ;;
-  start) grep -q nostart ~/ver || touch ~/active ;;
+  start) touch ~/active ;;
   update)
     [ ! -f ~/active ] || { echo "refusing: running" >&2; exit 1; }
     (cd "$(dirname "$2")" && sha256sum -c --quiet "$(basename "$2").sha256")

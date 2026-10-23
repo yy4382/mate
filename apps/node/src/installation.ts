@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { BUNDLE_ENTRIES, readManifest, unlisted, unpackBundle, type Manifest } from "./bundle.ts";
 import { readConfig } from "./config.ts";
+import { readLink } from "./link.ts";
 
 /**
  * What `mate node` manages, all under the account's home. Install, update and uninstall touch only the program
@@ -82,7 +83,7 @@ type Program =
 /** Who owns a path Mate manages: nobody yet, Mate, or someone else, whose file Mate leaves alone. */
 type Ownership = "absent" | "mate" | "foreign";
 
-type Service = { loaded: boolean; active: string; enabled: string };
+type Service = { loaded: boolean; active: string; enabled: string; mainPid: number };
 
 function readProgram(layout: Layout): Program {
   const stat = lstatOrUndefined(layout.program);
@@ -113,7 +114,7 @@ const commandTarget = (layout: Layout) => join(layout.program, BUNDLE_ENTRIES.co
 /** The service as the user manager sees it; throws when there is no user manager to ask. */
 function readService(): Service {
   const values = new Map(
-    systemctl("show", SERVICE, "--property=LoadState,ActiveState,UnitFileState")
+    systemctl("show", SERVICE, "--property=LoadState,ActiveState,UnitFileState,MainPID")
       .split("\n")
       .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
   );
@@ -121,6 +122,7 @@ function readService(): Service {
     loaded: values.get("LoadState") === "loaded",
     active: values.get("ActiveState") ?? "unknown",
     enabled: values.get("UnitFileState") ?? "",
+    mainPid: Number(values.get("MainPID") ?? 0),
   };
 }
 
@@ -223,6 +225,15 @@ export function stop(): string[] {
   return ["Stopped and disabled the node service; it stays stopped until `mate node start`."];
 }
 
+/** The link file counts only when the process running now wrote it; a crashed node's file never claims a link. */
+function describeLink(layout: Layout, service: Service): string {
+  const link = readLink(layout.data);
+  if (service.active !== "active" || service.mainPid === 0 || link?.pid !== service.mainPid) {
+    return "none";
+  }
+  return `${link.connected ? "connected" : "disconnected"} since ${link.since}`;
+}
+
 export function status(layout: Layout): string[] {
   const program = readProgram(layout);
   const lines = [`Program: ${describeProgram(layout, program)}`];
@@ -233,8 +244,9 @@ export function status(layout: Layout): string[] {
     lines.push(
       `Service: ${service.loaded ? `${service.active}, ${service.enabled || "unknown"}` : "not installed"}`,
     );
+    lines.push(`Link: ${describeLink(layout, service)}`);
   } catch (error) {
-    lines.push(`Service: unknown (${(error as Error).message})`);
+    lines.push(`Service: unknown (${(error as Error).message})`, "Link: none");
   }
   let config;
   try {

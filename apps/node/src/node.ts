@@ -15,6 +15,11 @@ export type NodeOptions = {
   heartbeatTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   clock?: Clock;
+  /**
+   * Told whether the node is linked to the gateway: false once at the start, true after each handshake, and false
+   * when that connection ends. Called only when the answer changes.
+   */
+  onLink?: (connected: boolean) => void;
 };
 
 /** The gateway refused this node's identity or pairing token; retrying cannot help. */
@@ -41,6 +46,14 @@ export async function startNode(options: NodeOptions, signal: AbortSignal): Prom
     throw new Error("heartbeatTimeoutMs must be greater than heartbeatIntervalMs");
   }
 
+  let linked = false;
+  const setLink = (connected: boolean) => {
+    if (connected === linked) return;
+    linked = connected;
+    options.onLink?.(connected);
+  };
+  options.onLink?.(false);
+
   const executor = new Executor(options.workspacesRoot, clock);
   try {
     let retryMs = INITIAL_RETRY_MS;
@@ -53,11 +66,13 @@ export async function startNode(options: NodeOptions, signal: AbortSignal): Prom
           heartbeatIntervalMs,
           heartbeatTimeoutMs,
           handshakeTimeoutMs: options.handshakeTimeoutMs ?? 10_000,
+          onHandshake: () => setLink(true),
         },
         executor,
         clock,
         signal,
       );
+      setLink(false);
       if (end.kind === "rejected") throw new NodeRejectedError(end.reason);
       if (end.paired) {
         // Paired once means known from now on; a token is single-use, and a working link resets the backoff.
@@ -68,6 +83,7 @@ export async function startNode(options: NodeOptions, signal: AbortSignal): Prom
       retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
     }
   } finally {
+    setLink(false);
     executor.shutdown();
   }
 }

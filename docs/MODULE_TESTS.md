@@ -313,6 +313,7 @@
 - node 自己关闭时，停止所有它启动的进程组，包括命令已经返回、但还留着后台进程组的那些。
 - 修改或删除工作目录里的 `MEMORY.md`，不影响之后的命令执行。
 - 工作目录不存在时，工具调用以明确的错误失败，node 不会自己重建它。
+- 运行中的 node 握手成功后，`mate node status`（假 `systemctl` 把这个子进程报告为 `MainPID`）显示 `Link: connected since <时间>`；网关消失后显示 `Link: disconnected since <时间>`。网关连不上时从启动起就是 `disconnected`。
 - 身份被拒绝时，node 退出，退出码是用户服务不会重启的那个（§9），不会无限重试；网络失败或网关以协议错误（例如握手超时）结束连接时，按退避重连。
 
 ### 8.4 浏览工作区
@@ -347,6 +348,7 @@
 - 管理命令以 root 运行时拒绝（Linux 上用 `unshare -r` 得到 UID 0）。`node run` 不检查，它只由用户服务启动。
 - `configure` 写出权限 0600 的配置；不带 `--pairing-token` 再写一次就去掉令牌；地址不是 http(s)/ws(s) 时拒绝，原文件不变。
 - `status` 报告版本、服务状态和配置，不打印配对令牌。
+- `status` 的 `Link:` 行只在服务 `active` 且 `link.json` 里的 pid 等于 `MainPID` 时读它；服务没在运行，或 pid 对不上（崩溃的进程留下写着 connected 的文件）时是 `Link: none`。这些测试用 `node run` 的真实子进程和假网关（§8.3）。
 - `logs` 读这个服务的用户日志，`--follow` 时跟随。
 - 没有配置时 `node run` 的退出码在单元文件的 `RestartPreventExitStatus` 里；身份被拒绝时也用这个退出码（§8.3 的退出测试）。
 
@@ -472,12 +474,12 @@
 
 ### 13.1 自动部署
 
-**边界：** `deploy/auto-update/mate-deploy`（DEPLOYMENT 5.5），从它的命令行和标准输入驱动，只看部署后机器上的状态：`.env` 里的镜像、node 装的版本、数据目录的内容、node 服务是否在运行、备份和留下的发布包。`deploy/auto-update/test.sh` 在干净的 x86_64 Debian 13 容器里以 root 跑，CI 里是单独的 `mate-deploy` 任务。等待健康和 node 稳定的秒数（`MATE_HEALTH_WAIT`、`MATE_NODE_SETTLE`）在测试里调到 1 到 2 秒。
+**边界：** `deploy/auto-update/mate-deploy`（DEPLOYMENT 5.5），从它的命令行和标准输入驱动，只看部署后机器上的状态：`.env` 里的镜像、node 装的版本、数据目录的内容、node 服务是否在运行、备份和留下的发布包。`deploy/auto-update/test.sh` 在干净的 x86_64 Debian 13 容器里以 root 跑，CI 里是单独的 `mate-deploy` 任务。等待健康和等待 node 连上（`MATE_HEALTH_WAIT`、`MATE_NODE_CONNECT_WAIT`）的秒数在测试里调到 2 秒。
 
-**替身：** `docker`、`curl` 和 `mate node` 是把"正在运行的版本"记在文件里的替身：`compose up` 起 `.env` 里的镜像并改写数据目录（像一次迁移），版本名带 `bad` 的控制面永远不健康，带 `nostart` 的 node 启动后不保持运行。`runuser`、`flock` 和文件操作都是真的。
+**替身：** `docker`、`curl` 和 `mate node` 是把"正在运行的版本"记在文件里的替身：`compose up` 起 `.env` 里的镜像并改写数据目录（像一次迁移），版本名带 `bad` 的控制面永远不健康，带 `nostart` 的 node 启动后服务在运行但 `status` 永远是 `Link: none`（连不上控制面）；其余版本启动后是 `Link: connected`。`runuser`、`flock` 和文件操作都是真的。
 
 - 部署正在运行的版本什么都不改；`deploy <版本> <sha256>` 以外的命令被拒绝；标准输入的发布包和 sha256 不符时拒绝，什么都不改。
 - 正常的新版本：镜像、node 版本都换成它，服务在运行，部署前的数据有一份备份。
 - 控制面起来后不健康：镜像换回原来的，数据目录换回部署前的备份，node 仍是原版本并在运行，以失败退出。
-- node 启动后不保持运行：同样全部回退，node 换回原来的发布包。
+- node 启动后一直连不上控制面（`Link: connected` 在等待时间内没出现）：打印 node 日志，同样全部回退，node 换回原来的发布包。
 - 回退之后还能部署更新的版本；只留最近 `MATE_KEEP_BACKUPS` 份备份和新旧两个发布包；每次部署都记进日志。
