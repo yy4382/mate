@@ -20,6 +20,18 @@ async function current(): Promise<PushSubscription | null> {
   return (await registration?.pushManager.getSubscription()) ?? null;
 }
 
+/**
+ * Stop this browser's notifications for the logged-in human: tell the control plane, then drop the browser's own
+ * subscription. A browser has one subscription, so whoever logs in next on it starts without the previous human's.
+ */
+export async function unsubscribeThisBrowser(): Promise<void> {
+  if (!supported()) return;
+  const subscription = await current();
+  if (subscription === null) return;
+  await post("/api/chat/push/unsubscribe", { endpoint: subscription.endpoint });
+  await subscription.unsubscribe();
+}
+
 /** Turning notifications on registers the service worker and subscribes this browser with the control plane's key. */
 export function usePush() {
   const [state, setState] = useState<PushState>(supported() ? "off" : "unsupported");
@@ -59,11 +71,7 @@ export function usePush() {
     setState("working");
     setProblem(null);
     try {
-      const subscription = await current();
-      if (subscription !== null) {
-        await post("/api/chat/push/unsubscribe", { endpoint: subscription.endpoint });
-        await subscription.unsubscribe();
-      }
+      await unsubscribeThisBrowser();
       setState("off");
     } catch (error) {
       setProblem(error instanceof Error ? error.message : String(error));

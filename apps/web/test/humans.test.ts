@@ -112,4 +112,49 @@ describe("humans", () => {
     await dialog.getByRole("button", { name: "停用", exact: true }).click();
     await row.getByText("已停用").waitFor();
   });
+
+  describe("logging out on a browser with notifications on", () => {
+    const FAKE_ENDPOINT = "https://push.example/phone";
+    const subscribedBrowser = `
+      Object.defineProperty(navigator.serviceWorker, "getRegistration", {
+        value: async () => ({
+          pushManager: {
+            getSubscription: async () => ({
+              endpoint: ${JSON.stringify(FAKE_ENDPOINT)},
+              unsubscribe: async () => true,
+            }),
+          },
+        }),
+      });
+    `;
+
+    it("unsubscribes this browser first, so the next human on it gets none of this human's notifications", async () => {
+      const site = await startSite();
+      const { page } = await openApp(site, "/app/profile");
+      await page.addInitScript(subscribedBrowser);
+      await page.reload();
+      await page.getByRole("heading", { name: "个人资料" }).waitFor();
+      const unsubscribed = page.waitForRequest("**/api/chat/push/unsubscribe");
+
+      await page.getByRole("button", { name: "退出登录" }).click();
+
+      expect((await unsubscribed).postDataJSON()).toEqual({ endpoint: FAKE_ENDPOINT });
+      await page.waitForURL(/\/login/);
+    });
+
+    it("still logs out when unsubscribing fails", async () => {
+      const site = await startSite();
+      const { page } = await openApp(site, "/app/profile");
+      await page.addInitScript(subscribedBrowser);
+      await page.reload();
+      await page.getByRole("heading", { name: "个人资料" }).waitFor();
+      await page.route("**/api/chat/push/unsubscribe", (route) => route.abort("connectionreset"));
+
+      await page.getByRole("button", { name: "退出登录" }).click();
+
+      await page.waitForURL(/\/login/);
+      const after = await page.request.get(`${site.origin}/api/me`);
+      expect(after.status(), "the session ended").toBe(401);
+    });
+  });
 });

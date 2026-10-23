@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { LogOut } from "lucide-react";
 import { useState } from "react";
 import { ApiError, patch, post } from "./api.ts";
+import { unsubscribeThisBrowser } from "./Push.tsx";
 import {
   HANDLE_PATTERN,
   ROLE_LABEL,
@@ -183,7 +184,13 @@ function ChangePassword() {
   );
 }
 
+/** Stops this browser's notifications first, so the next human to log in here does not get this one's. */
 export async function logOut(): Promise<void> {
+  try {
+    await unsubscribeThisBrowser();
+  } catch {
+    // Logging out matters more than the notifications; the server drops the subscription when the next human takes it.
+  }
   await post("/api/logout");
   location.assign("/login");
 }
