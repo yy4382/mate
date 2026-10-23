@@ -209,9 +209,9 @@ mate node start
 
 1. `docker compose down`，复制一份数据目录作备份（回退要用它）。
 2. `.env` 里改 `MATE_IMAGE`，其余不动。
-3. 用两个 Compose 文件起新版本（§3.1 第 4、5 步）。需要回退时，`docker compose down`，把 `MATE_IMAGE` 换回旧镜像，用第 1 步的备份替换数据目录，再起旧版本；不要让旧版本直接打开已迁移的数据目录。
+3. 只用 `compose.yaml` 起新版本：`docker compose up -d --wait`（初始化用的 `compose.initialize.yaml` 不再叠加，库里已有人类）。需要回退时，`docker compose down`，把 `MATE_IMAGE` 换回旧镜像，用第 1 步的备份替换数据目录，再起旧版本；不要让旧版本直接打开已迁移的数据目录。
 
-**从只有一个所有者的版本（v0.1.0-alpha.2 及以前）升级。** 原来的所有者在升级后成为管理员：handle 是 `owner`，显示名 `Owner`，密码不变，已登录的浏览器继续有效，他的会话、未读和推送订阅都在。所以升级不需要初始密码文件，`MATE_INITIAL_HANDLE` 也不起作用（库里已经有人类）；用 handle `owner` 登录，之后他可以自己改显示名和 handle，也可以添加别的人类。
+**从只有一个所有者的版本（v0.1.0-alpha.2 及以前）升级。** 原来的所有者在升级后成为管理员：handle 是 `owner`，显示名 `Owner`，密码不变，已登录的浏览器继续有效，这个账号的会话、未读和推送订阅都在。所以升级不需要初始密码文件，`MATE_INITIAL_HANDLE` 也不起作用（库里已经有人类）；用 handle `owner` 登录，之后可以自己改显示名和 handle，也可以添加别的人类。
 
 ### 5.4 卸载
 
