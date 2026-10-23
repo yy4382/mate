@@ -19,6 +19,7 @@ function shortPath(path: string): string {
     {
       env: { ...process.env, MATE_TEST_DIRECTORY: path },
       encoding: "utf8",
+      windowsVerbatimArguments: true,
     },
   ).trim();
 }
