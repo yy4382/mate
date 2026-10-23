@@ -22,9 +22,14 @@ function ownerAndAda(options: { clock?: Clock } = {}) {
     externalId: "owner",
     displayName: "Owner",
     handle: "owner",
-    role: "owner",
+    kind: "human",
   });
-  const ada = app.ensureAccount({ externalId: "ada", displayName: "Ada", handle: "ada" });
+  const ada = app.ensureAccount({
+    externalId: "ada",
+    displayName: "Ada",
+    handle: "ada",
+    kind: "agent",
+  });
   const channel = app.createChannel(owner, {
     requestId: rid(),
     name: "general",
@@ -46,10 +51,9 @@ function eventsAfter(app: ChatApp, owner: number, cursor: string): LiveEvent[] |
   for (let from = cursor; ;) {
     const read = app.liveEvents(owner, from);
     if (read.status === "resnapshot") return "resnapshot";
-    const last = read.events.at(-1);
-    if (last === undefined) return events;
+    if (read.events.length === 0) return events;
     events.push(...read.events);
-    from = last.cursor;
+    from = read.cursor;
   }
 }
 
@@ -87,8 +91,8 @@ describe("3.9 live event stream", () => {
       expect.objectContaining({ name: "general", members: [owner, ada] }),
     ]);
     expect(snapshot.accounts).toEqual([
-      { accountId: owner, handle: "owner", displayName: "Owner", owner: true, active: true },
-      { accountId: ada, handle: "ada", displayName: "Ada", owner: false, active: true },
+      { accountId: owner, handle: "owner", displayName: "Owner", kind: "human", active: true },
+      { accountId: ada, handle: "ada", displayName: "Ada", kind: "agent", active: true },
     ]);
 
     const after = post(app, ada, general, "after");
@@ -176,7 +180,12 @@ describe("3.9 live event stream", () => {
       }),
     ]);
 
-    app.ensureAccount({ externalId: "ada", displayName: "Ada Lovelace", handle: "ada" });
+    app.ensureAccount({
+      externalId: "ada",
+      displayName: "Ada Lovelace",
+      handle: "ada",
+      kind: "agent",
+    });
     expect(next(), "a renamed account").toEqual([
       expect.objectContaining({
         type: "account",
@@ -184,12 +193,17 @@ describe("3.9 live event stream", () => {
           accountId: ada,
           handle: "ada",
           displayName: "Ada Lovelace",
-          owner: false,
+          kind: "agent",
           active: true,
         },
       }),
     ]);
-    app.ensureAccount({ externalId: "ada", displayName: "Ada Lovelace", handle: "ada" });
+    app.ensureAccount({
+      externalId: "ada",
+      displayName: "Ada Lovelace",
+      handle: "ada",
+      kind: "agent",
+    });
     expect(next(), "ensuring an account that has not changed changes nothing").toEqual([]);
     app.readUnread(owner, top, { requestId: rid() });
     expect(next(), "the owner read the channel").toEqual([
@@ -356,8 +370,8 @@ describe("3.9 live event stream", () => {
   it("only the owner reads the live view", () => {
     const { app, owner, ada } = ownerAndAda();
     const cursor = app.liveSnapshot(owner).cursor;
-    expect(refusalReason(() => app.liveSnapshot(ada))).toBe("owner-only");
-    expect(refusalReason(() => app.liveEvents(ada, cursor))).toBe("owner-only");
+    expect(refusalReason(() => app.liveSnapshot(ada))).toBe("human-only");
+    expect(refusalReason(() => app.liveEvents(ada, cursor))).toBe("human-only");
     app.close();
   });
 });

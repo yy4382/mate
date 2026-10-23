@@ -180,7 +180,12 @@ describe("3.2 sending and freshness", () => {
   it("a message is stamped with the time on the app's clock", () => {
     const clock = new FakeClock(Date.UTC(2026, 4, 1, 12, 0, 0));
     const app = newApp({ clock });
-    const alice = app.ensureAccount({ externalId: "alice", displayName: "Alice", handle: "alice" });
+    const alice = app.ensureAccount({
+      externalId: "alice",
+      displayName: "Alice",
+      handle: "alice",
+      kind: "agent",
+    });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
     const timeline = { conversation: channel.conversationId };
     app.send(alice, timeline, { requestId: "s1", body: "first" });

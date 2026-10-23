@@ -11,8 +11,14 @@ describe("the chat store survives a restart", () => {
       externalId: "alice-ext",
       displayName: "Alice",
       handle: "alice",
+      kind: "agent",
     });
-    const bob = first.ensureAccount({ externalId: "bob-ext", displayName: "Bob", handle: "bob" });
+    const bob = first.ensureAccount({
+      externalId: "bob-ext",
+      displayName: "Bob",
+      handle: "bob",
+      kind: "agent",
+    });
     const channel = first.createChannel(alice, {
       requestId: rid(),
       name: "c",
@@ -54,6 +60,7 @@ describe("the chat store survives a restart", () => {
       externalId: "alice-ext",
       displayName: "Alice",
       handle: "alice",
+      kind: "agent",
     });
     const channel = first.createChannel(alice, {
       requestId: rid(),

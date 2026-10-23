@@ -196,6 +196,7 @@ export class AgentManager {
         externalId: agentId,
         displayName: spec.displayName,
         handle: spec.handle,
+        kind: "agent",
       });
       try {
         await workspaces.prepare(spec.nodeId, agentId);

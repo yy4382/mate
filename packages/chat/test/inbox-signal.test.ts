@@ -12,6 +12,7 @@ function channelWithThree() {
     externalId: "charlie",
     displayName: "Charlie",
     handle: "charlie",
+    kind: "agent",
   });
   const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
   app.join(bob, { requestId: rid(), conversationId: channel.conversationId });
@@ -103,11 +104,17 @@ describe("3.6 inbox signal", () => {
 describe("3.6 unread summary carries what a notice shows", () => {
   it("a channel, a DM and a thread each report their kind, label, thread flag and latest sender", () => {
     const { app, ownerId } = newAppWithOwner();
-    const lin = app.ensureAccount({ externalId: "lin", displayName: "Lin", handle: "lin" });
+    const lin = app.ensureAccount({
+      externalId: "lin",
+      displayName: "Lin",
+      handle: "lin",
+      kind: "agent",
+    });
     const richard = app.ensureAccount({
       externalId: "richard",
       displayName: "Richard",
       handle: "richard",
+      kind: "agent",
     });
     const general = app.createChannel(ownerId, {
       requestId: rid(),

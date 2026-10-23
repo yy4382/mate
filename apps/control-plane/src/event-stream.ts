@@ -101,9 +101,8 @@ export async function streamLive(
       for (;;) {
         const read = chat.liveEvents(owner, cursor);
         if (read.status === "resnapshot") return stream.finish("resnapshot");
-        const last = read.events.at(-1);
-        if (last === undefined) break;
-        cursor = last.cursor;
+        cursor = read.cursor;
+        if (read.events.length === 0) break;
         if (!stream.send("events", read, cursor)) return;
       }
     } while (await stream.wait(wake.signal));

@@ -26,7 +26,7 @@ import {
   buttonClass,
 } from "../shell/ui.tsx";
 import { keys } from "./cache.ts";
-import { avatarOf, conversationLabel, ownerOf, useAccounts, useConversations } from "./data.ts";
+import { avatarOf, conversationLabel, useAccounts, useConversations, useMe } from "./data.ts";
 import { Timeline } from "./Timeline.tsx";
 import type { ConversationView } from "./types.ts";
 
@@ -101,9 +101,9 @@ function Header({
   const [inviting, setInviting] = useState(false);
   const [confirming, setConfirming] = useState<"leave" | "archive" | null>(null);
   const channel = conversation.kind !== "dm";
-  const label = conversationLabel(conversation, accounts);
-  const ownerId = ownerOf(accounts)?.accountId;
-  const otherId = conversation.members.find((id) => id !== ownerId);
+  const me = useMe().data;
+  const label = conversationLabel(conversation, accounts, me);
+  const otherId = conversation.members.find((id) => id !== me);
   return (
     <>
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4 md:px-6">
@@ -210,6 +210,7 @@ function Header({
 function ConversationPanel(props: { id: number; thread: number | null; seq: number | null }) {
   const conversations = useConversations();
   const accounts = useAccounts().data ?? [];
+  const me = useMe().data;
   const [error, setError] = useState<unknown>(null);
   const conversation = conversations.data?.find((c) => c.conversationId === props.id);
   if (conversation === undefined)
@@ -240,7 +241,7 @@ function ConversationPanel(props: { id: number; thread: number | null; seq: numb
         加入频道
       </Button>
     );
-  const label = conversationLabel(conversation, accounts);
+  const label = conversationLabel(conversation, accounts, me);
   const placeholder = conversation.kind === "dm" ? `发消息给 ${label}` : `发消息到 #${label}`;
   return (
     <div className="relative flex h-full min-h-0">

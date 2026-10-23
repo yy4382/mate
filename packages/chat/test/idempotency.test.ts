@@ -16,7 +16,12 @@ describe("3.4 idempotency", () => {
     const clock = new FakeClock();
     const service = new FakePushService(clock);
     const { app, ownerId } = newAppWithOwner({ clock, push: service.send });
-    const ada = app.ensureAccount({ externalId: "ada", displayName: "Ada", handle: "ada" });
+    const ada = app.ensureAccount({
+      externalId: "ada",
+      displayName: "Ada",
+      handle: "ada",
+      kind: "agent",
+    });
     app.subscribePush(ownerId, subscription("phone"));
     const dm = {
       conversation: app.openDm(ada, { requestId: rid(), other: ownerId }).conversationId,
@@ -199,6 +204,7 @@ describe("3.4 idempotency", () => {
       externalId: "charlie",
       displayName: "Charlie",
       handle: "charlie",
+      kind: "agent",
     });
     const channel = app.createChannel(alice, { requestId: rid(), name: "c", visibility: "public" });
     const first = app.send(

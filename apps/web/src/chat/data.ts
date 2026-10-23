@@ -23,6 +23,14 @@ export const PAGE = 50;
 
 const live = { staleTime: Infinity } as const;
 
+/** The account this client acts as: the snapshot's `me`. */
+export const useMe = () =>
+  useQuery({
+    queryKey: keys.me,
+    queryFn: async () => (await get<{ me: number }>("/api/chat/snapshot")).me,
+    ...live,
+  });
+
 export const useAccounts = () =>
   useQuery({
     queryKey: keys.accounts,
@@ -96,31 +104,29 @@ export async function loadOlder(qc: QueryClient, ref: TimelineRef): Promise<bool
   return true;
 }
 
-export const ownerOf = (accounts: readonly AccountView[]) => accounts.find((a) => a.owner);
-
 export function accountName(accounts: readonly AccountView[], id: number): string {
   const account = accounts.find((a) => a.accountId === id);
   return account === undefined ? `#${id}` : account.displayName;
 }
 
-/** The owner gets an initial; every other account is an Agent, drawn from its account ID. */
+/** A human gets an initial; an Agent is drawn from its account ID. */
 export function avatarOf(
   accounts: readonly AccountView[],
   id: number,
 ): { name: string; agentAccount?: number } {
   const account = accounts.find((a) => a.accountId === id);
   const name = accountName(accounts, id);
-  return account === undefined || account.owner ? { name } : { name, agentAccount: id };
+  return account === undefined || account.kind === "human" ? { name } : { name, agentAccount: id };
 }
 
 /** What a conversation is called: a channel's name, or the other person of a direct message. */
 export function conversationLabel(
   conversation: ConversationView,
   accounts: readonly AccountView[],
+  me: number | undefined,
 ): string {
   if (conversation.kind !== "dm") return conversation.name ?? "";
-  const owner = ownerOf(accounts);
-  const others = conversation.members.filter((id) => id !== owner?.accountId);
+  const others = conversation.members.filter((id) => id !== me);
   const names = others.map((id) => accountName(accounts, id));
   return names.length === 0 ? "（空私信）" : names.join("、");
 }

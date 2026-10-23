@@ -12,24 +12,28 @@ export const AccountNames = z.object({
     .regex(/^[\p{L}\p{N}][\p{L}\p{N}_.-]*$/u, "a handle is letters, digits, '_', '.' or '-'"),
 });
 
+/** A human reads every conversation and has the live view and push; an Agent reads what it is let into. */
+export const AccountKind = z.enum(["human", "agent"]);
+export type AccountKind = z.output<typeof AccountKind>;
+
 export const EnsureAccountInput = AccountNames.extend({
   /** The caller's stable identity for this account, such as an Agent ID. */
   externalId: z.string().min(1).max(256),
-  /** The owner can read every conversation. There is at most one owner, fixed when the account is created. */
-  role: z.enum(["owner", "member"]).default("member"),
+  /** Fixed when the account is created. */
+  kind: AccountKind,
 });
 
 /** The account an operation acts as. */
-export type Actor = { readonly id: number; readonly owner: boolean };
+export type Actor = { readonly id: number; readonly kind: AccountKind };
 
 const AccountRow = z.object({
   id: Id,
   external_id: z.string(),
-  role: z.enum(["owner", "member"]),
+  kind: AccountKind,
   active: SqlBoolean,
 });
 
-const SELECT_ACCOUNT = "SELECT id, external_id, role, active FROM accounts";
+const SELECT_ACCOUNT = "SELECT id, external_id, kind, active FROM accounts";
 
 const accountById = (db: ChatDatabase, id: number) =>
   db.get(AccountRow, `${SELECT_ACCOUNT} WHERE id = ?`, id);
@@ -45,6 +49,11 @@ export function ensureAccount(
     throw new ChatError("handle-taken", `the handle ${input.handle} is already in use`);
   const existing = db.get(AccountRow, `${SELECT_ACCOUNT} WHERE external_id = ?`, input.externalId);
   if (existing !== undefined) {
+    if (existing.kind !== input.kind)
+      throw new ChatError(
+        "invalid-input",
+        `account ${existing.id} is ${existing.kind}; an account's kind cannot change`,
+      );
     if (!existing.active)
       throw new ChatError("inactive-account", `account ${existing.id} is deactivated for good`);
     db.run(
@@ -56,16 +65,14 @@ export function ensureAccount(
     );
     return existing.id;
   }
-  if (input.role === "owner" && db.get(AccountRow, `${SELECT_ACCOUNT} WHERE role = 'owner'`))
-    throw new ChatError("invalid-input", "an owner account already exists");
   const created = db.get(
     z.object({ id: Id }),
-    "INSERT INTO accounts (external_id, display_name, handle, handle_key, role) VALUES (?, ?, ?, ?, ?) RETURNING id",
+    "INSERT INTO accounts (external_id, display_name, handle, handle_key, kind) VALUES (?, ?, ?, ?, ?) RETURNING id",
     input.externalId,
     input.displayName,
     input.handle,
     handleKey,
-    input.role,
+    input.kind,
   );
   if (created === undefined) throw new Error("account insert returned no row");
   return created.id;
@@ -89,7 +96,7 @@ export function requireActor(db: ChatDatabase, account: number): Actor {
   if (row === undefined)
     throw new ChatError("unknown-account", `account ${account} does not exist`);
   if (!row.active) throw new ChatError("inactive-account", `account ${account} is deactivated`);
-  return { id: row.id, owner: row.role === "owner" };
+  return { id: row.id, kind: row.kind };
 }
 
 /** Another account an operation targets, such as a DM partner or a task's new owner. */
@@ -97,13 +104,13 @@ export function targetAccount(db: ChatDatabase, account: number): Actor & { acti
   const row = accountById(db, account);
   if (row === undefined)
     throw new ChatError("unknown-account", `account ${account} does not exist`);
-  return { id: row.id, owner: row.role === "owner", active: row.active };
+  return { id: row.id, kind: row.kind, active: row.active };
 }
 
-/** The acting account, which must be the owner: the live view and push subscriptions are the owner's alone. */
-export function requireOwner(db: ChatDatabase, account: number): Actor {
+/** The acting account, which must be human: the live view and push subscriptions are for humans alone. */
+export function requireHuman(db: ChatDatabase, account: number): Actor {
   const actor = requireActor(db, account);
-  if (!actor.owner) throw new ChatError("owner-only", `account ${account} is not the owner`);
+  if (actor.kind !== "human") throw new ChatError("human-only", `account ${account} is not human`);
   return actor;
 }
 
@@ -112,7 +119,7 @@ export const AccountView = z.object({
   accountId: Id,
   handle: z.string(),
   displayName: z.string(),
-  owner: z.boolean(),
+  kind: AccountKind,
   active: z.boolean(),
 });
 export type AccountView = z.output<typeof AccountView>;
@@ -122,18 +129,18 @@ const AccountViewRow = z
     id: Id,
     handle: z.string(),
     display_name: z.string(),
-    role: z.enum(["owner", "member"]),
+    kind: AccountKind,
     active: SqlBoolean,
   })
   .transform((row): AccountView => ({
     accountId: row.id,
     handle: row.handle,
     displayName: row.display_name,
-    owner: row.role === "owner",
+    kind: row.kind,
     active: row.active,
   }));
 
-const SELECT_ACCOUNT_VIEW = "SELECT id, handle, display_name, role, active FROM accounts";
+const SELECT_ACCOUNT_VIEW = "SELECT id, handle, display_name, kind, active FROM accounts";
 
 /** Every account, deactivated ones included, since their entries stay readable. */
 export function listAccounts(db: ChatDatabase): AccountView[] {

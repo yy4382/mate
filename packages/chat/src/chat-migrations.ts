@@ -208,4 +208,93 @@ CREATE VIEW followed_timelines (account_id, timeline_id) AS
   JOIN readable_conversations rc ON rc.account_id = p.account_id AND rc.conversation_id = t.conversation_id;
 `,
   },
+  {
+    version: 4,
+    sql: `
+-- Accounts are humans or Agents. The one owner of version 3 becomes a human and every member an Agent. SQLite cannot
+-- change a CHECK constraint or drop a column that an index covers, so accounts is rebuilt (the 12-step procedure,
+-- with foreign keys off, which database.ts guarantees). What reads accounts and is not rebuilt goes first and is
+-- recreated after: the views and the triggers that name accounts. The triggers on accounts go with the table.
+DROP VIEW followed_timelines;
+DROP VIEW readable_conversations;
+DROP TRIGGER live_owner_read_started;
+DROP TRIGGER live_owner_read_moved;
+
+CREATE TABLE accounts_v4 (
+  id INTEGER PRIMARY KEY,
+  external_id TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  handle TEXT NOT NULL,
+  handle_key TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL CHECK (kind IN ('human', 'agent')),
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))
+) STRICT;
+INSERT INTO accounts_v4 (id, external_id, display_name, handle, handle_key, kind, active)
+  SELECT id, external_id, display_name, handle, handle_key,
+         CASE role WHEN 'owner' THEN 'human' ELSE 'agent' END, active
+  FROM accounts;
+DROP TABLE accounts;
+ALTER TABLE accounts_v4 RENAME TO accounts;
+
+CREATE TRIGGER live_account_created AFTER INSERT ON accounts BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'account', NEW.id);
+END;
+CREATE TRIGGER live_account_changed AFTER UPDATE ON accounts
+  WHEN (NEW.display_name, NEW.handle, NEW.active) IS NOT (OLD.display_name, OLD.handle, OLD.active) BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'account', NEW.id);
+END;
+
+-- A live event is for every human (audience NULL) or for one account. A human's read position is that human's own.
+-- Until now only the owner's read positions were logged, so every logged read is the one human's.
+ALTER TABLE live_events ADD COLUMN audience INTEGER REFERENCES accounts (id);
+UPDATE live_events SET audience = (SELECT id FROM accounts WHERE kind = 'human') WHERE kind = 'read';
+CREATE TRIGGER live_read_started AFTER INSERT ON read_positions
+  WHEN (SELECT kind FROM accounts WHERE id = NEW.account_id) = 'human' BEGIN
+  INSERT INTO live_events (at, kind, subject, audience)
+    VALUES (chat_now(), 'read', NEW.timeline_id, NEW.account_id);
+END;
+CREATE TRIGGER live_read_moved AFTER UPDATE ON read_positions
+  WHEN NEW.seq > OLD.seq AND (SELECT kind FROM accounts WHERE id = NEW.account_id) = 'human' BEGIN
+  INSERT INTO live_events (at, kind, subject, audience)
+    VALUES (chat_now(), 'read', NEW.timeline_id, NEW.account_id);
+END;
+
+-- A human reads every conversation, anyone reads a public channel, members read the rest.
+CREATE VIEW readable_conversations (account_id, conversation_id) AS
+  SELECT a.id, c.id FROM accounts a CROSS JOIN conversations c
+  WHERE a.kind = 'human' OR c.kind = 'public'
+    OR EXISTS (SELECT 1 FROM memberships m WHERE m.conversation_id = c.id AND m.account_id = a.id);
+
+CREATE VIEW followed_timelines (account_id, timeline_id) AS
+  SELECT m.account_id, t.id FROM timelines t
+  JOIN memberships m ON m.conversation_id = t.conversation_id
+  WHERE t.root_entry_id IS NULL
+  UNION
+  SELECT p.account_id, p.timeline_id FROM (
+    SELECT t.id AS timeline_id, r.author_id AS account_id FROM timelines t JOIN entries r ON r.id = t.root_entry_id
+    UNION SELECT e.timeline_id, e.author_id FROM entries e WHERE e.kind = 'message'
+    UNION SELECT e.timeline_id, mn.account_id FROM entries e JOIN mentions mn ON mn.entry_id = e.id
+  ) p
+  JOIN timelines t ON t.id = p.timeline_id AND t.root_entry_id IS NOT NULL
+  JOIN readable_conversations rc ON rc.account_id = p.account_id AND rc.conversation_id = t.conversation_id;
+
+-- A Web Push subscription belongs to the human who subscribed. The existing ones are the owner's. The rebuild keeps
+-- each ID and the AUTOINCREMENT counter, so an answer for a deleted subscription still cannot land on a newer one.
+CREATE TABLE push_subscriptions_v4 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL REFERENCES accounts (id),
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL
+) STRICT;
+INSERT INTO push_subscriptions_v4 (id, account_id, endpoint, p256dh, auth)
+  SELECT id, (SELECT id FROM accounts WHERE kind = 'human'), endpoint, p256dh, auth FROM push_subscriptions;
+DELETE FROM sqlite_sequence WHERE name = 'push_subscriptions_v4';
+INSERT INTO sqlite_sequence (name, seq)
+  SELECT 'push_subscriptions_v4', seq FROM sqlite_sequence WHERE name = 'push_subscriptions';
+DROP TABLE push_subscriptions;
+ALTER TABLE push_subscriptions_v4 RENAME TO push_subscriptions;
+CREATE INDEX push_subscriptions_account ON push_subscriptions (account_id);
+`,
+  },
 ]);

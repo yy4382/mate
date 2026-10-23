@@ -37,7 +37,12 @@ describe("creating an Agent", () => {
     const env = await environment();
     const manager = await env.open();
     // Refused at the chat account: the handle belongs to someone else. Nothing exists yet, so it is no create to finish.
-    env.chat.ensureAccount({ externalId: "someone", displayName: "Lin", handle: "lin" });
+    env.chat.ensureAccount({
+      externalId: "someone",
+      displayName: "Lin",
+      handle: "lin",
+      kind: "agent",
+    });
     await expect(
       manager.create({ displayName: "Lin", handle: "lin", settings, nodeId }),
     ).rejects.toMatchObject({ reason: "handle-taken" });
@@ -122,7 +127,12 @@ describe("creating an Agent", () => {
   it("does not see an Agent whose store was never renamed into place, and a rerun finishes it", async () => {
     const env = await environment();
     const agentId = randomUUID();
-    env.chat.ensureAccount({ externalId: agentId, displayName: "Lin", handle: "lin" });
+    env.chat.ensureAccount({
+      externalId: agentId,
+      displayName: "Lin",
+      handle: "lin",
+      kind: "agent",
+    });
     // A complete store under the temporary name: the process died just before the rename.
     const staged = join(env.directory, `${agentId}.sqlite`);
     await createAgentStore(staged, { nodeId, settings });

@@ -58,8 +58,6 @@ export type AdminOptions = {
   /** The control plane's data directory: the admin tables live in its control store, the Agents in `agents/`. */
   readonly dataDirectory: string;
   readonly chat: ChatApp;
-  /** The owner's chat account. The admin module reads Agents' names as the owner sees them. */
-  readonly owner: number;
   readonly gateway: AdminGateway;
   readonly clock?: Clock;
   /** Told about an Agent that failed to open, a failed connector pass, or a runtime whose storage failed. */
@@ -122,14 +120,12 @@ export async function openAdmin(options: AdminOptions): Promise<Admin> {
  */
 export class Admin {
   readonly #chat: ChatApp;
-  readonly #owner: number;
   readonly #gateway: AdminGateway;
   readonly #credentials: CredentialStore;
   readonly #manager: AgentManager;
 
   constructor(options: AdminOptions, credentials: CredentialStore, manager: AgentManager) {
     this.#chat = options.chat;
-    this.#owner = options.owner;
     this.#gateway = options.gateway;
     this.#credentials = credentials;
     this.#manager = manager;
@@ -140,7 +136,7 @@ export class Admin {
   /** Every Agent, with its names, node, state, settings and usage. */
   async agents(): Promise<AgentView[]> {
     const accounts = new Map(
-      this.#chat.liveSnapshot(this.#owner).accounts.map((account) => [account.accountId, account]),
+      this.#chat.listAccounts().map((account) => [account.accountId, account]),
     );
     const views = await Promise.all(
       this.#manager.list().map(async ({ agentId }): Promise<AgentView | undefined> => {

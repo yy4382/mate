@@ -30,10 +30,20 @@ function ownerWithAgents(devices: string[] = ["phone"]) {
     externalId: "owner",
     displayName: "Owner",
     handle: "owner",
-    role: "owner",
+    kind: "human",
   });
-  const ada = app.ensureAccount({ externalId: "ada", displayName: "Ada", handle: "ada" });
-  const bo = app.ensureAccount({ externalId: "bo", displayName: "Bo", handle: "bo" });
+  const ada = app.ensureAccount({
+    externalId: "ada",
+    displayName: "Ada",
+    handle: "ada",
+    kind: "agent",
+  });
+  const bo = app.ensureAccount({
+    externalId: "bo",
+    displayName: "Bo",
+    handle: "bo",
+    kind: "agent",
+  });
   for (const device of devices) app.subscribePush(owner, subscription(device));
   return { app, file, open, clock, service, owner, ada, bo };
 }
@@ -417,13 +427,13 @@ describe("3.8 push", () => {
   it("only the owner manages push subscriptions, and only for https endpoints", () => {
     const { app, owner, ada } = ownerWithAgents([]);
     expect(refusalReason(() => app.subscribePush(ada, subscription("ada-phone")))).toBe(
-      "owner-only",
+      "human-only",
     );
     expect(
       refusalReason(() =>
         app.unsubscribePush(ada, { endpoint: subscription("ada-phone").endpoint }),
       ),
-    ).toBe("owner-only");
+    ).toBe("human-only");
     expect(
       refusalReason(() =>
         app.subscribePush(owner, { ...subscription("phone"), endpoint: "http://push.example/x" }),

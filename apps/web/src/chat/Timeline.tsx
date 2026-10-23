@@ -35,7 +35,7 @@ import {
   accountName,
   avatarOf,
   loadOlder,
-  ownerOf,
+  useMe,
   useAccounts,
   useReplyCount,
   useTimeline,
@@ -102,7 +102,7 @@ function TaskBox(props: {
   canWrite: boolean;
 }) {
   const { accounts } = props;
-  const me = ownerOf(accounts)?.accountId;
+  const me = useMe().data;
   const [note, setNote] = useState<string | null>(null);
   const change = async (taskId: number, kind: string, to?: number) => {
     try {

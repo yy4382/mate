@@ -25,7 +25,7 @@ const CHAT_STATUS: Record<ChatErrorReason, number> = {
   "not-found": 404,
   "inactive-account": 403,
   "not-member": 403,
-  "owner-only": 403,
+  "human-only": 403,
   archived: 409,
   "request-conflict": 409,
   "handle-taken": 409,
