@@ -21,7 +21,7 @@ export function redirectToLogin(): void {
   location.assign(loginPath());
 }
 
-type Method = "GET" | "POST" | "PUT" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /**
  * One call to the control plane. The body is always JSON with its content type; a 401 anywhere sends the human to the
@@ -52,6 +52,7 @@ export async function api<T>(method: Method, path: string, body?: unknown): Prom
 export const get = <T>(path: string) => api<T>("GET", path);
 export const post = <T = void>(path: string, body?: unknown) => api<T>("POST", path, body);
 export const put = <T = void>(path: string, body?: unknown) => api<T>("PUT", path, body);
+export const patch = <T = void>(path: string, body?: unknown) => api<T>("PATCH", path, body);
 export const del = <T = void>(path: string) => api<T>("DELETE", path);
 
 export function describe(error: unknown): string {

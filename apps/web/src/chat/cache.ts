@@ -9,6 +9,7 @@ import type {
   TimelineRef,
   UnreadSummary,
 } from "./types.ts";
+import { currentHumanKey } from "../shell/humans.ts";
 import { timelineKey } from "./types.ts";
 
 /**
@@ -87,10 +88,13 @@ export function applyLive(qc: QueryClient, batch: Extract<LiveEvents, { status: 
           (a) => a.conversationId === event.conversation.conversationId,
         ),
       );
-    else if (event.type === "account")
+    else if (event.type === "account") {
       qc.setQueryData<AccountView[]>(keys.accounts, (old) =>
         upsert(old, event.account, (a) => a.accountId === event.account.accountId),
       );
+      if (event.account.accountId === qc.getQueryData<number>(keys.me))
+        void qc.invalidateQueries({ queryKey: currentHumanKey });
+    }
   }
 }
 

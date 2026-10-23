@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { AgentView, CatalogModel, ProviderView } from "@mate/admin";
 import { get } from "../shell/api.ts";
+import type { ListedHuman } from "../shell/humans.ts";
 
 export type NodeView = { nodeId: string; online: boolean; lastConnectedAt: string | null };
 
@@ -9,6 +10,7 @@ export const adminKeys = {
   providers: ["admin", "providers"] as const,
   models: ["admin", "models"] as const,
   nodes: ["admin", "nodes"] as const,
+  humans: ["admin", "humans"] as const,
 };
 
 export const useAgents = () =>
@@ -36,6 +38,9 @@ export const useNodes = (poll = false) =>
     queryFn: () => get<NodeView[]>("/api/admin/nodes"),
     ...(poll ? { refetchInterval: 3000 } : {}),
   });
+
+export const useHumans = () =>
+  useQuery({ queryKey: adminKeys.humans, queryFn: () => get<ListedHuman[]>("/api/humans") });
 
 /** The tokens an Agent has used so far, summed over its models. */
 export function totalTokens(agent: Extract<AgentView, { usage: unknown }>): number {

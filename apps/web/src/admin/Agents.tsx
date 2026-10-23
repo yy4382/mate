@@ -3,6 +3,7 @@ import { Bot, MessageSquare, Plus } from "lucide-react";
 import { useState } from "react";
 import type { AgentView, CatalogModel } from "@mate/admin";
 import { ApiError, post } from "../shell/api.ts";
+import { HANDLE_PATTERN } from "../shell/humans.ts";
 import { Link } from "../shell/router.tsx";
 import {
   Avatar,
@@ -177,7 +178,7 @@ function CreateAgent(props: {
           <Input
             value={handle}
             onChange={(event) => onDraft((d) => ({ ...d, handle: event.target.value }))}
-            pattern="[\p{L}\p{N}][\p{L}\p{N}_.\-]*"
+            pattern={HANDLE_PATTERN}
             required
           />
         </Field>
