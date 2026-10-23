@@ -192,9 +192,16 @@ export class Humans {
     this.#db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(now);
     const token = randomBytes(32).toString("base64url");
     const expiresAt = now + SESSION_TTL_MS;
-    this.#db
-      .prepare("INSERT INTO sessions (token_hash, external_id, expires_at) VALUES (?, ?, ?)")
-      .run(hashToken(token), externalId, expiresAt);
+    // The wait for a turn can outlast a password change, a role change or a deactivation, so the session is only
+    // started for the human as they still are: active, with the very hash and role that were checked.
+    const started = this.#db
+      .prepare(
+        `INSERT INTO sessions (token_hash, external_id, expires_at)
+         SELECT ?, external_id, ? FROM humans
+          WHERE external_id = ? AND active = 1 AND password_hash = ? AND role = ?`,
+      )
+      .run(hashToken(token), expiresAt, externalId, human.password_hash, human.role);
+    if (started.changes === 0) return { status: "wrong" };
     return { status: "ok", session: { token, expiresAt, externalId, role: human.role } };
   }
 

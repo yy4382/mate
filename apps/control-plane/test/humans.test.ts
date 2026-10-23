@@ -301,6 +301,29 @@ describe("11.2 humans: their own profile", () => {
 });
 
 describe("11.2 humans: managed by an admin", () => {
+  it("refuses a login that waited in the check line while the admin reset the human's password, though it checked the old one", async () => {
+    const { env, site, admin } = await adminSite();
+    const { human } = await memberOf(site, admin);
+    const flooders = Array.from({ length: 12 }, () =>
+      site.browser().logIn(ADMIN_HANDLE, "not the password"),
+    );
+    const before = env.clock.sleeps;
+    const sam = site.browser();
+    const queued = sam.logIn("sam", MEMBER_PASSWORD);
+    await Promise.race([env.clock.sleepsReached(before + 1), queued]);
+
+    const reset = await admin.post(`/api/humans/${human.accountId}/password`, {
+      password: "reset by the admin",
+    });
+    expect(reset.status, reset.text).toBe(204);
+    const answer = await queued;
+    await Promise.all(flooders);
+
+    expect(answer.status, "the old password no longer gets in").toBe(401);
+    expect((await sam.get("/api/me")).status, "no session was started").toBe(401);
+    expect((await site.browser().logIn("sam", "reset by the admin")).status).toBe(200);
+  });
+
   it("lets an admin set a human's password, which ends that human's sessions and no one else's", async () => {
     const { site, admin } = await adminSite();
     const { human, member } = await memberOf(site, admin);
