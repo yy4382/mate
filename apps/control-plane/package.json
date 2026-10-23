@@ -14,6 +14,7 @@
     "@mate/chat": "workspace:*",
     "@mate/clock": "workspace:*",
     "@mate/control-store": "workspace:*",
+    "@mate/migrations": "workspace:*",
     "@mate/gateway": "workspace:*",
     "web-push": "3.6.7",
     "zod": "4.6.5"

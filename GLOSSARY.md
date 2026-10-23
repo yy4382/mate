@@ -288,6 +288,10 @@ node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 
 **工具结果**（ToolResult）
 `@mate/node-protocol` 里一次 node 工具调用的结局：纯文本内容加 `isError`。网关把它交给调用方；runtime 有自己的 `WorkspaceToolResult`，两者结构兼容，管理模块把网关接成工作区宿主时直接交过去。
 
+**迁移**（migration）
+`@mate/migrations` 里的 `Migration`：一个版本号加把存储带到这个版本的 SQL。一个存储的结构就是一份 `Migrations`，即版本严格递增的迁移列表；新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以没有单独的"当前建表语句"。聊天库、控制库里每个模块的表都这样管理。存储比列表的最新版本新、或停在列表里没有的版本，拒绝启动。
+避免：为某一种旧状态写的临时修补代码（迁移只能是列表里的一项）。
+
 ## 测试工具
 
 **脚本化提供商**（ScriptedProvider）
@@ -309,6 +313,10 @@ node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 
 **系统场景**（system scenario）
 `tests/system` 里的端到端测试：控制面和 node 以真实子进程启动（**进程夹具**），模型是脚本化提供商，所有者的操作经 HTTP 发出。只证明模块接在了一起，边界情况归各模块的测试。
 避免：集成测试（那个词留给用真实提供商或真实 VPS 的检查）。
+
+**存储夹具**（store fixture）
+`tests/fixtures/stores/<版本>/` 下由 `scripts/make-store-fixture.ts` 从某个已发布的版本生成的真实数据目录（`control.sqlite`、`chat.sqlite`），测试在它的副本上用新代码启动，证明升级后数据还在。夹具只用旧版本模块的公开接口写出，不手写旧表。
+避免：手工拼出来的旧结构 SQL（那证明不了真实的旧存储能升级）。
 
 **进程夹具**
 `tests/system/test/support.ts` 的 `startSystem()`：在临时目录里启动控制面（`main.ts`）、用配对令牌配对的 node（`mate node run`，HOME 是临时目录）和脚本化提供商；控制面能被 SIGKILL，并在同一个数据目录和同一个端口上重启，node 可以经网络代理连到控制面。

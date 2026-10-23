@@ -3,14 +3,17 @@ import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import type { Clock } from "@mate/clock";
 import { z } from "zod";
-import { CHAT_DDL, CHAT_SCHEMA_VERSION } from "./chat-ddl.ts";
+import { CHAT_MIGRATIONS } from "./chat-migrations.ts";
 
-/** Raised when `chat.sqlite` was written by another schema version. Mate never migrates; it refuses to start. */
+/**
+ * Raised when `chat.sqlite` is at a schema version the code cannot migrate from; it refuses to start and leaves the
+ * file alone.
+ */
 export class ChatStoreIncompatible extends Error {
   readonly file: string;
 
   constructor(file: string, found: string) {
-    super(`chat store ${file} has ${found}, expected schema version ${CHAT_SCHEMA_VERSION}`);
+    super(`chat store ${file} has ${found}, expected schema version ${CHAT_MIGRATIONS.latest}`);
     this.name = "ChatStoreIncompatible";
     this.file = file;
   }
@@ -35,10 +38,9 @@ export class ChatDatabase {
     // The live-event triggers stamp their rows with this, so retention follows the injected clock.
     this.#db.function("chat_now", () => clock.now());
     try {
-      this.#db.exec(
-        "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
-      );
-      this.transaction("write", () => this.#ensureSchema(file));
+      this.#db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;");
+      this.#migrate(file);
+      this.#db.exec("PRAGMA foreign_keys=ON");
     } catch (error) {
       this.#db.close();
       throw error;
@@ -50,16 +52,32 @@ export class ChatDatabase {
     return this.#clock.now();
   }
 
-  #ensureSchema(file: string): void {
-    const version = this.get(UserVersion, "PRAGMA user_version")?.user_version ?? 0;
-    if (version === CHAT_SCHEMA_VERSION) return;
-    const tables =
-      this.get(TableCount, "SELECT count(*) AS tables FROM sqlite_schema WHERE type = 'table'")
-        ?.tables ?? 0;
-    if (version !== 0) throw new ChatStoreIncompatible(file, `schema version ${version}`);
-    if (tables !== 0) throw new ChatStoreIncompatible(file, "unversioned tables");
-    this.#db.exec(CHAT_DDL);
-    this.#db.exec(`PRAGMA user_version = ${CHAT_SCHEMA_VERSION}`);
+  /**
+   * Bring the schema to the latest version in one write transaction. Foreign keys stay off while it runs, because
+   * SQLite cannot change that setting inside a transaction and a table rebuild needs it off. Before the commit,
+   * `foreign_key_check` makes sure the migration left no dangling reference.
+   */
+  #migrate(file: string): void {
+    this.#db.exec("PRAGMA foreign_keys=OFF");
+    this.transaction("write", () => {
+      const version = this.get(UserVersion, "PRAGMA user_version")?.user_version ?? 0;
+      const tables =
+        this.get(TableCount, "SELECT count(*) AS tables FROM sqlite_schema WHERE type = 'table'")
+          ?.tables ?? 0;
+      if (version === 0 && tables !== 0)
+        throw new ChatStoreIncompatible(file, "unversioned tables");
+      const pending = CHAT_MIGRATIONS.after(version === 0 ? undefined : version);
+      if (pending === undefined) throw new ChatStoreIncompatible(file, `schema version ${version}`);
+      if (pending.length === 0) return;
+      for (const migration of pending) this.#db.exec(migration.sql);
+      this.#db.exec(`PRAGMA user_version = ${CHAT_MIGRATIONS.latest}`);
+      const dangling = this.all(z.unknown(), "PRAGMA foreign_key_check");
+      if (dangling.length !== 0) {
+        throw new Error(
+          `chat store ${file}: migration left ${dangling.length} dangling references`,
+        );
+      }
+    });
   }
 
   #statement(sql: string): StatementSync {

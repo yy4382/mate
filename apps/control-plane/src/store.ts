@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openControlTables } from "@mate/control-store";
+import { Migrations } from "@mate/migrations";
 
 /**
  * The Web shell's own tables in the control store: the owner's password hash, the hashes of live session tokens, and
@@ -8,8 +9,10 @@ import { openControlTables } from "@mate/control-store";
 export function openShellTables(dataDirectory: string): DatabaseSync {
   return openControlTables(dataDirectory, {
     module: "shell",
-    version: 1,
-    ddl: `
+    migrations: new Migrations([
+      {
+        version: 1,
+        sql: `
 CREATE TABLE owner_password (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   hash TEXT NOT NULL
@@ -24,5 +27,7 @@ CREATE TABLE vapid_keys (
   private_key TEXT NOT NULL
 ) STRICT;
 `,
+      },
+    ]),
   });
 }

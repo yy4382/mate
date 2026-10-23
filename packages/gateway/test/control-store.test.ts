@@ -7,13 +7,15 @@ import {
   openControlTables,
   type ControlTables,
 } from "@mate/control-store";
+import { Migrations } from "@mate/migrations";
 import { FakeNode, temporaryDirectory } from "@mate/testkit";
 import { startGateway } from "./support.ts";
 
 const webShell: ControlTables = {
   module: "web-shell",
-  version: 5,
-  ddl: "CREATE TABLE web_sessions (id TEXT PRIMARY KEY) STRICT",
+  migrations: new Migrations([
+    { version: 5, sql: "CREATE TABLE web_sessions (id TEXT PRIMARY KEY) STRICT" },
+  ]),
 };
 
 function refusal(open: () => unknown): ControlStoreIncompatible {
@@ -77,8 +79,9 @@ describe("node gateway registry in control.sqlite (MODULE_TESTS 7)", () => {
     // What a later gateway build, one that renamed its tables, would have left in the store.
     openControlTables(dataDirectory, {
       module: "gateway",
-      version: 2,
-      ddl: "CREATE TABLE paired_nodes (id TEXT PRIMARY KEY)",
+      migrations: new Migrations([
+        { version: 2, sql: "CREATE TABLE paired_nodes (id TEXT PRIMARY KEY)" },
+      ]),
     }).close();
 
     const error = refusal(() => createNodeGateway({ dataDirectory }));
@@ -96,8 +99,9 @@ describe("node gateway registry in control.sqlite (MODULE_TESTS 7)", () => {
     const dataDirectory = temporaryDirectory();
     openControlTables(dataDirectory, {
       module: "admin",
-      version: 1,
-      ddl: "CREATE TABLE nodes (name TEXT PRIMARY KEY)",
+      migrations: new Migrations([
+        { version: 1, sql: "CREATE TABLE nodes (name TEXT PRIMARY KEY)" },
+      ]),
     }).close();
 
     const error = refusal(() => createNodeGateway({ dataDirectory }));

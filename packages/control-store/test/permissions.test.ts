@@ -1,10 +1,14 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { openControlTables, CONTROL_STORE_FILE } from "@mate/control-store";
+import { Migrations } from "@mate/migrations";
 import { temporaryDirectory } from "@mate/testkit";
 import { describe, expect, it } from "vitest";
 
-const tables = { module: "test", version: 1, ddl: "CREATE TABLE secrets (value TEXT) STRICT" };
+const tables = {
+  module: "test",
+  migrations: new Migrations([{ version: 1, sql: "CREATE TABLE secrets (value TEXT) STRICT" }]),
+};
 
 const mode = (file: string) => statSync(file).mode & 0o777;
 

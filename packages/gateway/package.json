@@ -16,6 +16,7 @@
   "dependencies": {
     "@mate/clock": "workspace:*",
     "@mate/control-store": "workspace:*",
+    "@mate/migrations": "workspace:*",
     "@mate/node-protocol": "workspace:*",
     "ws": "8.22.0",
     "zod": "4.6.5"
