@@ -31,7 +31,10 @@ const rid = () => `fixture-${++requests}`;
 const passwordFile = join(dataDirectory, "..", "initial-password");
 writeFileSync(passwordFile, `${OWNER_PASSWORD}\n`, { mode: 0o600 });
 const shell = openShellTables(dataDirectory);
-await OwnerLogin.open(shell, systemClock, passwordFile);
+const login = await OwnerLogin.open(shell, systemClock, passwordFile);
+// A login session as a browser of that version holds it: a test proves the session still works after the upgrade.
+const session = await login.logIn(OWNER_PASSWORD);
+if (session.status !== "ok") throw new Error("the owner could not log in");
 vapidKeys(shell);
 
 const chat = new ChatApp(join(dataDirectory, "chat.sqlite"));
@@ -114,6 +117,7 @@ writeFileSync(
   `${JSON.stringify(
     {
       ownerPassword: OWNER_PASSWORD,
+      ownerSessionToken: session.session.token,
       openaiApiKey: API_KEY,
       pairingToken,
       agentExternalIds: [AGENT_ONE, AGENT_TWO],
