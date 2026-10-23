@@ -250,12 +250,17 @@ export class Humans {
       .run(externalId, keepToken === undefined ? null : hashToken(keepToken));
   }
 
-  /** Refused with `last-admin` when it would leave no active admin. */
+  /**
+   * A session is a snapshot of the human's access, so a changed role ends every session of theirs: they log in again
+   * and get the new access, and what they had open (an admin stream) ends with it. Setting the role they already have
+   * changes nothing. Refused with `last-admin` when it would leave no active admin.
+   */
   setRole(externalId: string, role: Role): void {
     const human = this.#require(externalId);
-    if (human.role === "admin" && role !== "admin" && human.active)
-      this.#requireOtherAdmin(externalId);
+    if (human.role === role) return;
+    if (human.role === "admin" && human.active) this.#requireOtherAdmin(externalId);
     this.#db.prepare("UPDATE humans SET role = ? WHERE external_id = ?").run(role, externalId);
+    this.#db.prepare("DELETE FROM sessions WHERE external_id = ?").run(externalId);
   }
 
   /**

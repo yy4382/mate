@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { environment, PASSWORD, type Browser, type Site } from "./support.ts";
+import { ADMIN_HANDLE, environment, PASSWORD, settle, type Browser, type Site } from "./support.ts";
 
 type Human = {
   accountId: number;
@@ -319,18 +319,56 @@ describe("11.2 humans: managed by an admin", () => {
     expect((await site.browser().logIn("sam", "reset by the admin")).status).toBe(200);
   });
 
-  it("makes a promoted member an admin on their next request, and a demoted admin a member", async () => {
+  it("ends a human's sessions when their role changes: a promoted member logs in again as an admin, a demoted admin as a member", async () => {
     const { site, admin } = await adminSite();
     const { human, member } = await memberOf(site, admin);
     expect(refusal(await member.get("/api/admin/agents"))).toEqual([403, "admin-only"]);
 
     const promoted = await admin.post(`/api/humans/${human.accountId}/role`, { role: "admin" });
     expect(promoted.json).toMatchObject({ handle: "sam", role: "admin" });
-    expect((await member.get("/api/admin/agents")).status, "no new login needed").toBe(200);
+    expect((await member.get("/api/me")).status, "the old session ended").toBe(401);
+    const sam = site.browser();
+    await sam.logIn("sam", MEMBER_PASSWORD);
+    expect((await sam.get("/api/admin/agents")).status).toBe(200);
 
     const adminAccount = ((await admin.get("/api/me")).json as Human).accountId;
-    await member.post(`/api/humans/${adminAccount}/role`, { role: "member" });
-    expect(refusal(await admin.get("/api/admin/agents"))).toEqual([403, "admin-only"]);
+    await sam.post(`/api/humans/${adminAccount}/role`, { role: "member" });
+    expect((await admin.get("/api/me")).status, "the demoted admin's session ended").toBe(401);
+    expect((await sam.get("/api/me")).status, "the demoting admin's did not").toBe(200);
+    const demoted = site.browser();
+    await demoted.logIn(ADMIN_HANDLE, PASSWORD);
+    expect(refusal(await demoted.get("/api/admin/agents"))).toEqual([403, "admin-only"]);
+  });
+
+  it("ends an admin's open Agent event stream with login at its next heartbeat when another admin demotes them", async () => {
+    const { env, site, admin } = await adminSite();
+    await admin.request("PUT", "/api/admin/providers/openai/credentials", {
+      apiKey: "sk-test-0001",
+    });
+    const nodeId = await site.pairNode(admin);
+    const { agentId } = (
+      await admin.post("/api/admin/agents", {
+        nodeId,
+        displayName: "Lin",
+        handle: "lin",
+        settings: { model: { provider: "openai", modelId: "gpt-4.1" } },
+      })
+    ).json as { agentId: string };
+    const { human } = await memberOf(site, admin);
+    await admin.post(`/api/humans/${human.accountId}/role`, { role: "admin" });
+    const sam = site.browser();
+    await sam.logIn("sam", MEMBER_PASSWORD);
+    const adminAccount = ((await admin.get("/api/me")).json as Human).accountId;
+    const stream = await admin.stream(`/api/admin/agents/${agentId}/events`);
+    await stream.next((event) => event.event === "events");
+    await settle();
+
+    await sam.post(`/api/humans/${adminAccount}/role`, { role: "member" });
+    env.clock.advance(25_000);
+
+    await stream.ended;
+    expect(stream.events.map((event) => event.event)).toEqual(["events", "login"]);
+    expect((await admin.get("/api/me")).status, "their old cookie is refused").toBe(401);
   });
 
   it("refuses to demote or deactivate the last admin, until another admin exists", async () => {
