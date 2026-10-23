@@ -360,7 +360,7 @@
 - `logs` 读这个服务的用户日志，`--follow` 时跟随。
 - 没有配置或身份被拒绝时，前台 `node run` 返回 78。Linux 服务保留 78 并配置不重启；macOS/Windows 的 `--service` 入口把它映射为 0，实际服务不会反复重启，并保留原因日志。
 
-发布构建（`pnpm bundle:node`）下载固定校验和的官方 Node，默认产出六个平台与架构组合。`deploy/node/verify-bundles.ts <目录>` 检查实际归档、校验和与清单，并运行匹配宿主的包内 CLI。`deploy/node/smoke-test.sh` 保留 Linux 容器验证。macOS/Windows CI 先构建两个不同版本的本机包，设置 `MATE_TEST_BUNDLE_DIRECTORY`、`MATE_TEST_UPDATE_BUNDLE_DIRECTORY` 和 `MATE_TEST_NATIVE_SERVICE=1`，再用真实 LaunchAgent/计划任务完成安装、启停、链路和不可重试退出的冒烟；更新和卸载必须从已安装的命令执行，证明能替换或删除自己的程序，不能始终使用另一个解包目录的运行时。开发机不自动改当前账号的真实服务。
+发布构建（`pnpm bundle:node`）下载固定校验和的官方 Node，默认产出六个平台与架构组合。`deploy/node/verify-bundles.ts <目录>` 检查实际归档、校验和与清单，并运行匹配宿主的包内 CLI。`deploy/node/smoke-test.sh` 保留 Linux 容器验证。macOS/Windows CI 先构建两个不同版本的本机包，设置 `MATE_TEST_BUNDLE_DIRECTORY`、`MATE_TEST_UPDATE_BUNDLE_DIRECTORY` 和 `MATE_TEST_NATIVE_SERVICE=1`，再用真实 LaunchAgent/计划任务完成安装、启停、链路和不可重试退出的冒烟；更新和卸载必须从已安装的命令执行，证明能替换或删除自己的程序，不能始终使用另一个解包目录的运行时。Windows 在完整套件前单独执行发布包启动命令，检查错误退出码、自我更新、从包内备用入口卸载，以及成功和失败时临时运行时都被移除。开发机不自动改当前账号的真实服务。
 
 ## 10. 管理模块
 

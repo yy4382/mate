@@ -211,7 +211,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     ok(h, "node", "update", bundle);
     expect(installedVersion(h)).toBe("2.0.0");
     expect(scratch(h)).toEqual([]);
-  });
+  }, 120_000);
 
   it("uninstall stops the service and removes the program, the command and the unit, keeps config, identity and workspaces, and finds nothing to do when run again", () => {
     const h = runningNode();

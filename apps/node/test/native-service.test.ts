@@ -53,7 +53,10 @@ it.runIf(nativeService)(
     };
     const ok = (...args: string[]): string => {
       const result = mate(...args);
-      expect(result.status, `mate node ${args.join(" ")}: ${result.stderr}`).toBe(0);
+      expect(
+        result.status,
+        `mate node ${args.join(" ")}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+      ).toBe(0);
       return result.stdout;
     };
 

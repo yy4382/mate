@@ -35,12 +35,22 @@ if errorlevel 1 (
   exit /b 1
 )
 copy /Y "%~dp0..\\node\\node.exe" "%mate_temporary%\\node.exe" >nul
-if errorlevel 1 goto failed
+if errorlevel 1 (
+  echo Could not copy the management runtime from "%~dp0..\\node\\node.exe" to "%mate_temporary%\\node.exe". 1>&2
+  goto failed
+)
 copy /Y "%~dp0..\\lib\\mate.mjs" "%mate_temporary%\\mate.mjs" >nul
-if errorlevel 1 goto failed
+if errorlevel 1 (
+  echo Could not copy the management program from "%~dp0..\\lib\\mate.mjs" to "%mate_temporary%\\mate.mjs". 1>&2
+  goto failed
+)
 copy /Y "%~f0" "%mate_temporary%\\mate-manage.cmd" >nul
-if errorlevel 1 goto failed
+if errorlevel 1 (
+  echo Could not copy the management launcher from "%~f0" to "%mate_temporary%\\mate-manage.cmd". 1>&2
+  goto failed
+)
 "%mate_temporary%\\mate-manage.cmd" %*
+if errorlevel 1 echo Could not transfer control to "%mate_temporary%\\mate-manage.cmd". 1>&2
 exit /b %errorlevel%
 
 :failed
@@ -51,9 +61,12 @@ exit /b 1
 :manage
 "%~dp0node.exe" "%~dp0mate.mjs" %*
 set "mate_exit=%errorlevel%"
+if not "%mate_exit%"=="0" echo Management command exited with code %mate_exit% using "%~dp0node.exe" and "%~dp0mate.mjs". 1>&2
 (
   del /Q "%~dp0node.exe" "%~dp0mate.mjs" "%~f0"
+  if errorlevel 1 echo Could not remove the temporary management files in "%~dp0". 1>&2
   rmdir "%~dp0"
+  if errorlevel 1 echo Could not remove the temporary management directory "%~dp0". 1>&2
   exit /b %mate_exit%
 )
 `.replaceAll("\n", "\r\n");
