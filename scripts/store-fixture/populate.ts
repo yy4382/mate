@@ -22,6 +22,7 @@ const OWNER_PASSWORD = "fixture owner password";
 const API_KEY = "sk-fixture-not-a-real-key";
 const AGENT_ONE = "11111111-1111-4111-8111-111111111111";
 const AGENT_TWO = "22222222-2222-4222-8222-222222222222";
+const PUSH_ENDPOINT = "https://push.example.test/fixture-owner-device";
 
 let requests = 0;
 const rid = () => `fixture-${++requests}`;
@@ -39,6 +40,10 @@ const owner = chat.ensureAccount({
   displayName: "Owner",
   handle: "owner",
   role: "owner",
+});
+chat.subscribePush(owner, {
+  endpoint: PUSH_ENDPOINT,
+  keys: { p256dh: "fixture-p256dh-key", auth: "fixture-auth" },
 });
 const gateway = createNodeGateway({
   dataDirectory,
@@ -112,6 +117,7 @@ writeFileSync(
       openaiApiKey: API_KEY,
       pairingToken,
       agentExternalIds: [AGENT_ONE, AGENT_TWO],
+      pushEndpoint: PUSH_ENDPOINT,
       ownerUnread: {
         total: summary.total,
         mentions: summary.mentions,
