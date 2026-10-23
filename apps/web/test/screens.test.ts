@@ -39,6 +39,14 @@ it.runIf(out !== undefined)(
       title: "检查部署日志",
     });
 
+    await site.owner.post("/api/humans", {
+      requestId: randomUUID(),
+      handle: "mei",
+      displayName: "Mei",
+      password: "member password 123",
+      role: "member",
+    });
+
     const pages: [string, string][] = [
       ["chat-list", "/app"],
       ["chat", `/app/c/${general}`],
@@ -48,6 +56,8 @@ it.runIf(out !== undefined)(
       ["agent", `/app/admin/agents/${ada.agentId}`],
       ["providers", "/app/admin/providers"],
       ["nodes", "/app/admin/nodes"],
+      ["humans", "/app/admin/humans"],
+      ["profile", "/app/profile"],
     ];
     for (const view of VIEWS) {
       const { page, context } = await newPage(site, view.viewport);

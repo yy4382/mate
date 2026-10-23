@@ -262,13 +262,20 @@ export async function newPage(
   return { page, context };
 }
 
-/** Log in through the login page, as the first admin would, and wait for the app. */
-export async function signIn(page: Page, site: Site, next?: string): Promise<void> {
+export type Login = { handle: string; password: string };
+
+/** Log in through the login page, as the first admin unless `who` says otherwise, and wait for the app. */
+export async function signIn(
+  page: Page,
+  site: Site,
+  next?: string,
+  who: Login = { handle: "admin", password: PASSWORD },
+): Promise<void> {
   await page.goto(
     `${site.origin}/login${next === undefined ? "" : `?next=${encodeURIComponent(next)}`}`,
   );
-  await page.getByLabel("Handle").fill("admin");
-  await page.getByLabel("密码").fill(PASSWORD);
+  await page.getByLabel("Handle").fill(who.handle);
+  await page.getByLabel("密码").fill(who.password);
   await page.getByRole("button", { name: "登录" }).click();
   await page.waitForURL(/\/app/);
 }
@@ -278,9 +285,10 @@ export async function openApp(
   site: Site,
   path = "/app",
   viewport?: { width: number; height: number },
+  who?: Login,
 ) {
   const { page, context } = await newPage(site, viewport);
-  await signIn(page, site, path);
+  await signIn(page, site, path, who);
   await page.getByRole("navigation", { name: "主导航" }).waitFor();
   return { page, context };
 }
