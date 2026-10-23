@@ -57,6 +57,18 @@ it.runIf(process.platform === "win32" && releaseBundles !== undefined)(
     expect(invalid.stderr).toContain("Usage:");
     expect(readdirSync(temporary), "failed management also removes its runtime").toEqual([]);
 
+    const interactive = spawnSync("cmd.exe", ["/d", "/q"], {
+      env,
+      cwd: h.inputs,
+      encoding: "utf8",
+      input: `"${launcher}" node update\r\necho caller-still-running:%errorlevel%\r\nexit 0\r\n`,
+    });
+    expect(interactive.status, interactive.stderr).toBe(0);
+    expect(interactive.stdout, "management leaves the caller's command prompt open").toContain(
+      "caller-still-running:2",
+    );
+    expect(readdirSync(temporary), "interactive management removes its runtime").toEqual([]);
+
     ok(launcher, "install", bundle);
     const version = () =>
       JSON.parse(readFileSync(join(h.paths.program, "manifest.json"), "utf8")).version;

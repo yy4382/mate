@@ -61,13 +61,13 @@ exit /b 1
 :manage
 "%~dp0node.exe" "%~dp0mate.mjs" %*
 set "mate_exit=%errorlevel%"
-if not "%mate_exit%"=="0" echo Management command exited with code %mate_exit% using "%~dp0node.exe" and "%~dp0mate.mjs". 1>&2
-(
+rem End this batch before deleting it; exit /b would try to reopen the deleted file.
+(goto) 2>nul & (
   del /Q "%~dp0node.exe" "%~dp0mate.mjs" "%~f0"
   if errorlevel 1 echo Could not remove the temporary management files in "%~dp0". 1>&2
   rmdir "%~dp0"
   if errorlevel 1 echo Could not remove the temporary management directory "%~dp0". 1>&2
-  exit /b %mate_exit%
+  "%ComSpec%" /d /c exit %mate_exit%
 )
 `.replaceAll("\n", "\r\n");
 
