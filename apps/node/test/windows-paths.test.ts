@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { connectedNode, temporaryDirectory, textOf, windows } from "./support.ts";
 
 function shortPath(path: string): string {
-  return execFileSync(
+  const result = spawnSync(
     "cmd.exe",
     ["/d", "/c", 'for %I in ("%MATE_TEST_DIRECTORY%") do @echo %~sI'],
     {
@@ -21,7 +21,9 @@ function shortPath(path: string): string {
       encoding: "utf8",
       windowsVerbatimArguments: true,
     },
-  ).trim();
+  );
+  expect(result.status, result.stderr).toBe(0);
+  return result.stdout.trim();
 }
 
 describe.runIf(windows)("Windows workspace path aliases through the node protocol", () => {
