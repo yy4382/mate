@@ -424,6 +424,64 @@ describe("3.8 push", () => {
     app.close();
   });
 
+  it("an endpoint another human subscribes takes none of the previous human's queued pushes along", async () => {
+    const { app, clock, service, owner, ada } = ownerWithAgents();
+    const sam = app.ensureAccount({
+      externalId: "sam",
+      displayName: "Sam",
+      handle: "sam",
+      kind: "human",
+    });
+    service.answer(subscription("phone").endpoint, "unreachable");
+    post(app, ada, dm(app, ada, owner), "for the owner");
+    await service.received(1);
+
+    app.subscribePush(sam, subscription("phone"));
+    clock.advance(FIRST_RETRY);
+    await settled();
+    expect(service.requests, "the owner's retry is not sent to Sam's browser").toHaveLength(1);
+
+    post(app, ada, dm(app, ada, sam), "for Sam");
+    await service.received(2);
+    expect(service.requests).toHaveLength(2);
+    expect(service.requests[1]?.notice.messageId, "Sam's own message").not.toBe(
+      service.requests[0]?.notice.messageId,
+    );
+    app.close();
+  });
+
+  it("a push waiting for its retry is not sent once its account is deactivated", async () => {
+    const { app, clock, service, owner, ada } = ownerWithAgents();
+    service.answer(subscription("phone").endpoint, "unreachable");
+    post(app, ada, dm(app, ada, owner), "for the owner");
+    await service.received(1);
+
+    app.deactivateAccount(owner, { requestId: rid() });
+    clock.advance(DAY);
+    await settled();
+
+    expect(service.requests).toHaveLength(1);
+    app.close();
+  });
+
+  it("a human cannot unsubscribe another human's endpoint, and is answered as for an unknown one", async () => {
+    const { app, service, owner, ada } = ownerWithAgents();
+    const sam = app.ensureAccount({
+      externalId: "sam",
+      displayName: "Sam",
+      handle: "sam",
+      kind: "human",
+    });
+
+    app.unsubscribePush(sam, { endpoint: subscription("phone").endpoint });
+    post(app, ada, dm(app, ada, owner), "for the owner");
+    await service.received(1);
+    expect(service.endpoints(), "the owner's subscription stayed").toEqual([
+      subscription("phone").endpoint,
+    ]);
+    app.close();
+  });
+
   it("only the owner manages push subscriptions, and only for https endpoints", () => {
     const { app, owner, ada } = ownerWithAgents([]);
     expect(refusalReason(() => app.subscribePush(ada, subscription("ada-phone")))).toBe(

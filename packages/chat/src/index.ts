@@ -470,11 +470,14 @@ export class ChatApp {
     this.#write(() => subscribePush(this.#db, human, parsed));
   }
 
-  /** Stop pushing to the endpoint, dropping its queued pushes. Unsubscribing an unknown endpoint changes nothing. */
+  /**
+   * Stop pushing to the human's own subscription at the endpoint, dropping its queued pushes. An unknown endpoint, or
+   * one subscribed by another human, changes nothing and is answered the same way.
+   */
   unsubscribePush(account: number, request: z.input<typeof PushEndpoint>): void {
-    requireHuman(this.#db, account);
+    const human = requireHuman(this.#db, account);
     const { endpoint } = parseInput(PushEndpoint, request);
-    this.#write(() => unsubscribePush(this.#db, endpoint));
+    this.#write(() => unsubscribePush(this.#db, human, endpoint));
   }
 
   close(): void {
