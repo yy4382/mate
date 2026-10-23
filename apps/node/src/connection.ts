@@ -19,6 +19,8 @@ export type ConnectionOptions = {
   heartbeatIntervalMs: number;
   heartbeatTimeoutMs: number;
   handshakeTimeoutMs: number;
+  /** Called once, when the gateway has accepted this node on this connection. */
+  onHandshake: () => void;
 };
 
 /**
@@ -139,6 +141,7 @@ export function connect(
           paired = true;
           authenticated = true;
           lastPong = clock.now();
+          options.onHandshake();
           void heartbeat();
           return;
         case "gateway.pong":

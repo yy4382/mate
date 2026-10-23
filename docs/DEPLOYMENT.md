@@ -148,6 +148,8 @@ node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安�
 
 中途失败就重跑同一个命令。程序目录要么是旧版本、要么是新版本、要么不存在，不会是半个。最坏的情况，删掉 `~/.local/lib/mate-node` 再 `install`，Agent 的资料都在程序目录之外。
 
+`mate node status` 里的 `Link:` 行说 node 与网关的连接（链路）：`Link: connected since <时间>` 或 `Link: disconnected since <时间>`。`node run` 在数据目录（`~/.local/share/mate/node`）的 `link.json` 里记下 `{ pid, connected, since }`；`status` 只在服务正在运行、且 `pid` 等于 systemd 的 `MainPID` 时读它，否则是 `Link: none`（服务没在运行，或文件是已经死掉的进程留下的）。服务 `active` 只说明进程起来了，不说明连上了控制面。
+
 管理命令以 root 运行时拒绝。服务以 `mate node run` 运行；没有配置或身份被网关拒绝时它以 78 退出，单元的 `RestartPreventExitStatus=78` 让 systemd 不再重启它，`mate node status` 和 `mate node logs` 能看到原因。
 
 ### 3.3 第一个 Agent
@@ -160,7 +162,7 @@ node 的安装、更新、卸载都由 `mate node` 完成，没有单独的安�
 
 | 要做的事 | 怎么做 |
 |---|---|
-| 看 node 状态、日志 | `mate node status`（版本、服务状态、配置，不打印令牌）、`mate node logs [--lines <n>] [--follow]` |
+| 看 node 状态、日志 | `mate node status`（版本、服务状态、链路、配置，不打印令牌）、`mate node logs [--lines <n>] [--follow]` |
 | 启停 node | `mate node stop`（停止并停用）、`mate node start`（启用并启动）。stop 之后保持停止，重复 `install` 也不会启动它 |
 | 看控制面日志、启停 | 在放 `compose.yaml` 的目录里 `docker compose logs -f`、`docker compose stop`、`docker compose start`。日常命令只用 `compose.yaml`，不叠加 `compose.initialize.yaml` |
 | 暂停或恢复某个 Agent | 网页"管理"。暂停 = 立刻关闭它的 runtime，进行中的模型请求和 node 上的命令都被停掉（网关逐个通知 node 杀掉这些命令的进程组；用 `setsid` 之类脱离进程组的后台进程不受影响）；恢复后从停下的地方接着跑 |
@@ -228,10 +230,10 @@ mate node start
 1. 校验发布包，拉取 `MATE_IMAGE_REPO:<版本>` 镜像。已经是这个版本时什么都不做。
 2. 停 node，`docker compose down`，把数据目录复制到 `<控制面目录>/backups/before-<版本>-<时间>`。
 3. 改 `.env` 的 `MATE_IMAGE`，`docker compose up -d --wait`，确认 `/api/me` 回 401、`/login` 回 200。
-4. `mate node update` 新发布包，`mate node start`，`MATE_NODE_SETTLE` 秒（默认 15）后服务仍在运行，控制面仍然健康。控制面有 `MATE_HEALTH_WAIT` 秒（默认 30）变健康。
+4. `mate node update` 新发布包，`mate node start`，然后每秒看一次 `mate node status`，`MATE_NODE_CONNECT_WAIT` 秒（默认 60）内出现 `Link: connected` 才算起好，期间一旦出现就继续；超时则打印 node 日志并回退。随后控制面仍然健康。控制面有 `MATE_HEALTH_WAIT` 秒（默认 30）变健康。
 5. 保留最近 `MATE_KEEP_BACKUPS` 份备份，以及新旧两个版本的发布包（在 `/var/lib/mate-deploy/bundles/`）。每次部署的输出也追加到 `/var/lib/mate-deploy/deploy.log`；CI 中途断开时部署照常做完或回退，结果看这里。
 
-第 2 步之后任何一步失败，都回到原来的镜像，用刚才的备份替换数据目录，把 node 换回原来的发布包并启动，然后以失败退出，CI 里这次部署显示为失败。回退要用正在运行的那个版本的发布包，所以第一次启用前要把它放进 `/var/lib/mate-deploy/bundles/`（连同 `.sha256`），没有它时 `mate-deploy` 不动手。同一时间只有一次部署在跑。
+第 2 步之后任何一步失败，都回到原来的镜像，用刚才的备份替换数据目录，把 node 换回原来的发布包并启动（原来的版本可能还没有 `Link:` 行，所以这里只等控制面健康，不等链路），然后以失败退出，CI 里这次部署显示为失败。回退要用正在运行的那个版本的发布包，所以第一次启用前要把它放进 `/var/lib/mate-deploy/bundles/`（连同 `.sha256`），没有它时 `mate-deploy` 不动手。同一时间只有一次部署在跑。
 
 **设置**（在这台机器上，以 root）：
 

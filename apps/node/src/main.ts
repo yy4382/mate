@@ -13,6 +13,7 @@ import {
   uninstall,
   update,
 } from "./installation.ts";
+import { writeLink } from "./link.ts";
 import { NodeRejectedError, startNode } from "./node.ts";
 
 const USAGE = `Usage:
@@ -122,6 +123,7 @@ async function run(): Promise<never> {
         dataDirectory: paths.data,
         workspacesRoot: config.workspacesRoot,
         pairingToken: config.pairingToken,
+        onLink: (connected) => writeLink(paths.data, connected),
       },
       controller.signal,
     );
