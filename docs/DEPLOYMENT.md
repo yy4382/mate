@@ -219,6 +219,33 @@ mate node start
 
 不是 Mate 写的单元文件，`uninstall` 不删，也不停用它定义的服务。
 
+### 5.5 自动部署
+
+控制面和 node 在同一台机器上时，可以让 CI 在每次发版后自动升级：推送 `v*` 标签，检查通过、镜像和发布包发布之后，`.github/workflows/ci.yml` 的 Deploy 任务用一把专用 SSH key 连到这台机器，执行 `deploy/auto-update/mate-deploy`，把 5.3 的步骤做一遍。没有预发环境，所以每次部署都先备份数据目录，失败就自动回退。
+
+`mate-deploy` 以 root 运行，从 SSH 拿到 `deploy <版本> <sha256>`，从标准输入拿到这台机器架构的 node 发布包：
+
+1. 校验发布包，拉取 `MATE_IMAGE_REPO:<版本>` 镜像。已经是这个版本时什么都不做。
+2. 停 node，`docker compose down`，把数据目录复制到 `<控制面目录>/backups/before-<版本>-<时间>`。
+3. 改 `.env` 的 `MATE_IMAGE`，`docker compose up -d --wait`，确认 `/api/me` 回 401、`/login` 回 200。
+4. `mate node update` 新发布包，`mate node start`，15 秒后服务仍在运行，控制面仍然健康。
+5. 保留最近 `MATE_KEEP_BACKUPS` 份备份，以及新旧两个版本的发布包（在 `/var/lib/mate-deploy/bundles/`）。
+
+第 2 步之后任何一步失败，都回到原来的镜像，用刚才的备份替换数据目录，把 node 换回原来的发布包并启动，然后以失败退出，CI 里这次部署显示为失败。回退要用正在运行的那个版本的发布包，所以第一次启用前要把它放进 `/var/lib/mate-deploy/bundles/`（连同 `.sha256`），没有它时 `mate-deploy` 不动手。同一时间只有一次部署在跑。
+
+**设置**（在这台机器上，以 root）：
+
+```sh
+install -m 0755 deploy/auto-update/mate-deploy /usr/local/sbin/mate-deploy
+install -m 0600 deploy/auto-update/mate-deploy.env.example /etc/mate-deploy.env   # 按实际路径改
+install -d -m 0700 /var/lib/mate-deploy/bundles
+cp mate-node-<当前版本>-linux-x64.tar.gz* /var/lib/mate-deploy/bundles/
+ssh-keygen -t ed25519 -N '' -C mate-deploy -f mate-deploy-key   # 私钥交给 GitHub 后删掉
+echo "restrict,command=\"/usr/local/sbin/mate-deploy\" $(cat mate-deploy-key.pub)" >> /root/.ssh/authorized_keys
+```
+
+`restrict,command=` 让这把 key 只能执行 `mate-deploy`，没有 shell、转发和终端；拿到它的人最多能把这台机器升级到一个已发布的版本。GitHub 仓库里建一个 `production` 环境，放两个 secret：`DEPLOY_SSH_KEY`（私钥）和 `DEPLOY_KNOWN_HOSTS`（`ssh-keyscan` 得到、和你已知的主机指纹核对过的那一行）；再设仓库变量 `DEPLOY_HOST`（例如 `root@203.0.113.7`），不是 x86_64 时再设 `DEPLOY_NODE_ARCH=arm64`。没有 `DEPLOY_HOST` 时 Deploy 任务跳过。
+
 ## 6. 在开发机上运行
 
 需要 Node 24、pnpm 10；跑 Linux 测试还需要 Docker（macOS 上用 OrbStack 即可）。
