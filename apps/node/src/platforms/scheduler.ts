@@ -306,7 +306,7 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
       const { snapshot, state } = read();
       if (state.ownership === "foreign")
         return [`Left ${paths.unit} and ${snapshot.name} alone: Mate did not write them.`];
-      const task = `<?xml version="1.0" encoding="UTF-8"?>
+      const task = `<?xml version="1.0" encoding="UTF-16"?>
 <!-- ${MARKER} -->
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>${MARKER}</Description></RegistrationInfo>
@@ -329,7 +329,8 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
 </Task>
 `;
       const report: string[] = [];
-      if (writeServiceFile(paths.unit, task)) report.push(`Wrote ${paths.unit}.`);
+      const bytes = Buffer.from(`\uFEFF${task}`, "utf16le");
+      if (writeServiceFile(paths.unit, bytes)) report.push(`Wrote ${paths.unit}.`);
       if (!state.loaded) {
         schtasks("/Create", "/TN", snapshot.name, "/XML", paths.unit);
         report.push(`Registered ${snapshot.name}; it is disabled until \`mate node start\`.`);

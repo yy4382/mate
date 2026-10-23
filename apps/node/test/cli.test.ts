@@ -80,7 +80,12 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     const out = ok(h, "node", "install", writeBundle(h.inputs, { version: "1.0.0" }));
     expect(installedVersion(h)).toBe("1.0.0");
     expectCommand(h);
-    const definition = readFileSync(unit(h), "utf8");
+    const bytes = readFileSync(unit(h));
+    const definition = bytes.toString(process.platform === "win32" ? "utf16le" : "utf8");
+    if (process.platform === "win32") {
+      expect(bytes.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
+      expect(definition).toContain('encoding="UTF-16"');
+    }
     expect(definition).toContain("mate.mjs");
     expect(definition).toContain("--service");
     expect(serviceChanges(h), "install never starts or enables").toEqual([]);
@@ -197,11 +202,10 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     ok(h, "node", "stop");
     const installed = snapshot(program(h));
     const bundle = writeBundle(h.inputs, { version: "2.0.0", bigFileBytes: 64 * 1024 * 1024 });
-    const child = h.spawnMate("node", "update", bundle);
-    const exited = new Promise((resolve) => child.once("exit", resolve));
+    const { child, closed } = h.spawnMate("node", "update", bundle);
     await eventually(() => scratch(h).length > 0, "update starts unpacking", 10_000);
     child.kill("SIGKILL");
-    await exited;
+    await closed;
     expect(snapshot(program(h)), "the killed run left the old program whole").toEqual(installed);
 
     ok(h, "node", "update", bundle);

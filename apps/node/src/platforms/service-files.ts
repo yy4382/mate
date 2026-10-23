@@ -16,14 +16,17 @@ export function markedFileOwnership(path: string, marker: string): Ownership {
   const stat = lstatOrUndefined(path);
   if (stat === undefined) return "absent";
   if (!stat.isFile()) return "foreign";
-  return readFileSync(path, "utf8").includes(marker) ? "mate" : "foreign";
+  const content = readFileSync(path);
+  const encoding = content[0] === 0xff && content[1] === 0xfe ? "utf16le" : "utf8";
+  return content.toString(encoding).includes(marker) ? "mate" : "foreign";
 }
 
-export function writeServiceFile(path: string, content: string): boolean {
-  if (lstatOrUndefined(path) !== undefined && readFileSync(path, "utf8") === content) return false;
+export function writeServiceFile(path: string, content: string | Buffer): boolean {
+  const bytes = typeof content === "string" ? Buffer.from(content) : content;
+  if (lstatOrUndefined(path) !== undefined && readFileSync(path).equals(bytes)) return false;
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.mate-tmp`;
-  writeFileSync(temporary, content, { mode: 0o600 });
+  writeFileSync(temporary, bytes, { mode: 0o600 });
   renameSync(temporary, path);
   return true;
 }

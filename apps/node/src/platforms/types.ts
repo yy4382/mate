@@ -71,7 +71,7 @@ export type PrivateFiles = {
 };
 
 export type WorkspacePaths = {
-  accepts(root: string, input: string, resolved: string): Promise<boolean>;
+  resolve(root: string, input: string, resolved: string): Promise<string | undefined>;
 };
 
 export type Platform = {

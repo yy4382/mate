@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import { afterAll } from "vitest";
+import { afterAll, onTestFinished } from "vitest";
 import { temporaryDirectory } from "./support.ts";
 
 const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
@@ -96,13 +96,15 @@ function executableRunner(): string {
 
 export type Result = { status: number | null; stdout: string; stderr: string };
 
+export type SpawnedMate = { child: ChildProcess; closed: Promise<void> };
+
 export type Host = {
   home: string;
   inputs: string;
   paths: HostPaths;
   env: NodeJS.ProcessEnv;
   mate(...args: string[]): Result;
-  spawnMate(...args: string[]): ChildProcess;
+  spawnMate(...args: string[]): SpawnedMate;
   argv(...args: string[]): string[];
   service(): FakeService;
   setService(change: Partial<FakeService>): void;
@@ -184,7 +186,13 @@ export function host(): Host {
     },
     spawnMate(...args) {
       const [command, ...rest] = argv(...args);
-      return spawn(command!, rest, { env, cwd: inputs, stdio: "ignore" });
+      const child = spawn(command!, rest, { env, cwd: inputs, stdio: "ignore" });
+      const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+      onTestFinished(async () => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await closed;
+      });
+      return { child, closed };
     },
     setService(change) {
       writeFileSync(state, JSON.stringify({ ...service(), ...change }));

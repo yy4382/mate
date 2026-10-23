@@ -148,13 +148,13 @@ export class WorkspaceEnv extends NodeExecutionEnv {
   override async absolutePath(path: string, context: Context): Promise<Result<string, FileError>> {
     const resolved = await super.absolutePath(path, context);
     if (!resolved.ok) return resolved;
-    const accepted = await currentPlatform().workspacePaths.accepts(
+    const accepted = await currentPlatform().workspacePaths.resolve(
       this.#root,
       path,
       resolved.value,
     );
-    return accepted
-      ? ok(resolved.value)
+    return accepted !== undefined
+      ? ok(accepted)
       : err(new FileError("permission_denied", `${path} is outside the workspace`, path));
   }
 }

@@ -1,5 +1,13 @@
 import { BASH_TIMEOUT_SECONDS } from "@mate/node-protocol";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -26,11 +34,12 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
         : `printf '%s\\n' "$0" "$(pwd -P)" "$HOME"`,
     });
     expect(result.isError, textOf(result)).toBe(false);
-    expect(textOf(result).split(/\r?\n/).slice(0, 3), "shell, working directory, HOME").toEqual([
-      windows ? "5" : "/bin/sh",
-      workspace,
-      workspace,
-    ]);
+    const [shell, cwd, home] = textOf(result).split(/\r?\n/);
+    expect(shell).toBe(windows ? "5" : "/bin/sh");
+    expect(realpathSync.native(cwd!), "the shell is in the workspace directory").toBe(
+      realpathSync.native(workspace),
+    );
+    expect(home, "HOME keeps the configured workspace path").toBe(workspace);
   });
 
   it.skipIf(windows)(
