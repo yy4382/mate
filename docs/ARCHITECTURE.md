@@ -346,7 +346,7 @@ interface AgentManager {
 3. **暂停就是立刻关闭。** 进行中的模型请求被中止，node 上的工具调用被停止。恢复时 Durable 从停下的地方接着跑。不存在"还在跑但已经没资格跑"的状态。
    Manager 对每个 Agent 只记一个状态：打开（runtime 加连接器，以及打开时从文件读出的 node ID）或关闭。Agent 文件里的东西（"已暂停"、node ID、设置、用量）只能从关闭状态直接读写：那样做会在文件上另开一个 Durable 会话，和打开的 runtime 并存就会弄坏 runtime 的存储。打开的 Agent 一律经它的 runtime 读写。所以对打开的 Agent 调 `resume` 什么都不做，对关闭的 Agent 调 `pause` 只写记录。
 4. **创建的顺序：**
-   1. 生成 Agent ID；
+   1. 使用调用方传入的 Agent ID，或生成一个；
    2. 调用 `chat.ensureAccount({ externalId: agentId })`，这个调用可以安全重复。聊天 app 的拒绝（`handle-taken`、`invalid-input`，已删除 Agent 的 ID 为 `inactive-account`）原样 reject，不包成 `AgentCreationFailed`：这一步被拒绝时什么都还没创建，没有可重做的东西；
    3. 让所选的 node 创建工作目录；
    4. 在临时文件里初始化 Durable 存储（带上 node ID），再改名为正式文件。
@@ -370,12 +370,12 @@ interface AgentManager {
 
 新 node 的 `node.authenticate`、`node.pair` 都必须带 `system`。网关容忍旧 node 缺少这个字段，保留此前收到的报告；带了字段就必须是完整报告。新配对的名字取 hostname，转成小写、把非法字符逐个换成 `-`、去掉开头的 `-`、截到 32 位。结果为空或旧 node 没有报告时，用 `node-<UUID 前 8 位>`。名字冲突时依次加 `-2`、`-3`，先为后缀留出长度。之后的握手只更新系统信息，保留管理员设定的名字。
 
-**工具调用按"整个调用"转发。** runtime 把一次完整的工具调用（工具名、参数）交给网关，网关发给 node，node 在本地执行，边执行边把输出流回来，最后返回结果。这样每次工具调用只有一次往返，不需要在网络上逐个实现 Durable 执行环境接口的二十多个文件方法。网关为每次调用生成自己的请求 ID（随机 UUID），输出、结果和停止都按它对应；调用方的任何 ID 都不上线路，所以不同 Agent 的调用不可能撞号。node 工具调用不按 ID 去重：有副作用的工具崩溃后不重做（4.2 规则 2），可重做的 `read` 重做一次也无妨。
+**工具调用按"整个调用"转发。** runtime 把一次完整的工具调用（工具名、参数、可选 node 名字）交给工作区端口，管理模块选择目标和访问方式后交给网关，网关发给 node，node 在本地执行，边执行边把输出流回来，最后返回结果。这样每次工具调用只有一次往返，不需要在网络上逐个实现 Durable 执行环境接口的二十多个文件方法。网关为每次调用生成自己的请求 ID（随机 UUID），输出、结果和停止都按它对应；调用方的任何 ID 都不上线路，所以不同 Agent 的调用不可能撞号。node 工具调用不按 ID 去重：有副作用的工具崩溃后不重做（4.2 规则 2），可重做的 `read` 重做一次也无妨。
 
-- **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于该工作区的 `NodeExecutionEnv`（**工作区环境**）上：参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
+- **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于本次执行目录的 `NodeExecutionEnv`（**工作区环境**）上：`home` 的根是 Agent 工作区，`visit` 的根是 node 账号主目录。参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
 - **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 是 `/bin/sh -c`，Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及后台进程仍在运行或状态无法确认。PowerShell 对外部程序退出码的处理遵循自身规则，node 不追加 `exit $LASTEXITCODE` 改写命令。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
 
-**接口（网关对 runtime）：**
+**接口（给管理模块）：**
 
 ```ts
 type NodeAccess = "home" | "visit" // gateway.run.tool 的必填 access 字段
@@ -409,7 +409,7 @@ type NodeStatusResult = {
 1. **控制面从不重发工具调用，也不给调用设期限。** 连接是否还活着由心跳判断，命令跑多久由 `bash` 自己的 `timeout` 决定；网关不会因为一次调用跑得久，就把健康连接上的调用说成"结果未知"。 连接断了，进行中的调用立即以"结果未知：节点连接中断，命令可能执行了也可能没有，不会重试"返回给模型，之后迟到的结果直接丢弃。模型自己决定要不要检查。所以**没有回执对账**：node 不需要操作账本，控制面也不需要定期核对。
 2. **node 离线时 Agent 照常运行**，需要该 node 的工具直接返回"节点离线"错误，管理模块在错误结果中标出目标名字。主 node 离线不影响访问其他在线 node，反之亦然。
 3. **连接断开时，node 停掉那些已经没人等结果的命令进程组。** 各平台能追踪的范围见第 5 条；Agent 有意放到后台、脱离了这个范围的进程（比如 POSIX 上的 `setsid`），由 Agent 自己负责。
-4. **执行前只检查工作目录是否存在。** 不检查 `MEMORY.md` 的权限，也不检查任何 Agent 能自己改动的文件：Agent 改动自己的文件，不应该让自己的命令全部失败。工作目录没有标记文件：它的路径记在 Agent 自己的文件里，只由创建流程生成。
+4. **`home` 调用执行前只检查 Agent 工作目录是否存在。** 不检查 `MEMORY.md` 的权限，也不检查任何 Agent 能自己改动的文件：Agent 改动自己的文件，不应该让自己的命令全部失败。工作目录没有标记文件：路径由主 node 的工作区根和 Agent ID 确定，只由创建流程准备，执行调用不会重建它。
 5. **平台差异只由一张平台表选择。** 每条记录提供 shell 与命令进程组、服务管理、目录布局、启动命令、私有文件权限和工作区路径规则；安装策略和命令结果处理各只有一份。Linux 和 macOS 用独立的 POSIX 进程组，shell 退出后仍能停止同组的后台进程；Linux 用 `/proc` 区分僵尸并核对启动时间，macOS 用 `ps` 观察组成员和启动时间。Windows 用 `taskkill /PID <pid> /T /F` 停止仍存活的 shell 及当时可发现的子孙，杀前核对该 shell 的身份，shell 退出后不再对旧 PID 操作。Windows 没有等价的稳定进程集合，不能保证收回已失去父链的孤儿进程；后台状态未知时结果明确说明，不能声称它们仍在运行或已经全部结束。三者都短暂等待退出后的输出，再返回并标明可能不完整。
 6. **谁在等结果，谁决定停。** 停止只有一种方式：调用方中止自己那次调用的 signal，网关就向 node 发这次调用的停止消息，node 杀掉它的命令进程组；POSIX 上命令已经返回、只剩后台进程占着输出时收到停止，也杀掉那些后台进程；Windows 的可追踪范围见第 5 条。暂停 Agent 就是关闭它的 runtime，runtime 中止所有进行中调用的 signal，所以不需要另一个"按 Agent 停止"的入口。node 按连接记录进行中的调用，连接断开停掉这条连接上的所有进行中调用；node 自己正常关闭时杀掉它仍能追踪的所有命令进程组，追踪范围遵守第 5 条。终止失败时，结果明确说明进程可能仍在运行，保留仍可追踪的句柄供关闭时重试；关闭会尝试所有命令后再报告失败，不会无限等待一个无法终止的进程。Windows 的进程信号不提供 POSIX 的优雅关闭；CLI 停止服务时先停用任务，再终止已核对身份的 node 进程树。
 7. **身份被拒绝时退出，网络失败时退避重连。** 网关拒绝 node 的身份或配对令牌时发 `gateway.refused`，直接运行的 node 进程以 78 退出，不重试（`unknown_identity` 而 node 手里有令牌时除外，见第 8 条）；网关因为用法出错结束连接（格式错误、顺序错误、握手超时、内部错误）时发 `gateway.error`，node 和连不上、连接中断时一样，从 250ms 起倍增、最多 10 秒重连。退出还是重连由消息类型决定，node 不维护错误码清单。systemd 用 `RestartPreventExitStatus=78` 停止重启；LaunchAgent 和计划任务直接执行 `node run --service`，服务入口将不可重试的 78 转为 0，保留错误日志。服务不靠 wrapper 等待子进程，所以服务的执行进程就是 node。
@@ -417,7 +417,7 @@ type NodeStatusResult = {
 9. **一个 node 一条连接，调用绑定在连接上。** 同一个 node 新认证的连接关闭旧连接。每个工具调用只接受发出它的那条连接送回的输出和结果；连接结束时，它带着的调用以"结果未知"结束并被忘掉，之后谁送来它的结果都不会交给调用方。
 10. **违规的连接立即结束。** 未认证的连接最多 32 条，超出的直接关闭；单条消息按收到的序列化帧计不超过 1 MiB，超出的由 WebSocket 层关闭；无法解析、不认识的消息、认证前发别的消息、重复认证，网关回一个 `gateway.error` 后关闭连接，并且从这一刻起不再读取这条连接送来的任何东西，node 立即离线。心跳超时（TCP 没断但收不到数据也算）同样结束连接。
 
-**访问方式只选择执行环境。** `home` 使用 `<工作区根>/<agentId>`，目录必须存在，`HOME` 和 `PWD` 设为该目录；`visit` 使用 `os.homedir()`，保留 node 进程原来的 `HOME`（包括未设置），不创建工作区，也不碰工作区根。两者共用文件工具的路径限制、命令进程组、超时、停止、断线和截断逻辑。Windows 设置 home 环境时先去掉大小写不同的 HOME/PWD 键；PowerShell 只在环境中有 HOME 时覆盖其自动 `$HOME`，visit 缺少 HOME 时保留 PowerShell 自己的主目录值。
+**访问方式只选择执行环境。** `home` 使用 `<工作区根>/<agentId>`，目录必须存在，`HOME` 和 `PWD` 设为该目录；`visit` 使用 `os.homedir()`，`PWD` 设为该目录，保留 node 进程原来的 `HOME`（包括未设置），不创建工作区或 `MEMORY.md`，也不碰工作区根。两者共用文件工具的路径限制、命令进程组、超时、停止、断线和截断逻辑。Windows 设置 home 环境时先去掉大小写不同的 HOME/PWD 键；PowerShell 只在环境中有 HOME 时覆盖其自动 `$HOME`，visit 缺少 HOME 时保留 PowerShell 自己的主目录值。
 
 访问方式由管理模块决定，runtime 和 node 都不判断授权。旧 node 不认识 `access` 时仍按工作区执行，访问调用因工作区不存在而失败；访问其他 node 前，先把目标 node 升级到支持此功能的版本。
 
@@ -433,7 +433,7 @@ type NodeStatusResult = {
 **后台命令。** `bash` 带 `background: true` 时，runtime 在发起它的对话（主对话或工作助手）里建一个 Durable 后台任务，把这个任务的 ID 作为命令 ID 立即返回给模型。后台任务不让对话保持忙碌，也不随对话的 run 结束或被中止，所以 Agent 照常工作、照常空闲。这个任务把调用交给网关、等结果，步骤和 Durable 自己的工具任务一样：
 
 1. 交给网关之前，先记下"已交给 node"。重新打开的 runtime 发现任务停在这里，就知道命令可能跑过：它可能被关闭停在半路，也可能已经跑完而结果没来得及记下。汇报"已中断"，如实写明这两种可能，不重跑。
-2. 命令结束后，在同一次提交里结束任务、并为发起它的对话建一个投递（见 4.2 的"助手投递"），内容是结果的全部文本，开头一行写明命令 ID、成功还是出错、命令本身（`requestId = command:<ID>`，`whenBusy = "steer"`）。两件事一起提交，所以结果恰好汇报一次；发起它的是工作助手时，助手对汇报的回答也照常汇报给主对话。
+2. 命令结束后，在同一次提交里结束任务、并为发起它的对话建一个投递（见 4.2 的"助手投递"），内容是结果的全部文本，开头一行写明命令 ID、成功还是出错、命令本身；显式指定了 node 时也写明目标名字（`requestId = command:<ID>`，`whenBusy = "steer"`）。两件事一起提交，所以结果恰好汇报一次；发起它的是工作助手时，助手对汇报的回答也照常汇报给主对话。
 
 后台命令的输出不流式显示，只在汇报里出现，截断规则和前台一样由 node 定。`bash_stop(ID)` 中止那个任务（Durable 的 `abortTask`），任务的 signal 随之中止，网关停掉 node 上的这次调用，和前台调用的停止走同一条路（规则 6）；被停止的命令不再汇报，`bash_stop` 的结果就是"已停止"。只能停自己这个对话的后台命令：不认识的 ID 返回错误结果；已经结束的命令返回普通结果，说明它已结束、结果会作为输入到达。命令结束和交出汇报是同一次提交，所以停止要么在它之前（不汇报），要么在它之后（命令已经结束）。`bash_stop` 可以重做：再停一次什么都不变，回答从任务的结局读出。runtime 关闭（暂停、控制面重启）时后台命令和前台命令一样被停掉，重新打开后那个任务以"已中断"汇报一次，不重跑命令。没有列出后台命令的工具：命令 ID 就在 `bash` 的结果里，压缩之后也能用历史工具查到。前台命令不给 `timeout` 时默认 10 分钟，最多 1 小时；后台命令不给时没有时限，最多一天。
 
@@ -450,7 +450,7 @@ type NodeStatusResult = {
 
 **不负责：** 聊天。Agent 的显示名和 handle 归聊天账号，管理模块从聊天 app 读（`listAccounts()`），自己不另存；创建 Agent 时由 Manager 调 `ensureAccount` 开账号。
 
-**它拥有 Agent Manager。** `openAdmin` 先打开自己在控制库里的凭据和授权表，再打开 `data/agents/` 上的 Manager：Manager 的工作区宿主是网关（准备工作区调 `prepareWorkspace`，工作区端口的每次调用转给 `runTool`，带上调用的 signal），凭据查找读凭据表。所以 Web 外壳只组装聊天 app、网关和管理模块，不直接碰 Manager。
+**它拥有 Agent Manager。** `openAdmin` 先打开自己在控制库里的凭据和授权表，再打开 `data/agents/` 上的 Manager：管理模块把网关适配成 Manager 的工作区宿主（在主 node 准备工作区时调 `prepareWorkspace`，工作区端口为每次调用选择目标和访问方式后转给 `runTool`，带上调用的 signal），凭据查找读凭据表。所以 Web 外壳只组装聊天 app、网关和管理模块，不直接碰 Manager。
 
 **对外接口（给 Web 外壳的 `/api/admin/*` 用）：**
 
@@ -479,13 +479,15 @@ interface Admin {
 }
 ```
 
-拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`name-taken`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。每个拒绝都是 `AdminError`（或上面这种 `ChatError`）：对 Agent 的操作排在该 Agent 的队列里执行，排队期间 Agent 被删掉，同样是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
+拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`name-taken`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。对现有 Agent 的管理写操作排在该 Agent 的队列里执行，排队期间 Agent 被删掉，同样是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
 
 **工作区宿主与授权。** `WorkspaceHost.port(homeNodeId, agentId)` 返回的端口接受 `{ tool, arguments, node? }`，runtime 统一将 `node` 从四个工具的参数中取出，node 收到的 `arguments` 不变。端口的 `nodes()` 返回 `{ name, online, platform, home }[]`。每次调用从网关取一次 node 快照，缺省目标为主 node，否则按名字解析。
 
 **只有 `nodeAccess(agentId, homeNodeId, targetNodeId)` 决定访问方式。** 主 node 返回 `home`，现读授权表命中的其他 node 返回 `visit`，其余拒绝。工具调用和 `nodes()` 共用这个函数；以后增加权限规则只改它和它读的数据。解析、判定和发出调用之间不 await。未知名字和未授权名字返回相同错误，列出可访问的名字，不向任何 node 发请求，也不泄露其他 node 是否存在。授权按 ID 保存，改名后仍有效。
 
-授权和收回只影响之后开始的调用，已发出的前台调用、后台命令继续运行。操作要求 Agent 存在（否则 `unknown-agent`）、node 已配对（否则 `unknown-node`），主 node 不能授权或收回（`invalid-input`）。同一个 Agent 的授权、收回和删除按到达顺序串行，运行工具不加入这个队列。删除先让 Manager 完成删除，再清理授权；清理失败时，只有聊天账号已停用且种类为 Agent 才允许在文件已删除后重做清理。已删除的 Agent ID 不能复用，遗留授权不会给新 Agent 带来权限。
+授权和收回只影响之后开始的调用，已发出的前台调用、后台命令继续运行。操作要求 Agent 存在（否则 `unknown-agent`）、node 已配对（否则 `unknown-node`），主 node 不能授权或收回（`invalid-input`）。
+
+管理模块为同一个 Agent 的全部管理写操作共用一条队列。创建、暂停、恢复、改设置、授权、收回和删除按到达顺序执行，存在性检查也在轮到操作时进行。创建先确定 Agent ID，再排入队列。这样删除即使正在等此前的授权，后来的生命周期操作也不能越过它。运行工具和只读观察不加入这个队列。删除先让 Manager 完成删除，再清理授权；清理失败时，只有聊天账号已停用且种类为 Agent 才允许在文件已删除后重做清理。已删除的 Agent ID 不能复用，遗留授权不会给新 Agent 带来权限。
 
 **模型和 API key：** 模型来自 pi-ai 自带的目录（runtime 的 `catalogModels`，Agent 的请求也在这个目录里解析）。管理界面提供 OpenAI（Responses API）和 DeepSeek 两家；凭据按提供商存 `{ apiKey, baseUrl? }`，`baseUrl` 替换目录里这个提供商所有模型的地址。设置模型时先检查（创建 Agent 时也一样，在任何东西被创建之前）：提供商是这两家之一、已经存了 key、目录里有这个模型、thinking 级别在这个模型接受的级别里。不接受的级别直接拒绝，不降级。runtime 每次模型请求都现读凭据，所以改了 key 从下一次请求起生效，再存一次同样的值不影响任何正在运行的 Agent；删了 key，这个提供商的请求不发出就失败。
 

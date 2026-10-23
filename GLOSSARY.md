@@ -249,7 +249,7 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 连接器提交给 runtime 的一条不含消息正文的提示，写明截至某个时间点至少有多少未读、分布在哪里、有没有 @ 你。同一时间最多只有一条还没交给模型的通知，新的会替换旧的。
 
 **node**
-以宿主机上一个普通账号（node 账号，不是控制面的账号，也不在 docker 组里）运行的执行进程，由 `mate node` CLI 管理：Linux 是 systemd 用户服务，macOS 是 LaunchAgent，Windows 是当前账号登录时启动的计划任务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
+以宿主机上一个普通账号（node 账号，不是控制面的账号，也不在 docker 组里）运行的执行进程，由 `mate node` CLI 管理：Linux 是 systemd 用户服务，macOS 是 LaunchAgent，Windows 是当前账号登录时启动的计划任务。它按访问方式在 Agent 工作区或 node 账号主目录里执行命令、读写文件，不接触模型凭据和对话记录。
 
 **平台表**（platform table）
 node 根据当前系统选择能力的唯一入口。Linux、macOS、Windows 各有一条记录，提供 shell、命令进程组、服务、布局、启动命令、私有文件保护和工作区路径规则。共同的安装流程、超时和输出处理不随平台复制。
@@ -261,13 +261,13 @@ Agent 创建时选定的 node，ID 记在 Agent 文件里且不变。它的工�
 Agent 把一次工具调用送到已授权的非主 node，在那个 node 账号的主目录里执行，不创建自己的工作区。
 
 **访问方式**（NodeAccess）
-网关工具调用的必填 `access`，值为 `home` 或 `visit`。管理模块统一决定，node 据此选择目录和 HOME 环境。
+网关工具调用的必填 `access`，值为 `home` 或 `visit`。管理模块统一决定，node 据此选择目录和 HOME 环境：`home` 把 HOME 设为 Agent 工作区，`visit` 保留 node 进程原来的 HOME，包括未设置。
 
 **node 授权**（node grant）
 管理员允许某个 Agent 访问一个非主 node 的记录，按两个 ID 存在控制库。主 node 不需要授权；授权和收回只影响之后开始的调用。
 
 **node 名字**（node name）
-网关保存的、人读的机器名字，例如 `server`、`laptop`。名字在已配对 node 中唯一，有 1 到 32 个小写字母、数字或 `-`，以字母或数字开头。新配对时从 hostname 规范化生成，冲突加后缀，管理员之后可以改。UUID 继续用于身份和调用；改名不改 Agent 文件里的 node ID。
+网关保存的、人读的机器名字，例如 `server`、`laptop`。名字在已配对 node 中唯一，有 1 到 32 个小写字母、数字或 `-`，以字母或数字开头。新配对时从 hostname 规范化生成，冲突加后缀，管理员之后可以改。模型用名字选择工具调用目标；身份、网关传输和授权仍用 UUID，改名不改 Agent 文件里的 node ID。
 
 **系统信息**（NodeSystem）
 node 每次配对或认证时现取的完整报告，包含 `platform`、`arch`、`hostname`、`osRelease`、`version`。`version` 是正在运行的 node 程序的发布版本，开发时为 `dev`。网关保存最近一次报告和报告时间，管理员不能修改；旧 node 没有报告时保留上次的值，从未报告则为 `null`。
@@ -291,7 +291,7 @@ node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-n
 POSIX 上是 `~/.local/lib/mate-node`，Windows 上是 `%LOCALAPPDATA%\Mate\program`，保存解开的发布包。只会被整个放入（暂存目录改名）或整个挪走，从不原地修改，所以要么是完整的某个版本，要么不存在。配置、node 身份和工作区都在它之外。
 
 **工作区宿主**（WorkspaceHost）
-Agent Manager 看到的"工作区在哪里"：在一个 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出这个 Agent 在那个 node 上的工作区端口（`port(nodeId, agentId)`）。Agent 的主 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：准备工作区调 `prepareWorkspace`，端口按调用的可选 node 名字和最新授权选择目标及访问方式，再转给 `runTool` 并带上调用的 signal；`nodes()` 列出当前可访问的 node。Manager 的测试里用假的。
+Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出以这个主 node 为缺省目标的工作区端口（`port(nodeId, agentId)`）。Agent 的主 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：准备工作区调 `prepareWorkspace`，端口按调用的可选 node 名字和最新授权选择目标及访问方式，再转给 `runTool` 并带上调用的 signal；`nodes()` 列出当前可访问的 node。Manager 的测试里用假的。
 
 **node 网关**（node gateway）
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
@@ -312,7 +312,7 @@ node 对一条 `bash` 命令所启动进程的把手。Linux/macOS 为 `/bin/sh 
 避免：结果未知（那是连接断开时的结果）。
 
 **工作区环境**（WorkspaceEnv）
-node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，浏览工作区也用它；home 的根是 Agent 工作区，visit 的根是 node 账号主目录。每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。Windows 同时处理盘符、反斜线和大小写，拒绝经过任何符号链接或 junction；POSIX 保留指向工作区内部的链接。
+node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，浏览工作区也用它；home 的根是 Agent 工作区，visit 的根是 node 账号主目录。每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。Windows 同时处理盘符、反斜线和大小写，拒绝经过任何符号链接或 junction；POSIX 保留指向该根目录内部的链接。
 
 **浏览工作区**（browse）
 管理员在管理界面里只读地看 Agent 工作区里的一个路径：管理模块的 `browseWorkspace` 调网关的 `browse`，网关发 `gateway.browse`，node 回 `node.browse.result`。回答是一个**浏览结果**（`WorkspaceListing`：目录的条目、文件开头的文字，或者不是文字的文件的大小，各有上限并标明截断），或者一个拒绝（`outside-workspace`、`not-found`、`unreadable`，网关再加上 `node-offline`）。不经过 runtime，暂停的 Agent 也能看。

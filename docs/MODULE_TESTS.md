@@ -267,10 +267,10 @@
 - `renameNode` 能改名，改成原名不改变状态；非法名字、名字被占用、不存在的 node 分别以 `invalid-input`、`name-taken`、`unknown-node` 拒绝，现有名字和系统报告不变。名字和报告跨重启保留；`status` 查询未配对 ID 同样是 `unknown-node`。
 - 从已发布版本生成的存储夹具包含已配对 node 和测试身份。新网关打开副本后，旧 node 得到 `node-<UUID 前 8 位>`，前缀冲突时加后缀，系统报告为空；旧私钥照常认证，新格式认证补齐报告，夹具里未使用的令牌仍然能配对。
 - 同一个 node 建立新连接后，旧连接被关闭，来自旧连接的消息一律被拒绝。
-- `runTool` 把输出流式交给调用方，最后返回结果。
+- `runTool` 把输出流式交给调用方，最后返回结果；`home`、`visit` 原样进入 `gateway.run.tool`。缺少必填 `access` 的调用在发送和注册 signal 之前被拒绝。
 - 两个 Agent 在同一个 node 上并发调用，各自拿到自己的输出和结果：网关为每次调用生成自己的请求 ID。
 - 调用没有自己的期限：时钟推进很久之后，node 送来的真实结果照常交给调用方。
-- 调用方中止调用：网关立即以"已停止"（不是"结果未知"）结束它，并让 node 停掉这一次调用；之后 node 送来的输出和结果被丢弃。
+- 调用方中止 `home` 或 `visit` 调用：网关立即以"已停止"（不是"结果未知"）结束它，并让 node 停掉这一次调用；之后 node 送来的输出和结果被丢弃。
 - Agent ID 不合法的调用在发送和注册任何东西之前就被拒绝。
 - 工具调用进行中连接断开：调用立即以"结果未知"结束；之后即使假 node 重连并送来这次调用的结果，也被丢弃，不会交给调用方。
 - node 离线时调用 `runTool`，立即返回"节点离线"，不排队等待。
@@ -288,8 +288,6 @@
 - 存储里的版本比模块的列表新时拒绝启动，不改动存储。
 - `Migrations` 本身：空列表、版本不严格递增的列表构造时报错；`after` 对新存储给出全部迁移，对已是最新的存储给出空，对更新的或不在列表里的版本给出"无法到达"。（`packages/migrations/test`）
 
-- runTool 的 home/visit 访问方式原样进入 gateway.run.tool；无合法访问方式的请求不能执行。
-
 ## 8. Node
 
 **边界：** node 进程对网关说的 WebSocket 协议，以及它在文件系统和进程上的实际效果。测试在 Linux、macOS、Windows 上运行。`pnpm test:linux` 在 Linux 容器里以非 root 账号运行；CI 另外在 `macos-latest`、`windows-latest` 运行 node 套件，并汇入 `checks`。通常以子进程启动 node；Windows 的正常关闭从公开的 `startNode` 与 AbortSignal 驱动，因为给子进程发 SIGTERM 会直接硬杀，不能验证关闭清理。
@@ -300,7 +298,8 @@
 
 ### 8.1 命令
 
-- 命令交给所在平台的 shell：Linux/macOS 为 `/bin/sh -c`，Windows 为 PowerShell 5.1。工作目录和 HOME 是该 Agent 的工作目录；Windows 同时验证 PowerShell 的 `$HOME` 和多字节输出，而不是只检查环境变量。
+- 命令交给所在平台的 shell：Linux/macOS 为 `/bin/sh -c`，Windows 为 PowerShell 5.1。`home` 调用的工作目录和 HOME 是该 Agent 的工作目录；Windows 同时验证 PowerShell 的 `$HOME` 和多字节输出，而不是只检查环境变量。
+- `visit` 使用 node 账号主目录作为工作目录和 PWD，保留原 HOME，不要求 Agent 工作区存在，不创建工作区或 `MEMORY.md`。Windows 验证 USERPROFILE 与 HOME 不同、HOME 未设置时保留 PowerShell 的自动 `$HOME`，以及 `home` 覆盖环境变量大小写别名。
 - POSIX 上 Agent 自己写的 `sudo` 原样执行，成败由宿主决定；node 从不自己加提权命令。这个用例只在有 POSIX shell 的平台运行。
 - 三个平台都验证正常退出与 shell 退出码、超时、停止、没能启动（例如工作目录不存在）。POSIX 另外验证被信号终止。进程树用真实子孙进程证明，不能只断言 shell 已退出。
 - 输出超过上限时截断，并在结果里标明。
@@ -310,11 +309,10 @@
 - Windows 的终止命令失败时，调用及时返回明确错误，不声称已经停止；恢复终止能力后，node 正常关闭仍能清理该进程树。
 - Linux 用 PID namespace 构造复用，证明旧命令组的 ID 不会误杀新进程；这个能力只存在于 Linux，所以其他平台跳过该用例并注明原因。macOS/Windows 的公开停止用例仍须实际检查各自的进程集合。
 
-- visit 使用 node 账号主目录，保留原 HOME，不要求 Agent 工作区存在，不创建工作区或 MEMORY.md；文件工具拒绝主目录外的路径。Windows 验证 USERPROFILE 与 HOME 不同、HOME 未设置，以及 home 覆盖环境变量大小写别名；停止、超时仍走共同执行路径。
-
 ### 8.2 文件
 
 - 文件工具（`read`、`write`、`edit`）的行为与 Durable 自带工具在本地执行时一致。
+- `visit` 的三种文件工具在 node 账号主目录里读写、编辑，不要求 Agent 工作区存在；遍历、绝对路径、外部链接均不能越出主目录，外部文件不变，也不创建 Agent 工作区或 `MEMORY.md`。
 - 以两个点开头的普通文件名（`..notes.md`、`..cache/x.txt`）照常读写。POSIX 上单独的 `...` 也是普通名字；Windows 不支持尾点或尾空格，明确拒绝这些路径，避免被系统归一化成别的名字。
 - 路径不能逃出工作目录：`..`、指向工作目录外的绝对路径、指向外部的符号链接都被拒绝。（Durable 的文件工具内部会把路径先变成绝对路径再解析，所以指向工作目录内的绝对路径照常可用。）
 - Windows 另外覆盖反斜线、盘符、大小写、短名与长名、UNC、drive-relative 路径，以及工作区内外的符号链接和 junction。指向内部的 Windows 链接也拒绝，包括从工作区外绕回内部的 junction；同一目录的短名、长名和大小写变化都能读写、编辑和浏览，缺失的子目录仍受同一个根限制。
@@ -323,7 +321,7 @@
 ### 8.3 连接与停止
 
 - 连接断开时，正在运行的、由工具调用启动的进程组被停止。
-- 网关停止一次调用，只杀掉这次调用的进程组，同一个 Agent 和其他 Agent 的其他调用照常运行。
+- 网关停止一次调用，只杀掉这次调用的进程组，同一个 Agent 和其他 Agent 的其他调用照常运行；停止 `visit` 调用时，同一 Agent 的 `home` 调用也不受影响。
 - POSIX 命令已经返回、后台进程还占着输出时收到停止，后台进程也被杀掉。Windows 只保证 shell 仍存活时可发现的进程树，父进程退出后的未知状态须从结果中看得出来。
 - 通过真实网关：调用方中止调用后，node 上这次调用的进程组消失，调用方得到"已停止"；另一个 Agent 的并发调用不受影响，拿到自己的结果。
 - 三个平台都证明 node 正常关闭时清理仍在运行的命令。POSIX 还检查命令已经返回的后台进程组；Windows 不把硬杀 node 的 SIGTERM 当作正常关闭，CLI 停止服务的树清理由真实计划任务冒烟另行证明。
@@ -382,17 +380,17 @@
 - key 跨重启保存，列出时只显示末四位。
 - 查看对话记录时，能实时看到流式输出和工具调用；查看不会改变 Agent 的任何状态。
 - 能按名字查看工作助手的对话；没有这个助手、或 Agent 没有打开时拒绝。
-- 浏览工作区在 Agent 自己的 node 上进行，返回 node 的结果，别的 node 不被询问；暂停的 Agent 也能浏览，浏览不改变它的状态。node 拒绝的路径（比如逃出工作目录的）以 node 给的原因拒绝；node 离线时以 `node-offline` 拒绝；不存在的 Agent 和不合法的路径在询问 node 之前被拒绝。路径限定在工作目录里由 node 保证，在 8.4 测。
+- 浏览工作区在 Agent 的主 node 上进行，返回 node 的结果，别的 node 不被询问；暂停的 Agent 也能浏览，浏览不改变它的状态。node 拒绝的路径（比如逃出工作目录的）以 node 给的原因拒绝；node 离线时以 `node-offline` 拒绝；不存在的 Agent 和不合法的路径在询问 node 之前被拒绝。路径限定在工作目录里由 node 保证，在 8.4 测。
 - 配对 node：生成的令牌只能用一次。
 - 管理员改 node 名字，成功和三种拒绝都遵守网关规则。Agent 列表的 `nodeName` 每次从网关读取，改名后立即变化，Agent 的 node ID 不变。
 - 创建 Agent 时不合法的名字或 handle 以 `invalid-input` 拒绝，handle 被占用以聊天 app 的 `handle-taken` 拒绝（不是创建中途失败），已存在的 ID 以 `agent-exists` 拒绝；都什么都不创建。暂停、恢复、改设置排在删除之后得到 `unknown-agent`；观察或查助手时 Agent 被暂停，得到 `agent-closed`。
-- 创建 Agent 时 node 必须已经配对，否则拒绝，聊天账号和文件都不会出现；工作目录建在所选 node 上，Agent 的命令在那里执行，控制面重启后仍然在那里。
+- 创建 Agent 时 node 必须已经配对，否则拒绝，聊天账号和文件都不会出现；工作目录建在所选主 node 上，缺省工具调用在那里执行，控制面重启后主 node 不变。
 - 暂停 Agent 时，node 上进行中的命令经真实网关被停止；恢复后模型得知这次调用没有完成，命令不重跑。
 - 列出 Agent 时，显示名和 handle 来自聊天账号，node、状态、设置和用量来自 Agent 文件；一个 Agent 的文件读不出来时，它以"读不出"和原因列出，可以删除，其他 Agent 照常列出。
 
 - 新 Agent 只有主 node 可用；未知和未授权名字同样拒绝并列可访问名字，不向 node 发调用。授权后以 visit 转发，缺省目标和显式主 node 名字均以 home 转发；node_list 每次现读，授权按 ID 跨改名保留。
 - 授权、收回幂等；主 node invalid-input，未知 Agent/node 分别拒绝；暂停的 Agent 也能授权，agents 显示当前授权名字。收回后新调用拒绝，已发出的前台和后台调用仍完成；目标离线错误标出名字，主 node 离线不阻止其他 node。
-- 删除与授权串行，删除后不再允许新增授权；控制库写锁造成删除收尾失败后，重复删除完成清理，已删除 ID 不能复用。
+- Agent 的全部管理写操作按到达顺序串行。授权进行中排入删除，再排入暂停、恢复和改设置，后面三项都得到 `unknown-agent`，不会越过删除。创建已知 Agent ID 后立即授权、暂停，后续操作等创建完成再执行。删除后不再允许新增授权；控制库写锁造成删除收尾失败后，重复删除完成清理，已删除 ID 不能复用。
 - 用已发布版本公开 API 创建并暂停的真实 Agent 夹具验证 admin 迁移：凭据不变，初始无额外授权，原 Agent 仍只用主 node，新增授权跨重开保留。
 
 ## 11. Web 外壳
@@ -473,8 +471,9 @@
 6. 管理员暂停一个正在运行的 Agent，再恢复：暂停期间模型没有被调用，恢复后 Agent 处理积压的通知。
 7. 两个 Agent 在私信里协作：A 派一个任务给 B，B 认领并完成，A 收到通知。
 8. Agent 派生一个工作助手执行命令，助手完成后汇报，Agent 把结果发到频道。
+9. Agent 访问第二个 node：管理员授权前被拒绝，授权后同一命令读取第二个 node 主目录里的标记文件，收回后再次被拒绝；第二个 node 没有该 Agent 的工作区。
 
-**实现。** 八个场景在 `tests/system/test/`（pnpm 包 `@mate/system-tests`，根 `vitest` 的 include 里有 `tests/*/test`）：场景 1 到 3 在 `chat.test.ts`，4 到 6 在 `recovery.test.ts`，7 和 8 在 `agents.test.ts`，进程夹具在 `support.ts` 的 `startSystem()`。每个场景一个测试，名字以场景号开头。
+**实现。** 九个场景在 `tests/system/test/`（pnpm 包 `@mate/system-tests`，根 `vitest` 的 include 里有 `tests/*/test`）：场景 1 到 3 在 `chat.test.ts`，4 到 6 在 `recovery.test.ts`，7 和 8 在 `agents.test.ts`，9 在 `node-visits.test.ts`，进程夹具在 `support.ts` 的 `startSystem()`。每个场景一个测试，名字以场景号开头。
 
 - 控制面用 `node --conditions=mate-source apps/control-plane/src/main.ts` 启动，环境变量同部署；node 用 `mate node run`，HOME 是临时目录，配置里的配对令牌来自管理员经 HTTP 生成的令牌。模型提供商的凭据由管理员经 HTTP 保存，`baseUrl` 指向这个进程里的脚本化提供商。管理员用 `HumanBrowser`（`@mate/testkit`，控制面测试共用）。
 - 不用 sleep。等待的都是可观察的状态：长命令在 Agent 的工作区里写 `started`，测试看到它才继续，要它结束时写 `release`；其余是轮询 HTTP（node 在线、频道里出现某条消息）。要卡在某个时刻的事（场景 3 里管理员在 Agent 读完之后、发言之前写）放在脚本化提供商的步骤里做：步骤收到请求时，先让测试发 HTTP，再给出回答。
@@ -482,10 +481,9 @@
 - 场景 5：node 经网络代理连到控制面，用 `disconnect` 模式断开（`blackhole` 要等 30 秒的心跳超时，且走的是同一条"连接丢失"路径）；断开时命令在网关的在途调用上以"结果未知"结束，node 停掉命令的进程组，恢复后 node 重连，新命令正常执行。
 - 场景 6：暂停后命令的进程消失；"暂停期间模型没有被调用"由恢复后的那一步断言（恢复请求发出之前它不能被请求到），脚本外的请求本来就会让 `assertComplete()` 失败。
 - 场景 7 和 8 用多条 lane 区分 Agent 与工作助手，用 promise 门控让"先发生"的事真的先发生（B 在 A 建好任务之后才读；助手在主对话收到派生结果之后才干活）。
-- 不依赖 Linux 的行为，macOS 和 `pnpm test:linux` 都跑；一个场景起一套进程，整组约 5 秒。
+- 场景 9 用 `addNode()` 启动第二个真实 node，两个 node 各有独立的主目录、工作区根和身份。授权和收回通过 HTTP 发出，三次相同工具调用由脚本化模型驱动。
+- 不依赖 Linux 的行为，macOS 和 `pnpm test:linux` 都跑；每个场景在独立临时目录里起一套进程。
 - 变异检查（临时改接线，确认场景失败，已还原）：把 `bash` 改成可重做，场景 4 失败；把聊天发送的 `freshness` 改成 `false`，场景 3 失败；把连接断开的结果从"未知"改成"离线"，场景 5 失败。
-
-场景 9：起两个有独立主目录和身份的真实 node，Agent 属于第一个。脚本化模型在 HTTP 授权前访问第二个被拒绝；授权后同一 bash 读取第二个主目录里的标记文件；HTTP 收回后同一调用再次被拒绝。第二个 node 上没有该 Agent 工作区。
 
 ## 13. 部署冒烟
 

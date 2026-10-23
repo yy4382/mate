@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { AccountNames, type ChatApp } from "@mate/chat";
 import { systemClock, type Clock } from "@mate/clock";
@@ -128,7 +129,7 @@ export class Admin {
   readonly #store: AdminStore;
   readonly #manager: AgentManager;
   readonly #clock: Clock;
-  readonly #nodeGrantWrites = new Map<string, Promise<void>>();
+  readonly #agentWrites = new Map<string, Promise<void>>();
 
   constructor(options: AdminOptions, store: AdminStore, manager: AgentManager) {
     this.#chat = options.chat;
@@ -184,36 +185,48 @@ export class Admin {
    * and a handle in use with `handle-taken`: nothing exists yet, so these are plain refusals, not a create to finish.
    */
   async createAgent(input: z.input<typeof CreateAgentInput>): Promise<string> {
-    const { agentId, nodeId, displayName, handle, settings } = parseInput(CreateAgentInput, input);
-    if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId))
-      throw new AdminError("unknown-node", `no paired node ${nodeId}`);
-    try {
-      return await this.#manager.create({
-        nodeId,
-        displayName,
-        handle,
-        settings: this.#settings(settings),
-        ...(agentId === undefined ? {} : { agentId }),
-      });
-    } catch (error) {
-      if (error instanceof AgentIdInUse) throw new AdminError("agent-exists", error.message);
-      throw error;
-    }
+    const {
+      agentId = randomUUID(),
+      nodeId,
+      displayName,
+      handle,
+      settings,
+    } = parseInput(CreateAgentInput, input);
+    return this.#serialAgentWrite(agentId, async () => {
+      if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId))
+        throw new AdminError("unknown-node", `no paired node ${nodeId}`);
+      try {
+        return await this.#manager.create({
+          agentId,
+          nodeId,
+          displayName,
+          handle,
+          settings: this.#settings(settings),
+        });
+      } catch (error) {
+        if (error instanceof AgentIdInUse) throw new AdminError("agent-exists", error.message);
+        throw error;
+      }
+    });
   }
 
   /** Close the Agent, aborting its work, and keep it closed until it is resumed, across restarts too. */
   async pauseAgent(agentId: string): Promise<void> {
-    await this.#existing(agentId, (id) => this.#manager.pause(id));
+    await this.#serialAgentWrite(agentId, () =>
+      this.#existing(agentId, (id) => this.#manager.pause(id)),
+    );
   }
 
   /** Open a paused or closed Agent; it continues where it stopped. */
   async resumeAgent(agentId: string): Promise<void> {
-    await this.#existing(agentId, (id) => this.#manager.resume(id));
+    await this.#serialAgentWrite(agentId, () =>
+      this.#existing(agentId, (id) => this.#manager.resume(id)),
+    );
   }
 
   /** Close the Agent, deactivate its chat account, delete its file and grants. A partial delete can be repeated. */
   async deleteAgent(agentId: string): Promise<void> {
-    await this.#serialNodeGrantWrite(agentId, async () => {
+    await this.#serialAgentWrite(agentId, async () => {
       const exists =
         isAgentId(agentId) && this.#manager.list().some((agent) => agent.agentId === agentId);
       if (!exists) {
@@ -246,8 +259,10 @@ export class Admin {
    * model request. Only a provider with a key, a model in its catalog, and a thinking level that model accepts.
    */
   async configureAgent(agentId: string, input: z.input<typeof SettingsInput>): Promise<void> {
-    await this.#existing(agentId, (id) =>
-      this.#manager.configure(id, this.#settings(parseInput(SettingsInput, input))),
+    await this.#serialAgentWrite(agentId, () =>
+      this.#existing(agentId, (id) =>
+        this.#manager.configure(id, this.#settings(parseInput(SettingsInput, input))),
+      ),
     );
   }
 
@@ -351,13 +366,13 @@ export class Admin {
 
   /** Close every Agent, then the admin module's own connection to the control store. */
   async close(): Promise<void> {
-    await Promise.all(this.#nodeGrantWrites.values());
+    await Promise.all(this.#agentWrites.values());
     await this.#manager.close();
     this.#store.close();
   }
 
   async #changeNodeGrant(agentId: string, nodeId: string, change: () => void): Promise<void> {
-    await this.#serialNodeGrantWrite(agentId, () =>
+    await this.#serialAgentWrite(agentId, () =>
       this.#existing(agentId, async (id) => {
         const { nodeId: homeNodeId } = await this.#manager.describe(id);
         if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId))
@@ -369,17 +384,15 @@ export class Admin {
     );
   }
 
-  #serialNodeGrantWrite(agentId: string, work: () => Promise<void>): Promise<void> {
-    const previous = this.#nodeGrantWrites.get(agentId);
-    // Start an idle queue now so a delete reaches the Manager before later lifecycle calls.
-    const result = previous === undefined ? work() : previous.then(work);
+  #serialAgentWrite<T>(agentId: string, work: () => Promise<T>): Promise<T> {
+    const result = (this.#agentWrites.get(agentId) ?? Promise.resolve()).then(work);
     const tail = result.then(
       () => undefined,
       () => undefined,
     );
-    this.#nodeGrantWrites.set(agentId, tail);
+    this.#agentWrites.set(agentId, tail);
     void tail.then(() => {
-      if (this.#nodeGrantWrites.get(agentId) === tail) this.#nodeGrantWrites.delete(agentId);
+      if (this.#agentWrites.get(agentId) === tail) this.#agentWrites.delete(agentId);
     });
     return result;
   }

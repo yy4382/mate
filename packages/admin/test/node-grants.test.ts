@@ -305,6 +305,49 @@ describe("managing node grants", () => {
     env.provider.assertComplete();
   });
 
+  it("keeps lifecycle writes behind a delete that is waiting for an earlier grant", async () => {
+    const { admin, laptop, agentId } = await setup();
+    const granting = admin.grantNode(agentId, laptop.nodeId);
+    const deleting = admin.deleteAgent(agentId);
+    const later = [
+      admin.pauseAgent(agentId),
+      admin.resumeAgent(agentId),
+      admin.configureAgent(agentId, settings),
+    ].map((operation) => operation.catch((error: unknown) => error));
+
+    await granting;
+    await deleting;
+
+    for (const result of await Promise.all(later))
+      expect(result).toMatchObject({ name: "AdminError", reason: "unknown-agent" });
+    expect(await admin.agents()).toEqual([]);
+  });
+
+  it("finishes creating an Agent before later management writes on its ID", async () => {
+    const { admin, home, laptop } = await setup();
+    const agentId = randomUUID();
+    const results = await Promise.all([
+      admin.createAgent({
+        agentId,
+        nodeId: home.nodeId,
+        displayName: "Ada",
+        handle: "ada",
+        settings,
+      }),
+      admin.grantNode(agentId, laptop.nodeId),
+      admin.pauseAgent(agentId),
+    ]);
+
+    expect(results).toEqual([agentId, undefined, undefined]);
+    expect(await admin.agents()).toContainEqual(
+      expect.objectContaining({
+        agentId,
+        state: "paused",
+        grantedNodes: [{ nodeId: laptop.nodeId, name: "laptop" }],
+      }),
+    );
+  });
+
   it("finishes a delete on retry when the Agent disappeared before a control-store write failed", async () => {
     const { env, admin, home, laptop, agentId, account } = await setup();
     await admin.grantNode(agentId, laptop.nodeId);
