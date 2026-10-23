@@ -11,6 +11,8 @@ CONFIG=${MATE_DEPLOY_CONFIG:-/etc/mate-deploy.env}
 : "${MATE_PLANE_DIR:?} ${MATE_NODE_USER:?} ${MATE_IMAGE_REPO:?} ${MATE_HEALTH_URL:?}"
 STATE=${MATE_DEPLOY_STATE:-/var/lib/mate-deploy}
 KEEP=${MATE_KEEP_BACKUPS:-5}
+HEALTH_WAIT=${MATE_HEALTH_WAIT:-30}
+NODE_SETTLE=${MATE_NODE_SETTLE:-15}
 
 read -r -a request <<<"${SSH_ORIGINAL_COMMAND:-$*}"
 if [ "${#request[@]}" -ne 3 ] || [ "${request[0]}" != deploy ] ||
@@ -61,7 +63,7 @@ healthy() {
     [ "$(curl -s -o /dev/null -w '%{http_code}' "$MATE_HEALTH_URL/login")" = 200 ]
 }
 wait_healthy() {
-  for _ in $(seq 30); do
+  for _ in $(seq "$HEALTH_WAIT"); do
     healthy && return 0
     sleep 1
   done
@@ -126,7 +128,7 @@ wait_healthy || { compose logs --tail 50; false; }
 echo "== update and start node"
 update_node "$NEW_BUNDLE"
 mate_node start
-sleep 15
+sleep "$NODE_SETTLE"
 mate_node status | grep -x 'Service: active, enabled' >/dev/null || { mate_node logs --lines 50; false; }
 healthy
 trap - ERR

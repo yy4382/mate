@@ -221,14 +221,14 @@ mate node start
 
 ### 5.5 自动部署
 
-控制面和 node 在同一台机器上时，可以让 CI 在每次发版后自动升级：推送 `v*` 标签（标签要打在 main 上的提交上；它不重跑检查，而是等这个提交在 main 上的检查通过，没通过就不发版，重跑 main 上失败的检查后再重跑发版任务），镜像和发布包发布之后，`.github/workflows/ci.yml` 的 Deploy 任务用一把专用 SSH key 连到这台机器，执行 `deploy/auto-update/mate-deploy`，把 5.3 的步骤做一遍。没有预发环境，所以每次部署都先备份数据目录，失败就自动回退。
+控制面和 node 在同一台机器上时，可以让 CI 在每次发版后自动升级：推送 `v*` 标签（标签要打在 main 上的提交上；它不重跑检查，而是等这个提交在 main 上的 `checks` 通过，没通过就不发版；重跑 main 上失败的任务后再重跑发版任务），镜像和发布包发布之后，`.github/workflows/ci.yml` 的 Deploy 任务用一把专用 SSH key 连到这台机器，执行 `deploy/auto-update/mate-deploy`，把 5.3 的步骤做一遍。没有预发环境，所以每次部署都先备份数据目录，失败就自动回退。
 
 `mate-deploy` 以 root 运行，从 SSH 拿到 `deploy <版本> <sha256>`，从标准输入拿到这台机器架构的 node 发布包：
 
 1. 校验发布包，拉取 `MATE_IMAGE_REPO:<版本>` 镜像。已经是这个版本时什么都不做。
 2. 停 node，`docker compose down`，把数据目录复制到 `<控制面目录>/backups/before-<版本>-<时间>`。
 3. 改 `.env` 的 `MATE_IMAGE`，`docker compose up -d --wait`，确认 `/api/me` 回 401、`/login` 回 200。
-4. `mate node update` 新发布包，`mate node start`，15 秒后服务仍在运行，控制面仍然健康。
+4. `mate node update` 新发布包，`mate node start`，`MATE_NODE_SETTLE` 秒（默认 15）后服务仍在运行，控制面仍然健康。控制面有 `MATE_HEALTH_WAIT` 秒（默认 30）变健康。
 5. 保留最近 `MATE_KEEP_BACKUPS` 份备份，以及新旧两个版本的发布包（在 `/var/lib/mate-deploy/bundles/`）。每次部署的输出也追加到 `/var/lib/mate-deploy/deploy.log`；CI 中途断开时部署照常做完或回退，结果看这里。
 
 第 2 步之后任何一步失败，都回到原来的镜像，用刚才的备份替换数据目录，把 node 换回原来的发布包并启动，然后以失败退出，CI 里这次部署显示为失败。回退要用正在运行的那个版本的发布包，所以第一次启用前要把它放进 `/var/lib/mate-deploy/bundles/`（连同 `.sha256`），没有它时 `mate-deploy` 不动手。同一时间只有一次部署在跑。
