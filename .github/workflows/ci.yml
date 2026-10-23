@@ -44,6 +44,7 @@ jobs:
       # Ubuntu 24.04 forbids unprivileged user namespaces through AppArmor; the PID-reuse test needs one.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: pnpm test:linux
+      - run: sh deploy/auto-update/test.sh
 
   release:
     name: Image and node bundles

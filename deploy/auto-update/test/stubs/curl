@@ -1,0 +1,4 @@
+#!/bin/bash
+url=${*: -1}
+if [ ! -f /run/plane ] || grep -q bad /run/plane; then printf 000; exit 0; fi
+case "$url" in */api/me) printf 401 ;; */login) printf 200 ;; esac

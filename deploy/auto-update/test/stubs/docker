@@ -1,0 +1,13 @@
+#!/bin/bash
+# Stub docker: `compose up` "runs" the image in .env and lets it migrate data; versions containing "bad" never answer.
+set -e
+case "$1 $2" in
+  "pull --quiet") echo "pulled $3" ;;
+  "compose up")
+    image=$(sed -n 's/^MATE_IMAGE=//p' .env)
+    echo "$image" >/run/plane
+    echo "migrated by $image" >data/schema ;;
+  "compose down") rm -f /run/plane ;;
+  "compose logs") echo "(logs)" ;;
+  *) echo "unexpected docker $*" >&2; exit 1 ;;
+esac

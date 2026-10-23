@@ -229,7 +229,7 @@ mate node start
 2. 停 node，`docker compose down`，把数据目录复制到 `<控制面目录>/backups/before-<版本>-<时间>`。
 3. 改 `.env` 的 `MATE_IMAGE`，`docker compose up -d --wait`，确认 `/api/me` 回 401、`/login` 回 200。
 4. `mate node update` 新发布包，`mate node start`，15 秒后服务仍在运行，控制面仍然健康。
-5. 保留最近 `MATE_KEEP_BACKUPS` 份备份，以及新旧两个版本的发布包（在 `/var/lib/mate-deploy/bundles/`）。
+5. 保留最近 `MATE_KEEP_BACKUPS` 份备份，以及新旧两个版本的发布包（在 `/var/lib/mate-deploy/bundles/`）。每次部署的输出也追加到 `/var/lib/mate-deploy/deploy.log`；CI 中途断开时部署照常做完或回退，结果看这里。
 
 第 2 步之后任何一步失败，都回到原来的镜像，用刚才的备份替换数据目录，把 node 换回原来的发布包并启动，然后以失败退出，CI 里这次部署显示为失败。回退要用正在运行的那个版本的发布包，所以第一次启用前要把它放进 `/var/lib/mate-deploy/bundles/`（连同 `.sha256`），没有它时 `mate-deploy` 不动手。同一时间只有一次部署在跑。
 
