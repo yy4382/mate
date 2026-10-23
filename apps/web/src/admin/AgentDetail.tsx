@@ -96,7 +96,13 @@ export function AgentDetail({ agentId }: { agentId: string }) {
         <Breadcrumb name={name} />
         <PageHeader
           title={name}
-          leading={<Avatar name={name} size="lg" />}
+          leading={
+            <Avatar
+              name={name}
+              size="lg"
+              {...(agent.accountId === undefined ? {} : { agentAccount: agent.accountId })}
+            />
+          }
           badge={
             <>
               {agent.handle === undefined ? null : (

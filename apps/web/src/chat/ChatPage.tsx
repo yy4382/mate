@@ -26,7 +26,7 @@ import {
   buttonClass,
 } from "../shell/ui.tsx";
 import { keys } from "./cache.ts";
-import { accountName, conversationLabel, ownerOf, useAccounts, useConversations } from "./data.ts";
+import { avatarOf, conversationLabel, ownerOf, useAccounts, useConversations } from "./data.ts";
 import { Timeline } from "./Timeline.tsx";
 import type { ConversationView } from "./types.ts";
 
@@ -120,7 +120,7 @@ function Header({
         </Link>
         <span className="text-muted [&_svg]:size-5">
           {conversation.kind === "dm" ? (
-            <Avatar size="sm" name={accountName(accounts, otherId ?? 0)} />
+            <Avatar size="sm" {...avatarOf(accounts, otherId ?? 0)} />
           ) : conversation.kind === "private" ? (
             <Lock aria-hidden />
           ) : (

@@ -392,4 +392,22 @@ describe("conversations", () => {
     await message.getByText("已完成").waitFor();
     await page.getByText("Owner 完成了任务「Write the report」").waitFor();
   });
+
+  it("an Agent's messages carry its generated avatar, and the owner's carry an initial", async () => {
+    const site = await startSite();
+    const general = await site.owner.channel("general");
+    const agent = await site.agent("sam");
+    await site.owner.post(`/api/chat/conversations/${general}/invite`, {
+      requestId: "invite",
+      invitee: agent.accountId,
+    });
+    await site.owner.say(general, "from the owner");
+    await agent.say(general, "from the agent");
+    const { page } = await openApp(site, `/app/c/${general}`);
+    await messages(page, "from the agent").waitFor();
+    await expect
+      .poll(() => messages(page, "from the agent").locator("img").getAttribute("src"))
+      .toBe(`https://api.dicebear.com/10.x/thumbs/svg?seed=${agent.accountId}`);
+    expect(await messages(page, "from the owner").locator("img").count()).toBe(0);
+  });
 });

@@ -33,6 +33,7 @@ import {
 } from "../shell/ui.tsx";
 import {
   accountName,
+  avatarOf,
   loadOlder,
   ownerOf,
   useAccounts,
@@ -261,7 +262,7 @@ function MessageRow(props: {
           {clockLabel(entry.at)}
         </time>
       ) : (
-        <Avatar name={name} />
+        <Avatar {...avatarOf(accounts, entry.author)} />
       )}
       <div className="min-w-0">
         {props.grouped ? (
@@ -414,7 +415,7 @@ function ThreadRoot(props: { entry: MessageEntry; replies: number }) {
   return (
     <div className="pb-2">
       <div className="grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3 px-4 pt-3 pb-1 md:px-6">
-        <Avatar name={name} />
+        <Avatar {...avatarOf(accounts, entry.author)} />
         <div className="min-w-0">
           <div className="flex items-baseline gap-2 leading-6">
             <strong className="text-sm font-semibold">{name}</strong>

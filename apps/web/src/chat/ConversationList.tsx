@@ -17,7 +17,7 @@ import {
 } from "../shell/ui.tsx";
 import { keys } from "./cache.ts";
 import {
-  accountName,
+  avatarOf,
   conversationLabel,
   ownerOf,
   useAccounts,
@@ -36,7 +36,7 @@ function KindIcon({
   if (conversation.kind === "dm") {
     const ownerId = ownerOf(accounts)?.accountId;
     const otherId = conversation.members.find((id) => id !== ownerId);
-    return <Avatar size="xs" name={accountName(accounts, otherId ?? 0)} />;
+    return <Avatar size="xs" {...avatarOf(accounts, otherId ?? 0)} />;
   }
   return conversation.kind === "private" ? <Lock aria-hidden /> : <Hash aria-hidden />;
 }

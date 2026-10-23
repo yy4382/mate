@@ -243,13 +243,20 @@ export async function startSite(): Promise<Site> {
   return site;
 }
 
-/** A fresh browser context (no cookies) on `site`; closed when the test finishes. */
+/** A fresh browser context (no cookies) on `site`; closed when the test finishes. Avatar images from DiceBear are answered locally, unless screenshots are being taken (`MATE_SCREENS`). */
 export async function newPage(
   site: Site,
   viewport: { width: number; height: number } = { width: 1280, height: 800 },
 ): Promise<{ page: Page; context: BrowserContext }> {
   const context = await (await chromiumBrowser()).newContext({ viewport });
   onTestFinished(() => context.close());
+  if (process.env.MATE_SCREENS === undefined)
+    await context.route("https://api.dicebear.com/**", (route) =>
+      route.fulfill({
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>',
+      }),
+    );
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
   return { page, context };

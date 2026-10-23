@@ -216,17 +216,43 @@ const avatarSizes: Record<AvatarSize, string> = {
   lg: "size-10 text-base",
 };
 
-export function Avatar({ name, size = "md" }: { name: string; size?: AvatarSize }) {
+const avatarUrl = (account: number) => `https://api.dicebear.com/10.x/thumbs/svg?seed=${account}`;
+
+/** The owner shows the name's initial. An Agent (`agentAccount` is its chat account ID) shows its generated picture, and the initial if that fails to load. */
+export function Avatar({
+  name,
+  size = "md",
+  agentAccount,
+}: {
+  name: string;
+  size?: AvatarSize;
+  agentAccount?: number;
+}) {
+  const [failedUrl, setFailedUrl] = useState<string>();
+  const url = agentAccount === undefined ? undefined : avatarUrl(agentAccount);
   const initial = Array.from(name.trim())[0] ?? "?";
   return (
     <span
       aria-hidden
       className={cx(
-        "inline-grid shrink-0 place-items-center rounded-full border border-border bg-subtle font-medium uppercase text-muted",
+        "inline-grid shrink-0 place-items-center overflow-hidden rounded-full border border-border bg-subtle font-medium uppercase text-muted",
         avatarSizes[size],
       )}
     >
-      {initial}
+      {url === undefined || url === failedUrl ? (
+        initial
+      ) : (
+        <img
+          src={url}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          draggable={false}
+          className="size-full"
+          onError={() => setFailedUrl(url)}
+        />
+      )}
     </span>
   );
 }

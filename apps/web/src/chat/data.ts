@@ -103,6 +103,16 @@ export function accountName(accounts: readonly AccountView[], id: number): strin
   return account === undefined ? `#${id}` : account.displayName;
 }
 
+/** The owner gets an initial; every other account is an Agent, drawn from its account ID. */
+export function avatarOf(
+  accounts: readonly AccountView[],
+  id: number,
+): { name: string; agentAccount?: number } {
+  const account = accounts.find((a) => a.accountId === id);
+  const name = accountName(accounts, id);
+  return account === undefined || account.owner ? { name } : { name, agentAccount: id };
+}
+
 /** What a conversation is called: a channel's name, or the other person of a direct message. */
 export function conversationLabel(
   conversation: ConversationView,

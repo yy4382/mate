@@ -150,4 +150,16 @@ describe("Agents", () => {
     await dialog.getByRole("button", { name: "删除", exact: true }).click();
     await page.getByText("还没有 Agent。").waitFor();
   });
+
+  it("an Agent's avatar is generated from its chat account on the list and the detail page", async () => {
+    const site = await startSite();
+    const agent = await site.agent("sam");
+    const src = `https://api.dicebear.com/10.x/thumbs/svg?seed=${agent.accountId}`;
+    const { page } = await openApp(site, "/app/admin/agents");
+    await expect
+      .poll(() => page.locator('[data-agent="sam"]').locator("img").getAttribute("src"))
+      .toBe(src);
+    await page.locator('[data-agent="sam"]').getByRole("link", { name: "Sam" }).click();
+    await expect.poll(() => page.locator("main img").first().getAttribute("src")).toBe(src);
+  });
 });
