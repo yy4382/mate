@@ -12,12 +12,35 @@ on:
 permissions:
   contents: read
 
+# `pnpm check` is split across parallel jobs, because a runner has two cores and the suite is CPU-bound; together
+# they check what `pnpm check` and `pnpm test:linux` check, each test once. The `checks` job is the one result
+# that a release waits for.
 jobs:
-  check:
-    name: pnpm check
+  types:
+    name: format and types
     if: github.ref_type != 'tag'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm typecheck
+
+  test:
+    name: vitest
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,13 +60,17 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
       - run: pnpm --filter @mate/web exec playwright install chromium-headless-shell
-      - run: pnpm check
+      # The node and system suites run in the test-linux jobs, in the container they are written for.
+      - run: pnpm test --exclude 'apps/node/**' --exclude 'tests/system/**'
 
   test-linux:
-    name: pnpm test:linux
+    name: pnpm test:linux (${{ matrix.shard }}/2)
     if: github.ref_type != 'tag'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,8 +80,31 @@ jobs:
           run_install: false
       # Ubuntu 24.04 forbids unprivileged user namespaces through AppArmor; the PID-reuse test needs one.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: pnpm test:linux
+      - run: pnpm test:linux apps/node tests/system --shard=${{ matrix.shard }}/2
+
+  deploy-script:
+    name: mate-deploy
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: sh deploy/auto-update/test.sh
+
+  # Runs even when a check fails, so that it fails too instead of being skipped.
+  checks:
+    name: checks
+    if: github.ref_type != 'tag' && always()
+    needs: [types, test, test-linux, deploy-script]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do [ "$result" = success ] || exit 1; done
 
   release:
     name: Image and node bundles
@@ -74,15 +124,14 @@ jobs:
         run: |
           status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)
           case "$status" in identical | behind) ;; *) echo "$VERSION is not on main ($status)"; exit 1 ;; esac
-          # The latest run of each check decides, so a rerun that passes counts; this run's own skipped jobs do not.
+          # The latest `checks` run decides, so a rerun that passes counts; this tag run's own skipped one does not.
           for _ in $(seq 120); do
-            latest=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" --jq '
-              [.check_runs[] | select((.name == "pnpm check" or .name == "pnpm test:linux") and .conclusion != "skipped")]
-              | group_by(.name) | map(max_by(.started_at) | .conclusion // "pending") | join(",")')
+            latest=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?check_name=checks" --jq '
+              [.check_runs[] | select(.conclusion != "skipped")] | max_by(.started_at) | .conclusion // "pending"')
             echo "checks: $latest"
             case "$latest" in
-              success,success) exit 0 ;;
-              *failure* | *cancelled* | *timed_out*) echo "a check did not pass for $GITHUB_SHA"; exit 1 ;;
+              success) exit 0 ;;
+              failure | cancelled | timed_out) echo "the checks did not pass for $GITHUB_SHA"; exit 1 ;;
             esac
             sleep 10
           done

@@ -472,7 +472,7 @@
 
 ### 13.1 自动部署
 
-**边界：** `deploy/auto-update/mate-deploy`（DEPLOYMENT 5.5），从它的命令行和标准输入驱动，只看部署后机器上的状态：`.env` 里的镜像、node 装的版本、数据目录的内容、node 服务是否在运行、备份和留下的发布包。`deploy/auto-update/test.sh` 在干净的 x86_64 Debian 13 容器里以 root 跑，CI 的 `pnpm test:linux` 任务里也跑。
+**边界：** `deploy/auto-update/mate-deploy`（DEPLOYMENT 5.5），从它的命令行和标准输入驱动，只看部署后机器上的状态：`.env` 里的镜像、node 装的版本、数据目录的内容、node 服务是否在运行、备份和留下的发布包。`deploy/auto-update/test.sh` 在干净的 x86_64 Debian 13 容器里以 root 跑，CI 里是单独的 `mate-deploy` 任务。等待健康和 node 稳定的秒数（`MATE_HEALTH_WAIT`、`MATE_NODE_SETTLE`）在测试里调到 1 到 2 秒。
 
 **替身：** `docker`、`curl` 和 `mate node` 是把"正在运行的版本"记在文件里的替身：`compose up` 起 `.env` 里的镜像并改写数据目录（像一次迁移），版本名带 `bad` 的控制面永远不健康，带 `nostart` 的 node 启动后不保持运行。`runuser`、`flock` 和文件操作都是真的。
 

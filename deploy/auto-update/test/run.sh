@@ -20,6 +20,8 @@ MATE_NODE_USER=mate
 MATE_IMAGE_REPO=repo/plane
 MATE_HEALTH_URL=http://127.0.0.1:1
 MATE_KEEP_BACKUPS=2
+MATE_HEALTH_WAIT=2
+MATE_NODE_SETTLE=1
 EOF
 mkdir -p /var/lib/mate-deploy/bundles
 fails=0
