@@ -4,6 +4,7 @@ import {
   type GatewayError,
   type GatewayMessage,
   type JsonValue,
+  type NodeAccess,
   type NodeBrowseOutcome,
   type ToolName,
   type ToolResult,
@@ -141,6 +142,7 @@ export class FakeGateway {
     tool: ToolName,
     args: Record<string, JsonValue>,
     onOutput: (chunk: string) => void = () => {},
+    access: NodeAccess = "home",
   ): Promise<ToolResult> {
     return new Promise((resolve, reject) => {
       this.#pendingToolCalls.set(requestId, { resolve, reject, onOutput });
@@ -148,6 +150,7 @@ export class FakeGateway {
         type: "gateway.run.tool",
         requestId,
         agentId,
+        access,
         tool,
         arguments: args,
       });

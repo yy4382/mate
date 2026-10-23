@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { onTestFinished } from "vitest";
-import type { JsonValue, ToolName, ToolResult } from "@mate/node-protocol";
+import type { JsonValue, NodeAccess, ToolName, ToolResult } from "@mate/node-protocol";
 import { FakeGateway } from "@mate/testkit";
 
 const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
@@ -27,6 +27,7 @@ export type NodeProcess = {
   /** The gateway the helpers below talk through; a test may swap it for one that replaced it. */
   gateway: FakeGateway;
   child: ChildProcess;
+  home: string;
   workspacesRoot: string;
   /** Resolves with how the node process ended. */
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
@@ -39,12 +40,13 @@ export type NodeProcess = {
     tool: ToolName,
     args: Record<string, JsonValue>,
     onOutput?: (chunk: string) => void,
+    access?: NodeAccess,
   ): Promise<ToolResult>;
 };
 
 export type StartOptions = {
   gateway?: FakeGateway;
-  env?: Record<string, string>;
+  env?: NodeJS.ProcessEnv;
   pairingToken?: string;
   /** Wraps the node's command line, for a test that must start it inside something else. */
   launch?: (argv: string[]) => string[];
@@ -95,6 +97,7 @@ export async function startNodeProcess(options: StartOptions = {}): Promise<Node
   const node: NodeProcess = {
     gateway,
     child,
+    home,
     workspacesRoot,
     exited,
     stderr: () => stderr,
@@ -105,8 +108,8 @@ export async function startNodeProcess(options: StartOptions = {}): Promise<Node
       if (prepared.isError) throw new Error(prepared.content[0]?.text);
       return { agentId, workspace: join(workspacesRoot, agentId) };
     },
-    run: (agentId, tool, args, onOutput) =>
-      node.gateway.runTool(randomUUID(), agentId, tool, args, onOutput),
+    run: (agentId, tool, args, onOutput, access) =>
+      node.gateway.runTool(randomUUID(), agentId, tool, args, onOutput, access),
   };
   return node;
 }
@@ -162,10 +165,7 @@ export function nodeConfigDirectory(home: string): string {
   return windows ? join(home, "AppData", "Local", "Mate", "config") : join(home, ".config", "mate");
 }
 
-export function nodeEnvironment(
-  home: string,
-  extra: Record<string, string> = {},
-): NodeJS.ProcessEnv {
+export function nodeEnvironment(home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = { ...process.env };
   const values = {
     HOME: home,

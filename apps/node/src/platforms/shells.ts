@@ -42,10 +42,16 @@ export const windowsCommands = {
       `$mateCommand = '${marker}'`,
       "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)",
       "$OutputEncoding = [Console]::OutputEncoding",
-      "Set-Variable -Name HOME -Value $env:HOME -Force",
-    ].join("; ");
+    ];
+    if (
+      Object.entries(request.env).some(
+        ([key, value]) => key.toUpperCase() === "HOME" && value !== undefined,
+      )
+    ) {
+      prefix.push("Set-Variable -Name HOME -Value $env:HOME -Force");
+    }
     const quotedCommand = request.command.replace(/['\u2018-\u201b]/g, "$&$&");
-    const invocation = `${prefix}\n& ([ScriptBlock]::Create('${quotedCommand}'))`;
+    const invocation = `${prefix.join("; ")}\n& ([ScriptBlock]::Create('${quotedCommand}'))`;
     const child = spawn(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-Command", invocation],

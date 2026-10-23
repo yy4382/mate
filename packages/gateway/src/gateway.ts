@@ -6,6 +6,7 @@ import {
   type GatewayPrepareWorkspace,
   type GatewayRunTool,
   type JsonValue,
+  type NodeAccess,
   type NodeSystem,
   type ToolName,
   type ToolResult,
@@ -48,6 +49,7 @@ export interface NodeGatewayOptions {
 export interface RunToolRequest {
   tool: ToolName;
   arguments: Record<string, JsonValue>;
+  access: NodeAccess;
 }
 
 export interface NodeGateway {
@@ -136,12 +138,13 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
   }
 
   return {
-    async runTool(nodeId, agentId, { tool, arguments: args }, onOutput, signal) {
+    async runTool(nodeId, agentId, { tool, arguments: args, access }, onOutput, signal) {
       // Checked before anything is registered, so a call that cannot be sent leaves nothing behind.
       const message = GatewayRunToolSchema.parse({
         type: "gateway.run.tool",
         requestId: randomUUID(),
         agentId,
+        access,
         tool,
         arguments: args,
       });

@@ -2,11 +2,15 @@ import type { ScriptedRequest } from "@mate/testkit";
 import { describe, expect, it } from "vitest";
 import { testAgent, text } from "./support.ts";
 
-const bash = (command: string, options: { background?: boolean; timeout?: number } = {}) => ({
+const bash = (
+  command: string,
+  options: { background?: boolean; timeout?: number; node?: string } = {},
+) => ({
   name: "bash",
   arguments: { command, ...options },
 });
-const background = (command: string) => bash(command, { background: true });
+const background = (command: string, node?: string) =>
+  bash(command, { background: true, ...(node === undefined ? {} : { node }) });
 const bashStop = (id: number) => ({ name: "bash_stop", arguments: { id } });
 
 /** The command ID in the output of the `bash` call `callId`, which started a background command. */
@@ -90,6 +94,52 @@ describe("background commands", () => {
     agent.provider.assertComplete();
   });
 
+  it.each([false, true])(
+    "forwards a background command's node and names it in the result when isError is %s",
+    async (isError) => {
+      const agent = await testAgent();
+      const finished = Promise.withResolvers<void>();
+      let started: string[] = [];
+      let id = 0;
+      agent.provider
+        .step("starts the build on the laptop", (request) => {
+          started = request.call([background("make", "laptop")]);
+        })
+        .step("acknowledges", (request) => {
+          id = commandId(request, started[0]);
+          request.text("started");
+        })
+        .step("reads the result", (request) => {
+          const report = request
+            .userTexts()
+            .find((value) => value.startsWith(`[background command ${id} `));
+          expect(reports(request, id)).toBe(1);
+          expect(report?.split("\n")[0]).toBe(
+            `[background command ${id} ${isError ? "failed" : "finished"} on node laptop] make`,
+          );
+          expect(report).toContain("build output");
+          request.text("read the build result");
+          finished.resolve();
+        });
+      const { runtime } = await agent.open();
+
+      await (await runtime.submit("build it on the laptop", { requestId: "m1" })).settled();
+      const build = await agent.workspace.nextCall();
+      expect(build.request).toEqual({
+        tool: "bash",
+        arguments: { command: "make", background: true },
+        node: "laptop",
+      });
+      build.resolve(text("build output", isError));
+      await finished.promise;
+      await runtime.idle();
+
+      expect(await runtime.withdraw(`command:${id}`)).toBe("settled");
+      expect(agent.workspace.calls).toHaveLength(1);
+      agent.provider.assertComplete();
+    },
+  );
+
   it("reports the result once when the process dies while the model reads it", async () => {
     const agent = await testAgent();
     const first = await agent.open();
@@ -172,76 +222,104 @@ describe("background commands", () => {
     agent.provider.assertComplete();
   });
 
-  it("stops a running command on close, and the reopened runtime reports it interrupted once without rerunning it", async () => {
-    const agent = await testAgent();
-    let started: string[] = [];
-    let id = 0;
-    agent.provider
-      .step("starts the server", (request) => {
-        started = request.call([background("serve")]);
-      })
-      .step("acknowledges", (request) => {
-        id = commandId(request, started[0]);
-        request.text("serving");
+  it.each([undefined, "laptop"])(
+    "stops a command on node %s on close and reports it interrupted once after reopening without rerunning it",
+    async (node) => {
+      const agent = await testAgent();
+      let started: string[] = [];
+      let id = 0;
+      agent.provider
+        .step("starts the server", (request) => {
+          started = request.call([background("serve", node)]);
+        })
+        .step("acknowledges", (request) => {
+          id = commandId(request, started[0]);
+          request.text("serving");
+        });
+      const first = await agent.open();
+      await (await first.runtime.submit("serve it", { requestId: "m1" })).settled();
+      const serve = await agent.workspace.nextCall();
+      expect(serve.request).toEqual({
+        tool: "bash",
+        arguments: { command: "serve", background: true },
+        ...(node === undefined ? {} : { node }),
       });
-    const first = await agent.open();
-    await (await first.runtime.submit("serve it", { requestId: "m1" })).settled();
-    const serve = await agent.workspace.nextCall();
+      if (node === undefined) expect(serve.request).not.toHaveProperty("node");
 
-    await first.runtime.close();
-    expect(serve.signal.aborted, "closing stopped the node call").toBe(true);
+      await first.runtime.close();
+      expect(serve.signal.aborted, "closing stopped the node call").toBe(true);
+      agent.workspace.setNodes([
+        { name: "renamed-laptop", online: true, platform: "darwin", home: false },
+      ]);
 
-    const finished = Promise.withResolvers<void>();
-    agent.provider.step("reads the interruption", (request) => {
-      expect(reports(request, id), "one report").toBe(1);
-      expect(request.userTexts().join("\n")).toContain(`[background command ${id} interrupted]`);
-      request.text("the server stopped");
-      finished.resolve();
-    });
-    const second = await agent.open();
-    await finished.promise;
-    await second.runtime.idle();
-    await second.runtime.close();
-
-    const third = await agent.open();
-    await third.runtime.idle();
-    expect(agent.workspace.calls, "the server was not restarted").toHaveLength(1);
-    agent.provider.assertComplete();
-  });
-
-  it("stops a background command with bash_stop: the node call is aborted and no result is reported", async () => {
-    const agent = await testAgent();
-    let started: string[] = [];
-    let stops: string[] = [];
-    let serve: Awaited<ReturnType<typeof agent.workspace.nextCall>> | undefined;
-    let id = 0;
-    agent.provider
-      .step("starts the server", (request) => {
-        started = request.call([background("serve")]);
-      })
-      .step("stops it", async (request) => {
-        id = commandId(request, started[0]);
-        serve = await agent.workspace.nextCall();
-        stops = request.call([bashStop(id), bashStop(id)]);
-      })
-      .step("continues", (request) => {
-        expect(request.toolOutput(stops[0] ?? "")).toBe(`Stopped background command ${id}.`);
-        expect(request.toolOutput(stops[1] ?? ""), "stopping again changes nothing").toBe(
-          `Stopped background command ${id}.`,
+      const finished = Promise.withResolvers<void>();
+      agent.provider.step("reads the interruption", (request) => {
+        expect(reports(request, id), "one report").toBe(1);
+        const report = request
+          .userTexts()
+          .find((value) => value.startsWith(`[background command ${id} `));
+        expect(report?.split("\n")[0]).toBe(
+          node === undefined
+            ? `[background command ${id} interrupted] serve`
+            : `[background command ${id} interrupted on node laptop] serve`,
         );
-        request.text("stopped the server");
+        request.text("the server stopped");
+        finished.resolve();
       });
-    const { runtime } = await agent.open();
+      const second = await agent.open();
+      await finished.promise;
+      await second.runtime.idle();
+      await second.runtime.close();
 
-    await (await runtime.submit("start and stop a server", { requestId: "m1" })).settled();
-    expect(serve?.signal.aborted, "the node call was stopped").toBe(true);
-    serve?.resolve(text("late output"));
-    await runtime.idle();
+      const third = await agent.open();
+      await third.runtime.idle();
+      expect(agent.workspace.calls, "the server was not restarted").toHaveLength(1);
+      agent.provider.assertComplete();
+    },
+  );
 
-    expect(await runtime.withdraw(`command:${id}`), "no result was reported").toBe("not_found");
-    expect(agent.workspace.calls).toHaveLength(1);
-    agent.provider.assertComplete();
-  });
+  it.each([undefined, "laptop"])(
+    "stops a background command on node %s through its original signal without reporting a result",
+    async (node) => {
+      const agent = await testAgent();
+      let started: string[] = [];
+      let stops: string[] = [];
+      let serve: Awaited<ReturnType<typeof agent.workspace.nextCall>> | undefined;
+      let id = 0;
+      agent.provider
+        .step("starts the server", (request) => {
+          started = request.call([background("serve", node)]);
+        })
+        .step("stops it", async (request) => {
+          id = commandId(request, started[0]);
+          serve = await agent.workspace.nextCall();
+          expect(serve.request).toEqual({
+            tool: "bash",
+            arguments: { command: "serve", background: true },
+            ...(node === undefined ? {} : { node }),
+          });
+          agent.workspace.setNodes([]);
+          stops = request.call([bashStop(id), bashStop(id)]);
+        })
+        .step("continues", (request) => {
+          expect(request.toolOutput(stops[0] ?? "")).toBe(`Stopped background command ${id}.`);
+          expect(request.toolOutput(stops[1] ?? ""), "stopping again changes nothing").toBe(
+            `Stopped background command ${id}.`,
+          );
+          request.text("stopped the server");
+        });
+      const { runtime } = await agent.open();
+
+      await (await runtime.submit("start and stop a server", { requestId: "m1" })).settled();
+      expect(serve?.signal.aborted, "the node call was stopped").toBe(true);
+      serve?.resolve(text("late output"));
+      await runtime.idle();
+
+      expect(await runtime.withdraw(`command:${id}`), "no result was reported").toBe("not_found");
+      expect(agent.workspace.calls).toHaveLength(1);
+      agent.provider.assertComplete();
+    },
+  );
 
   it("answers bash_stop for a command that already ended, or that it does not know, without stopping anything", async () => {
     const agent = await testAgent();

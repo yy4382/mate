@@ -32,6 +32,16 @@ it.runIf(out !== undefined)(
         version: "v0.1.0-alpha.3",
       },
     });
+    await site.owner.put(`/api/admin/agents/${ada.agentId}/nodes/${nodeId}`);
+    await site.pairNode({
+      system: {
+        platform: "darwin",
+        arch: "arm64",
+        hostname: "laptop",
+        osRelease: "25.0.0",
+        version: "v0.1.0-alpha.3",
+      },
+    });
     await site.owner.post(`/api/chat/conversations/${general}/invite`, {
       requestId: randomUUID(),
       invitee: ada.accountId,
@@ -80,6 +90,11 @@ it.runIf(out !== undefined)(
         await page.goto(site.origin + path);
         await page.waitForTimeout(600);
         await page.screenshot({ path: join(dir, `${view.name}-${name}.png`) });
+        if (name === "agent") {
+          const access = page.getByRole("region", { name: "Node 访问" });
+          await access.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: join(dir, `${view.name}-node-access.png`) });
+        }
       }
       await page.goto(`${site.origin}/app/admin/nodes`);
       await page.locator(`[data-node="${nodeId}"]`).getByRole("button", { name: "改名" }).click();

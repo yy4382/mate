@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Clock } from "@mate/clock";
 import {
@@ -12,7 +13,7 @@ import { browseWorkspace } from "./browse.ts";
 import { Commands } from "./commands.ts";
 import { runFileTool } from "./files.ts";
 
-/** Executes tools in Agent workspaces and retains command handles for stopping and shutdown. */
+/** Executes tools and retains command handles for stopping and shutdown. */
 export class Executor {
   readonly #root: string;
   readonly #commands: Commands;
@@ -28,22 +29,33 @@ export class Executor {
     onOutput: (chunk: string) => void,
     signal: AbortSignal,
   ): Promise<ToolResult> {
-    const workspace = join(this.#root, call.agentId);
+    const home = call.access === "home";
+    const directory = home ? join(this.#root, call.agentId) : homedir();
     // The only check before executing (ARCHITECTURE 4.5 rule 4). The node never recreates a missing workspace: its
     // path is the Agent's, made only by preparing it.
-    if (!isDirectory(workspace)) {
+    if (home && !isDirectory(directory)) {
       return failure(
-        `The workspace ${workspace} does not exist. The node does not recreate it; prepare the workspace again.`,
+        `The workspace ${directory} does not exist. The node does not recreate it; prepare the workspace again.`,
       );
     }
-    if (call.tool !== "bash") return runFileTool(call.tool, call.arguments, workspace, signal);
+    if (call.tool !== "bash") return runFileTool(call.tool, call.arguments, directory, signal);
     const args = parseBashArguments(call.arguments);
     if (!args.ok) return failure(args.error);
+    const env = { ...process.env };
+    if (process.platform === "win32") {
+      for (const key of Object.keys(env)) {
+        if (key.toUpperCase() === "PWD" || (home && key.toUpperCase() === "HOME")) {
+          delete env[key];
+        }
+      }
+    }
+    env["PWD"] = directory;
+    if (home) env["HOME"] = directory;
     return this.#commands.run(
       {
-        agentId: call.agentId,
         command: args.arguments.command,
-        workspace,
+        directory,
+        env,
         timeoutSeconds: args.arguments.timeout,
       },
       onOutput,

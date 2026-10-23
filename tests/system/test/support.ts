@@ -124,10 +124,12 @@ class ControlPlaneProcess {
 
 /** The node as its own process: `mate node run` with a config in a home directory of its own. */
 class NodeProcess {
+  readonly home: string;
   readonly workspacesRoot: string;
   readonly #child: Child;
 
   constructor(home: string, controlPlaneUrl: string, pairingToken: string) {
+    this.home = home;
     this.workspacesRoot = join(home, "agents");
     mkdirSync(join(home, ".config/mate"), { recursive: true });
     writeFileSync(
@@ -221,29 +223,41 @@ export async function startSystem(options: { proxied?: boolean } = {}) {
     204,
   );
 
-  const { pairingToken } = await api<{ pairingToken: string }>("POST", "/api/admin/pairing-tokens");
-  const home = join(root, "node-home");
-  const node = new NodeProcess(
-    home,
-    proxy === undefined ? plane.url : `http://127.0.0.1:${proxy.port}`,
-    pairingToken,
-  );
-  onTestFinished(() => node.close());
+  const nodes = () => api<{ nodeId: string; online: boolean }[]>("GET", "/api/admin/nodes");
+  const runningNodes: NodeProcess[] = [];
+  async function addNode(name?: string) {
+    const known = new Set((await nodes()).map((node) => node.nodeId));
+    const { pairingToken } = await api<{ pairingToken: string }>(
+      "POST",
+      "/api/admin/pairing-tokens",
+    );
+    const home = join(root, `node-home-${runningNodes.length + 1}`);
+    const node = new NodeProcess(
+      home,
+      proxy === undefined ? plane.url : `http://127.0.0.1:${proxy.port}`,
+      pairingToken,
+    );
+    runningNodes.push(node);
+    onTestFinished(() => node.close());
+    const connected = await until(async () => {
+      const online = (await nodes()).find((each) => !known.has(each.nodeId) && each.online);
+      if (online === undefined) throw new Error("the new node is not online yet");
+      return online;
+    });
+    if (name !== undefined) await api("PUT", `/api/admin/nodes/${connected.nodeId}`, { name }, 204);
+    return { node, nodeId: connected.nodeId };
+  }
+
   onTestFailed(() => {
     const answered = provider.requests.map((each) => `${each.lane}/${each.step}`).join(", ");
+    const nodeLogs = runningNodes
+      .map((node, index) => `--- node ${index + 1} ---\n${node.output()}`)
+      .join("\n");
     console.log(
-      `--- model requests ---\n${answered}\n--- control plane ---\n${plane.output()}\n--- node ---\n${node.output()}`,
+      `--- model requests ---\n${answered}\n--- control plane ---\n${plane.output()}\n${nodeLogs}`,
     );
   });
-
-  const nodes = () => api<{ nodeId: string; online: boolean }[]>("GET", "/api/admin/nodes");
-  const nodeId = (
-    await until(async () => {
-      const online = (await nodes()).find((each) => each.online);
-      if (online === undefined) throw new Error("the node is not online yet");
-      return online;
-    })
-  ).nodeId;
+  const { node, nodeId } = await addNode();
 
   let requests = 0;
   const requestId = () => `system:${++requests}`;
@@ -258,6 +272,7 @@ export async function startSystem(options: { proxied?: boolean } = {}) {
     nodeId,
     api,
     node,
+    addNode,
     /** Wait until the node is online (again). */
     async nodeOnline(): Promise<void> {
       await until(async () => {

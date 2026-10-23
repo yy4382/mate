@@ -1,28 +1,32 @@
 {
   "ownerPassword": "fixture owner password",
-  "ownerSessionToken": "HYNbKPTuVHKqFBuw1W3nuU7yl9_n3D8T_kBJW8clYoY",
+  "ownerSessionToken": "582A6MREXahTM86yy3UAjvGSl03pkL5kBYoMFfWIlNI",
   "openaiApiKey": "sk-fixture-not-a-real-key",
-  "pairingToken": "HCFYxmrDR4uvTTPc3hNkeQomCWoo1zYS0mwJYR4oYk8",
+  "pairingToken": "T8601BftBL-U1JqzucZb4DeV8L9mSjNBGx29Af732h8",
   "pairedNodes": [
     {
       "nodeId": "abcdef01-0000-4000-8000-000000000002",
-      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINJ6KM5lb8X49jYaD395JEvP98n9PsyP7hC0EfCNlr96\n-----END PRIVATE KEY-----\n",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAiS4iIxjxYL7Vr1VWv8j5Iggrg7sPoe4KPbxU5yh81So=\n-----END PUBLIC KEY-----\n",
-      "lastConnectedAt": "2026-10-23T15:27:05.993Z"
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJOXnuqnMB15Dxxd/R68xomiaWWjOVb3O6e/95kUftFR\n-----END PRIVATE KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAdi0LLqqVqXWbq9EXkk8TAoKaA5Y/qkngnfEy26y3EjI=\n-----END PUBLIC KEY-----\n",
+      "lastConnectedAt": "2026-10-23T17:17:51.566Z"
     },
     {
       "nodeId": "abcdef01-0000-4000-8000-000000000001",
-      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIH2nQNoHFURMm0Xj/+4voMVLRINDoct53sJDyUD43ISE\n-----END PRIVATE KEY-----\n",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA1YFcDblFemneXoOGkN1uZNkWUIPGdbdQPtJjQ0fdVa4=\n-----END PUBLIC KEY-----\n",
-      "lastConnectedAt": "2026-10-23T15:27:05.999Z"
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIO375W2qkrMibrVU6WHaqgbe55mw6nL6QZiNXIR7jzVn\n-----END PRIVATE KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAa23Lbm/fdJFVc2qmboJrfDUFFGChqVaQ+3Ef4cEHvxM=\n-----END PUBLIC KEY-----\n",
+      "lastConnectedAt": "2026-10-23T17:17:51.584Z"
     },
     {
       "nodeId": "12345678-0000-4000-8000-000000000003",
-      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIIF9D/H9AgYLM/ZJFICSofmqZZrvM+aMJltmbIg+s0OG\n-----END PRIVATE KEY-----\n",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA2MXB+YNWjP/IGiPO66IQILjo8/LrvhkeI1DUFPbe2g4=\n-----END PUBLIC KEY-----\n",
-      "lastConnectedAt": "2026-10-23T15:27:06.003Z"
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJVYp6sdoe3LMMuwf4Ihpb79b/gqFRQNW108Fsg4A9aI\n-----END PRIVATE KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAYvK/BnVravFqYahr5M/K3syJ1TxJHGBc2U7ncSoBQ18=\n-----END PUBLIC KEY-----\n",
+      "lastConnectedAt": "2026-10-23T17:17:51.586Z"
     }
   ],
+  "releasedAgent": {
+    "agentId": "11111111-1111-4111-8111-111111111111",
+    "nodeId": "abcdef01-0000-4000-8000-000000000002"
+  },
   "agentExternalIds": [
     "11111111-1111-4111-8111-111111111111",
     "22222222-2222-4222-8222-222222222222"

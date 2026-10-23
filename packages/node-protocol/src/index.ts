@@ -22,6 +22,9 @@ export type JsonValue = z.infer<ReturnType<typeof z.json>>;
 export const ToolNameSchema = z.enum(["bash", "read", "write", "edit"]);
 export type ToolName = z.infer<typeof ToolNameSchema>;
 
+export const NodeAccessSchema = z.enum(["home", "visit"]);
+export type NodeAccess = z.infer<typeof NodeAccessSchema>;
+
 // ── The bash tool ────────────────────────────────────────────────────────────
 
 /** Bytes of a command's combined output its result keeps: the tail. Earlier output is dropped and the result says so. */
@@ -304,6 +307,7 @@ export const GatewayRunToolSchema = z.object({
   /** Chosen by the gateway, unique per call; the call's output, result, and stop all carry it. */
   requestId,
   agentId,
+  access: NodeAccessSchema,
   tool: ToolNameSchema,
   arguments: z.record(z.string(), z.json()),
 });

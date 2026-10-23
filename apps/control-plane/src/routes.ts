@@ -254,6 +254,16 @@ export function adminRoutes(admin: Admin): Route[] {
       json: ({ params, body }) => admin.configureAgent(agentId(params), forwarded(body)),
     },
     {
+      method: "PUT",
+      path: "/api/admin/agents/:id/nodes/:nodeId",
+      json: ({ params }) => admin.grantNode(agentId(params), params.nodeId ?? ""),
+    },
+    {
+      method: "DELETE",
+      path: "/api/admin/agents/:id/nodes/:nodeId",
+      json: ({ params }) => admin.revokeNode(agentId(params), params.nodeId ?? ""),
+    },
+    {
       method: "GET",
       path: "/api/admin/agents/:id/assistants",
       json: ({ params }) => admin.assistants(agentId(params)),
