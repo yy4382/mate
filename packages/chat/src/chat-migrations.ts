@@ -1,10 +1,14 @@
-/**
- * The chat database schema. A store is created at this version and never migrated: a file stamped with any other
- * `user_version` is refused (ARCHITECTURE section 6).
- */
-export const CHAT_SCHEMA_VERSION = 3;
+import { Migrations } from "@mate/migrations";
 
-export const CHAT_DDL = `
+/**
+ * The chat database schema as an ascending list of migrations (ARCHITECTURE section 6). A new store runs all of them;
+ * an existing store runs the ones after its `user_version`. Versions 1 and 2 never shipped, so a store stamped with
+ * either is refused.
+ */
+export const CHAT_MIGRATIONS = new Migrations([
+  {
+    version: 3,
+    sql: `
 CREATE TABLE accounts (
   id INTEGER PRIMARY KEY,
   external_id TEXT NOT NULL UNIQUE,
@@ -202,4 +206,6 @@ CREATE VIEW followed_timelines (account_id, timeline_id) AS
   ) p
   JOIN timelines t ON t.id = p.timeline_id AND t.root_entry_id IS NOT NULL
   JOIN readable_conversations rc ON rc.account_id = p.account_id AND rc.conversation_id = t.conversation_id;
-`;
+`,
+  },
+]);

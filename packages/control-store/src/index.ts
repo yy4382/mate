@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { Migrations } from "@mate/migrations";
 import { z } from "zod";
 
 /** The control store's file name inside the data directory. */
@@ -10,22 +11,22 @@ export const CONTROL_STORE_FILE = "control.sqlite";
 export interface ControlTables {
   /** The module's key in the store's version table. It must never change once a store holds data. */
   module: string;
-  version: number;
   /**
-   * Creates the module's tables. It runs only when the store has no version for the module, so it uses plain
-   * `CREATE TABLE`: a name some other module already took is refused instead of silently shared.
+   * The module's schema. A store without the module runs the whole list and one at an earlier listed version runs the
+   * rest. The first migration uses plain `CREATE TABLE`: a name some other module already took is refused instead of
+   * silently shared.
    */
-  ddl: string;
+  migrations: Migrations;
 }
 
-/** Raised when the control store holds a module's tables at another schema version. Mate never migrates. */
+/** Raised when the control store holds a module's tables at a version it cannot migrate from, or a migration fails. */
 export class ControlStoreIncompatible extends Error {
   readonly file: string;
   readonly module: string;
 
   constructor(file: string, tables: ControlTables, found: string, options?: ErrorOptions) {
     super(
-      `control store ${file}: ${tables.module} tables ${found}, expected schema version ${tables.version}`,
+      `control store ${file}: ${tables.module} tables ${found}, expected schema version ${tables.migrations.latest}`,
       options,
     );
     this.name = "ControlStoreIncompatible";
@@ -44,10 +45,11 @@ const BUSY_TIMEOUT_MS = 5_000;
 const Version = z.object({ version: z.number() }).optional();
 
 /**
- * Open a connection of the calling module's own to the control store in `dataDirectory`, creating the module's tables
- * at their version on first use. Every module that keeps tables in the store opens it this way and closes only its own
- * connection. Throws `ControlStoreIncompatible` when the module's tables are at another version; other modules'
- * versions are never looked at.
+ * Open a connection of the calling module's own to the control store in `dataDirectory`, bringing the module's tables
+ * to their latest version, in one transaction, on first use or after an upgrade. Every module that keeps tables in the
+ * store opens it this way and closes only its own connection. Throws `ControlStoreIncompatible` when the module's
+ * tables are newer than its code or at an unlisted version, or when a migration fails (the store then stays at its old
+ * version); other modules' versions are never looked at.
  */
 export function openControlTables(dataDirectory: string, tables: ControlTables): DatabaseSync {
   mkdirSync(dataDirectory, { recursive: true });
@@ -92,17 +94,17 @@ function ensureTables(db: DatabaseSync, file: string, tables: ControlTables): vo
   const found = Version.parse(
     db.prepare("SELECT version FROM schema_versions WHERE module = ?").get(tables.module),
   )?.version;
-  if (found === tables.version) return;
-  if (found !== undefined) {
+  const pending = tables.migrations.after(found);
+  if (pending === undefined) {
     throw new ControlStoreIncompatible(file, tables, `are at schema version ${found}`);
   }
+  if (pending.length === 0) return;
   try {
-    db.exec(tables.ddl);
+    for (const migration of pending) db.exec(migration.sql);
   } catch (error) {
-    throw new ControlStoreIncompatible(file, tables, "could not be created", { cause: error });
+    throw new ControlStoreIncompatible(file, tables, "could not be migrated", { cause: error });
   }
-  db.prepare("INSERT INTO schema_versions (module, version) VALUES (?, ?)").run(
-    tables.module,
-    tables.version,
-  );
+  db.prepare(
+    "INSERT INTO schema_versions (module, version) VALUES (?, ?) ON CONFLICT (module) DO UPDATE SET version = excluded.version",
+  ).run(tables.module, tables.migrations.latest);
 }

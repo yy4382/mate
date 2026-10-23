@@ -1,12 +1,15 @@
 import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { openControlTables, type ControlTables } from "@mate/control-store";
+import { Migrations } from "@mate/migrations";
 import { z } from "zod";
 
 const GATEWAY_TABLES: ControlTables = {
   module: "gateway",
-  version: 1,
-  ddl: `
+  migrations: new Migrations([
+    {
+      version: 1,
+      sql: `
 CREATE TABLE nodes (
   id TEXT PRIMARY KEY,
   public_key TEXT NOT NULL,
@@ -20,6 +23,8 @@ CREATE TABLE pairing_tokens (
   used INTEGER NOT NULL DEFAULT 0
 );
 `,
+    },
+  ]),
 };
 
 /** The gateway's own connection to the control store, holding the node registry and pairing tokens. */

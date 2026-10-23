@@ -1,0 +1,16 @@
+{
+  "name": "@mate/migrations",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "mate-source": "./src/index.ts",
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -76,7 +76,8 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 | `packages/node-protocol`（`@mate/node-protocol`） | 网关与 node 之间的消息格式，包括工具名和工具结果的形状 |
 | `packages/clock`（`@mate/clock`） | 时钟：`now` 和可中止的 `sleep`，各模块共用，测试里换成可控时钟 |
 | `packages/gateway`（`@mate/gateway`） | node 网关 |
-| `packages/control-store`（`@mate/control-store`） | 控制库：几个模块共用 `control.sqlite` 时，各自打开自己的表并按模块检查结构版本 |
+| `packages/migrations`（`@mate/migrations`） | 迁移：一个存储的结构就是一串按版本递增的迁移（`Migrations`），聊天库和控制库都用它建表和升级 |
+| `packages/control-store`（`@mate/control-store`） | 控制库：几个模块共用 `control.sqlite` 时，各自打开自己的表并按模块迁移结构版本 |
 | `packages/admin`（`@mate/admin`） | 管理模块：Agent 的生命周期和设置、提供商的 API key、模型目录、node 配对、观察 Agent；它打开 Agent Manager，并把 node 网关接成工作区宿主 |
 | `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |
 | `apps/control-plane`（`@mate/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
@@ -397,9 +398,9 @@ interface NodeGateway {
 10. **违规的连接立即结束。** 未认证的连接最多 32 条，超出的直接关闭；单条消息按收到的序列化帧计不超过 1 MiB，超出的由 WebSocket 层关闭；无法解析、不认识的消息、认证前发别的消息、重复认证，网关回一个 `gateway.error` 后关闭连接，并且从这一刻起不再读取这条连接送来的任何东西，node 立即离线。心跳超时（TCP 没断但收不到数据也算）同样结束连接。
 
 **持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。网关的 node 注册表和配对令牌存在**控制库** `data/control.sqlite`，这个文件和 Web 外壳的登录、管理模块的 API key 共用：
-- 每个模块用 `@mate/control-store` 的 `openControlTables(dataDirectory, { module, version, ddl })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
-- 每个模块只建、只检查自己的表。结构版本记在 `schema_versions` 表里，每个模块一行（网关是 `gateway`）。一个模块的版本不对，只有这个模块拒绝启动，抛出带文件路径的 `ControlStoreIncompatible`；别的模块照常打开。
-- 一个模块第一次打开时，在同一个事务里建表并记下版本。建表用不带 `IF NOT EXISTS` 的 `CREATE TABLE`，表名和别的模块撞了同样拒绝启动，不会两个模块悄悄共用一张表。
+- 每个模块用 `@mate/control-store` 的 `openControlTables(dataDirectory, { module, migrations })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
+- 每个模块只建、只检查自己的表。结构版本记在 `schema_versions` 表里，每个模块一行（网关是 `gateway`）。模块的结构是一份 `Migrations`（`@mate/migrations`）：按版本递增的迁移列表。一个模块的版本比代码新、或不是列表里的版本，只有这个模块拒绝启动，抛出带文件路径的 `ControlStoreIncompatible`；别的模块照常打开。
+- 打开时在同一个事务里把模块带到最新版本：没有记录就跑完整个列表并插入一行；记录在列表里的某个版本，就只跑它之后的迁移并更新这一行。迁移中途失败，事务回滚，存储留在原来的版本，拒绝启动。第一条迁移的建表用不带 `IF NOT EXISTS` 的 `CREATE TABLE`，表名和别的模块撞了同样拒绝启动，不会两个模块悄悄共用一张表。
 - 文件由 `openControlTables` 以 0600 新建（SQLite 的 `-wal`、`-shm` 随主文件的权限），里面有密码哈希、登录会话和 API key；已有的文件不改权限。
 - 每条连接都用 WAL、`synchronous=FULL`、5 秒 busy timeout。WAL 让一个模块开着读事务时别的模块照常提交。`node:sqlite` 是同步的，一个不 await 的事务在进程里别的连接开始事务之前就已结束，所以同一进程里的几条连接从不互相等待。规则是**控制库的事务里不 await**；busy timeout 只给进程外的读写者（备份、`sqlite3` 命令行）留余地。
 
@@ -530,7 +531,9 @@ data/
   agents/<agentId>.sqlite     每个 Agent 的 Durable 存储（含配置、提醒、连接器位置）
 ```
 
-搬到另一台 VPS：停掉容器，复制 `data/`，启动。所有数据库都不做迁移，表结构不匹配就拒绝启动。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5。
+搬到另一台 VPS：停掉容器，复制 `data/`，启动。
+
+**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@mate/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
 
 ## 7. 部署
 
@@ -578,7 +581,6 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 - 不设 token、费用、run 次数配额。
 - 不做逐条命令审批，不做 Mate 自己的提权。
 - 不限制 Agent 读同事的工作区，只在提示里请它不要读。
-- 不做数据迁移，不保留旧数据兼容。
 - 不使用 `pi-coding-agent`。
 - 一个所有者，中文界面，适配手机。
 - 规模很小：一个所有者，少量 Agent（模型费用决定了不会多），消息量不大。不为数据量做性能优化或分页之类的设计，除非测量证明确实有问题；结构简单优先。
@@ -596,5 +598,5 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 | 5 | node 注册表放 `nodes.sqlite` 还是 `control.sqlite`？ | 统一放 `control.sqlite`，尽量少分文件。控制面里的网关、登录和管理模块共用这一个文件，各自建自己的表 | 4.5、4.6、第 6 节 |
 | 6 | 一个 Agent 用哪个 node？ | 创建 Agent 时从已配对的 node 列表里选一个，只有一个就只能选它。node ID 记在 Agent 自己的文件里，之后不变 | 4.4 |
 | 7 | 要不要 Web Push 和附件？ | 要推送；聊天接口接受附件元数据，但附件文件的上传和存储还没有实现 | 4.1 |
-| 8 | 数据库结构变了怎么升级？ | 不迁移，换一个空数据目录 | 第 6 节 |
+| 8 | 数据库结构变了怎么升级？ | 原地向前迁移：每个存储的结构是一串按版本递增的迁移；比代码新、或版本不在列表里的存储拒绝启动；已发布版本的存储夹具证明升级可行 | 第 6 节、4.5 |
 | 9 | 要不要 CI？ | 要。GitHub Actions 在每次推送时跑 `pnpm check` 和 `pnpm test:linux`；`v*` 标签在两者通过后发布镜像和 node 发布包 | `.github/workflows/ci.yml` |

@@ -1,18 +1,23 @@
 import type { DatabaseSync } from "node:sqlite";
 import { openControlTables, type ControlTables } from "@mate/control-store";
+import { Migrations } from "@mate/migrations";
 import type { ProviderCredentials } from "@mate/runtime";
 import { z } from "zod";
 
 const ADMIN_TABLES: ControlTables = {
   module: "admin",
-  version: 1,
-  ddl: `
+  migrations: new Migrations([
+    {
+      version: 1,
+      sql: `
 CREATE TABLE provider_credentials (
   provider TEXT PRIMARY KEY,
   api_key TEXT NOT NULL,
   base_url TEXT
 ) STRICT;
 `,
+    },
+  ]),
 };
 
 const Row = z

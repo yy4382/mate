@@ -19,6 +19,7 @@
     "@mate/control-store": "workspace:*",
     "@mate/gateway": "workspace:*",
     "@mate/manager": "workspace:*",
+    "@mate/migrations": "workspace:*",
     "@mate/node-protocol": "workspace:*",
     "@mate/runtime": "workspace:*",
     "zod": "4.6.5"
