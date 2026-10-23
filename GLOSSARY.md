@@ -205,7 +205,7 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 第一次启动时第一个管理员密码的来源。控制库里还没有任何人类时读一次，只存 scrypt 哈希，之后不再读；第一次启动没有它就拒绝启动。
 
 **初始 handle**（initial handle）
-第一个管理员的 handle，也是他的初始显示名：环境变量 `MATE_INITIAL_HANDLE`，缺省 `admin`，要符合聊天账号的 handle 规则。只在第一次启动时用，之后他可以自己改名。
+第一个管理员的 handle，也是其初始显示名：环境变量 `MATE_INITIAL_HANDLE`，缺省 `admin`，要符合聊天账号的 handle 规则。只在第一次启动时用，之后可以自己改名。
 
 **人类名册**（Humans）
 Web 外壳里管理谁能登录的类（`apps/control-plane/src/humans.ts`）：人类的角色、密码哈希、是否有效，以及登录会话。它和聊天 app 靠聊天账号的 externalId 对上：名字和账号种类归聊天 app，登录和角色归外壳。
