@@ -236,7 +236,6 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
     <AllowStartOnDemand>true</AllowStartOnDemand>
     <Enabled>false</Enabled>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <RestartOnFailure><Interval>PT1M</Interval><Count>255</Count></RestartOnFailure>
   </Settings>
   <Actions Context="Account"><Exec><Command>${xmlText(runtime)}</Command><Arguments>${xmlText(argumentsText)}</Arguments><WorkingDirectory>${xmlText(paths.program)}</WorkingDirectory></Exec></Actions>
 </Task>
