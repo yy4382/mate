@@ -19,7 +19,7 @@ import {
 const nativeService = process.env["MATE_TEST_NATIVE_SERVICE"] === "1";
 
 it.runIf(nativeService)(
-  "the published bundle installs a native service, reports its real link, restarts a crashed Windows node, stops its process tree and does not retry identity refusal (dedicated CI account only)",
+  "the published bundle installs a native service, reports its real link, manually restarts a crashed Windows node, stops its process tree and does not retry identity refusal (dedicated CI account only)",
   async () => {
     expect(process.env["CI"], "native service smoke must use a disposable CI account").toBe("true");
     expect(["darwin", "win32"]).toContain(process.platform);
@@ -139,10 +139,14 @@ if (-not [MateTest.NativeProcess]::TerminateProcess($node.Handle, 1)) { throw 'C
 $node.WaitForExit()
 if ($node.ExitCode -ne 1) { throw "Expected node exit 1, got $($node.ExitCode)" }
 `);
+      await new Promise((resolve) => setTimeout(resolve, 65_000));
+      expect(gateway.authentications).toBe(authentications);
+      expect(ok("status")).toContain("Link: none");
+      ok("start");
       await eventually(
         () => gateway.authentications > authentications,
-        "Task Scheduler restarts a node that exited with code 1 after its one-minute restart interval",
-        90_000,
+        "mate node start reconnects after the crashed Windows task",
+        30_000,
       );
       await eventually(
         () => {

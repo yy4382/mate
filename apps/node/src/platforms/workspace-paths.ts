@@ -20,12 +20,31 @@ export const windowsWorkspacePaths: WorkspacePaths = {
     if (/^[\\/](?![\\/])/.test(input)) return undefined;
 
     if (!insideWindows(root, resolved)) {
-      if (!insideWindows(configuredRoot, resolved)) return undefined;
-      resolved = win32.join(root, win32.relative(configuredRoot, resolved));
+      const alias = insideWindows(configuredRoot, resolved)
+        ? configuredRoot
+        : await windowsRootAlias(root, resolved);
+      if (alias === undefined) return undefined;
+      resolved = win32.join(root, win32.relative(alias, resolved));
     }
     return windowsPathWithoutLinks(root, resolved);
   },
 };
+
+async function windowsRootAlias(root: string, path: string): Promise<string | undefined> {
+  let alias: string | undefined;
+  for (let current = path; ; current = win32.dirname(current)) {
+    try {
+      const stat = await lstat(current);
+      if (!stat.isSymbolicLink() && win32.relative(root, await realpath(current)) === "") {
+        alias = current;
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+    }
+    if (win32.dirname(current) === current) return alias;
+  }
+}
 
 async function windowsPathWithoutLinks(root: string, path: string): Promise<string | undefined> {
   const segments = win32.relative(root, path).split(win32.sep).filter(Boolean);
