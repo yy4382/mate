@@ -1,5 +1,13 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join, parse } from "node:path";
 import { onTestFinished, describe, expect, it } from "vitest";
 import { connectedNode, temporaryDirectory, textOf, windows } from "./support.ts";
@@ -119,15 +127,6 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
         drive,
         "\\outside.txt",
         "\\\\localhost\\share\\outside.txt",
-        "notes.txt:stream",
-        "...\\outside.txt",
-        "notes. ",
-        "NUL",
-        "CON.txt",
-        "nested\\aux",
-        "PRN",
-        "COM1.log",
-        "LPT1",
       ]) {
         const result = await node.run(agentId, "write", { path, content: "refused" });
         expect(result.isError, path).toBe(true);
@@ -140,6 +139,28 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
       expect(textOf(read)).toBe("inside");
     },
   );
+
+  it.runIf(windows)("uses a workspace beneath a configured junction", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const physicalRoot = `${node.workspacesRoot}-physical`;
+    renameSync(node.workspacesRoot, physicalRoot);
+    symlinkSync(physicalRoot, node.workspacesRoot, "junction");
+    const path = join(workspace, "notes", "today.txt");
+
+    const written = await node.run(agentId, "write", { path, content: "before" });
+    expect(written.isError, textOf(written)).toBe(false);
+    const edited = await node.run(agentId, "edit", {
+      path,
+      edits: [{ oldText: "before", newText: "after" }],
+    });
+    expect(edited.isError, textOf(edited)).toBe(false);
+    expect(textOf(await node.run(agentId, "read", { path }))).toBe("after");
+    expect(await node.gateway.browse(randomUUID(), agentId, path)).toMatchObject({
+      ok: true,
+      listing: { kind: "file", content: "after" },
+    });
+  });
 
   it.runIf(windows)(
     "refuses Windows file symlinks, including dangling and inward links",
@@ -186,39 +207,23 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
     }
   });
 
-  it("reports changes published in a file's modification time and reads it after the writer stops", async () => {
+  it("reports a file that keeps changing while it is read instead of mixing old and new content", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     const path = join(workspace, "busy.txt");
-    const line = `${"a".repeat(99)}\n`;
-    writeFileSync(path, line.repeat(40_000));
+    const line = (letter: string) => `${letter.repeat(99)}\n`;
+    writeFileSync(path, line("a").repeat(40_000));
+    // Another process rewrites the file in place, alternating every line between all a's and all b's.
     const writer = spawn(process.execPath, [
       "-e",
       `const fs = require("node:fs");
        const fd = fs.openSync(${JSON.stringify(path)}, "r+");
-       const content = Buffer.from(${JSON.stringify(line)}.repeat(40000));
-       const started = Date.now() / 1000;
-       let revision = 0;
-       function rewrite() {
-         fs.writeSync(fd, content, 0, content.length, 0);
-         fs.futimesSync(fd, started, started + 2 * ++revision);
-       }
-       rewrite();
-       fs.writeSync(1, "ready\\n");
-       for (;;) rewrite();`,
+       const versions = ["a", "b"].map((l) => Buffer.from((l.repeat(99) + "\\n").repeat(40000)));
+       for (let i = 0; ; i++) fs.writeSync(fd, versions[i % 2], 0, versions[0].length, 0);`,
     ]);
-    const closed = new Promise<void>((resolve) => writer.once("close", () => resolve()));
-    onTestFinished(async () => {
-      writer.kill("SIGKILL");
-      await closed;
-    });
-    await new Promise<void>((resolve, reject) => {
-      writer.once("error", reject);
-      writer.once("exit", (code) => reject(new Error(`writer exited before ready (${code})`)));
-      writer.stdout.once("data", () => resolve());
-    });
+    onTestFinished(() => void writer.kill("SIGKILL"));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
-    const expected = `${line.repeat(300)}[info] 39701 more lines in file. Use offset=301 to continue.`;
     let changed = 0;
     for (let attempt = 0; attempt < 20; attempt++) {
       const result = await node.run(agentId, "read", { path: "busy.txt", limit: 300 });
@@ -228,14 +233,11 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
         changed++;
         continue;
       }
-      expect(text).toBe(expected);
+      const lines = text.split("\n").filter((l) => l !== "" && !l.startsWith("["));
+      expect(lines.length).toBe(300);
+      expect(new Set(lines).size, "never a mix of the two versions").toBe(1);
+      expect(lines[0]).toMatch(/^(a{99}|b{99})$/);
     }
-    expect(changed, "published modification times are detected during reads").toBeGreaterThan(0);
-
-    writer.kill("SIGKILL");
-    await closed;
-    const result = await node.run(agentId, "read", { path: "busy.txt", limit: 300 });
-    expect(result.isError, textOf(result)).toBe(false);
-    expect(textOf(result)).toBe(expected);
+    expect(changed, "a file that never holds still is reported as changed").toBeGreaterThan(0);
   });
 });

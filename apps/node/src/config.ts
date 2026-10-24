@@ -1,8 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
-import { currentPlatform } from "./platforms/index.ts";
 
 /** Where the node connects, how it pairs the first time, and where workspaces live. */
 const nodeConfigSchema = z.strictObject({
@@ -30,15 +29,14 @@ export function readConfig(path: string): NodeConfig | undefined {
 /** Validate `input` and replace the whole file with it, private to this account. */
 export function writeConfig(path: string, input: unknown): NodeConfig {
   const config = nodeConfigSchema.parse(input);
-  const privacy = currentPlatform().privateFiles;
-  mkdirSync(dirname(path), { recursive: true, mode: privacy.directoryMode });
-  privacy.protectDirectory(dirname(path));
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  chmodSync(dirname(path), 0o700);
   const temporary = join(dirname(path), `.node-${randomBytes(8).toString("hex")}.tmp`);
   writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, {
-    mode: privacy.fileMode,
+    mode: 0o600,
     flag: "wx",
   });
-  privacy.protectFile(temporary);
+  chmodSync(temporary, 0o600);
   renameSync(temporary, path);
   return config;
 }

@@ -17,7 +17,7 @@ const context = BACKGROUND_CONTEXT;
  */
 export async function browseWorkspace(workspace: string, path: string): Promise<NodeBrowseOutcome> {
   try {
-    const env = new WorkspaceEnv(await realpath(workspace));
+    const env = new WorkspaceEnv(await realpath(workspace), workspace);
     const resolved = await env.absolutePath(path, context);
     if (!resolved.ok) return refuse("outside-workspace", `${path} is outside the workspace`);
     const at = relative(env.cwd, resolved.value) || ".";

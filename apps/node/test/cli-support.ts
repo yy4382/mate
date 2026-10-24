@@ -31,7 +31,6 @@ export type FakeService = {
   foreignDefinition: boolean;
   unverifiedProcess?: boolean;
   created?: string;
-  queuedReads?: number;
   calls: string[][];
   journal: string[][];
 };

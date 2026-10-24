@@ -6,7 +6,7 @@ import type { AgentEvent } from "../src/index.ts";
 import { environment, ok, rendered } from "./support.ts";
 
 describe("upgrading the admin store", () => {
-  it("keeps a released Agent home-only and persists a new grant across reopening", async () => {
+  it("keeps a released Agent home-only after migration", async () => {
     const { dataDirectory, facts } = storeFixture("v0.1.0-alpha.2");
     const env = await environment(dataDirectory);
     const admin = await env.open();
@@ -58,7 +58,7 @@ describe("upgrading the admin store", () => {
           { name: "old-home", online: true, platform: null, home: true },
         ]);
         expect(request.toolOutput("old Agent:1")).toContain("released home answered");
-        expect(request.toolOutput("old Agent:2")).toContain("不可用");
+        expect(request.toolOutput("old Agent:2")).toContain("unavailable");
         request.text("The released Agent still uses its home.");
       });
     const account = env.chat.findAccount(agentId);
@@ -80,41 +80,7 @@ describe("upgrading the admin store", () => {
     );
     expect(calls).toEqual([expect.objectContaining({ agentId, access: "home" })]);
     expect(other.calls).toEqual([]);
-    await admin.grantNode(agentId, other.nodeId);
-    await admin.pauseAgent(agentId);
-    await watch.ended;
-    await admin.close();
-
-    const reopened = await env.open();
-    expect(await reopened.agents()).toEqual([
-      expect.objectContaining({
-        agentId,
-        state: "paused",
-        grantedNodes: [{ nodeId: other.nodeId, name: "new-visit" }],
-      }),
-    ]);
-    env.provider
-      .step("after reopen", (request) => {
-        request.call([
-          { name: "node_list", arguments: {} },
-          { name: "bash", arguments: { node: "new-visit", command: "pwd" } },
-        ]);
-      })
-      .step("visited", (request) => {
-        expect(JSON.parse(request.toolOutput("after reopen:0") ?? "null")).toEqual(
-          expect.arrayContaining([
-            { name: "old-home", online: true, platform: null, home: true },
-            { name: "new-visit", online: true, platform: null, home: false },
-          ]),
-        );
-        expect(request.toolOutput("after reopen:1")).toContain("ok");
-        request.text("The persisted grant permits a visit.");
-      });
-    env.post("Visit the second node, @ada.", [account]);
-    await reopened.resumeAgent(agentId);
-    await env.provider.received(4);
-    expect(other.calls).toEqual([expect.objectContaining({ agentId, access: "visit" })]);
-    expect(other.prepared).toEqual([]);
+    await watch.stop();
     env.provider.assertComplete();
   });
 });

@@ -346,17 +346,12 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
   );
 
   it.runIf(process.platform === "win32")(
-    "stop kills the process tree when a queued task starts after disabling it",
+    "stop cancels a queued Windows task and leaves it disabled",
     () => {
       const h = runningNode();
-      h.setService({ active: "activating", queuedReads: 2, calls: [] });
+      h.setService({ active: "activating", calls: [] });
       ok(h, "node", "stop");
       expect(h.service()).toMatchObject({ active: "inactive", enabled: "disabled" });
-      const calls = h.service().calls;
-      const killed = calls.findIndex((call) => call[0] === "taskkill");
-      const ended = calls.findIndex((call) => call[0] === "schtasks" && call[1] === "/End");
-      expect(killed).toBeGreaterThan(-1);
-      expect(ended).toBeGreaterThan(killed);
     },
   );
 

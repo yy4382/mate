@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { AccountNames, type ChatApp } from "@mate/chat";
 import { systemClock, type Clock } from "@mate/clock";
@@ -129,7 +128,6 @@ export class Admin {
   readonly #store: AdminStore;
   readonly #manager: AgentManager;
   readonly #clock: Clock;
-  readonly #agentWrites = new Map<string, Promise<void>>();
 
   constructor(options: AdminOptions, store: AdminStore, manager: AgentManager) {
     this.#chat = options.chat;
@@ -146,6 +144,8 @@ export class Admin {
     const accounts = new Map(
       this.#chat.listAccounts().map((account) => [account.accountId, account]),
     );
+    const nodes = this.#gateway.nodes();
+    const nodeNames = new Map(nodes.map((node) => [node.nodeId, node.name]));
     const views = await Promise.all(
       this.#manager.list().map(async ({ agentId }): Promise<AgentView | undefined> => {
         const account = this.#chat.findAccount(agentId);
@@ -158,16 +158,18 @@ export class Admin {
         try {
           if (names === undefined) throw new Error(`Agent ${agentId} has no chat account`);
           const description = await this.#manager.describe(agentId);
-          const nodes = this.#gateway.nodes();
-          const node = nodes.find((node) => node.nodeId === description.nodeId);
-          if (node === undefined) throw new Error(`Agent ${agentId} has no paired node`);
           const grantedNodes = nodes
             .filter(
               (node) =>
                 this.#store.nodeAccess(agentId, description.nodeId, node.nodeId) === "visit",
             )
             .map(({ nodeId, name }) => ({ nodeId, name }));
-          return { ...names, ...description, nodeName: node.name, grantedNodes };
+          return {
+            ...names,
+            ...description,
+            nodeName: nodeNames.get(description.nodeId) ?? description.nodeId,
+            grantedNodes,
+          };
         } catch (error) {
           // Deleted since it was listed.
           if (error instanceof AgentStoreMissing) return undefined;
@@ -185,61 +187,37 @@ export class Admin {
    * and a handle in use with `handle-taken`: nothing exists yet, so these are plain refusals, not a create to finish.
    */
   async createAgent(input: z.input<typeof CreateAgentInput>): Promise<string> {
-    const {
-      agentId = randomUUID(),
-      nodeId,
-      displayName,
-      handle,
-      settings,
-    } = parseInput(CreateAgentInput, input);
-    return this.#serialAgentWrite(agentId, async () => {
-      if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId))
-        throw new AdminError("unknown-node", `no paired node ${nodeId}`);
-      try {
-        return await this.#manager.create({
-          agentId,
-          nodeId,
-          displayName,
-          handle,
-          settings: this.#settings(settings),
-        });
-      } catch (error) {
-        if (error instanceof AgentIdInUse) throw new AdminError("agent-exists", error.message);
-        throw error;
-      }
-    });
+    const { agentId, nodeId, displayName, handle, settings } = parseInput(CreateAgentInput, input);
+    if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId))
+      throw new AdminError("unknown-node", `no paired node ${nodeId}`);
+    try {
+      return await this.#manager.create({
+        nodeId,
+        displayName,
+        handle,
+        settings: this.#settings(settings),
+        ...(agentId === undefined ? {} : { agentId }),
+      });
+    } catch (error) {
+      if (error instanceof AgentIdInUse) throw new AdminError("agent-exists", error.message);
+      throw error;
+    }
   }
 
   /** Close the Agent, aborting its work, and keep it closed until it is resumed, across restarts too. */
   async pauseAgent(agentId: string): Promise<void> {
-    await this.#serialAgentWrite(agentId, () =>
-      this.#existing(agentId, (id) => this.#manager.pause(id)),
-    );
+    await this.#existing(agentId, (id) => this.#manager.pause(id));
   }
 
   /** Open a paused or closed Agent; it continues where it stopped. */
   async resumeAgent(agentId: string): Promise<void> {
-    await this.#serialAgentWrite(agentId, () =>
-      this.#existing(agentId, (id) => this.#manager.resume(id)),
-    );
+    await this.#existing(agentId, (id) => this.#manager.resume(id));
   }
 
-  /** Close the Agent, deactivate its chat account, delete its file and grants. A partial delete can be repeated. */
+  /** Close the Agent, deactivate its chat account, delete its file and grants. Its messages stay readable. */
   async deleteAgent(agentId: string): Promise<void> {
-    await this.#serialAgentWrite(agentId, async () => {
-      const exists =
-        isAgentId(agentId) && this.#manager.list().some((agent) => agent.agentId === agentId);
-      if (!exists) {
-        const accountId = this.#chat.findAccount(agentId);
-        const account = this.#chat
-          .listAccounts()
-          .find((account) => account.accountId === accountId);
-        if (!isAgentId(agentId) || account?.kind !== "agent" || account.active)
-          throw new AdminError("unknown-agent", `no Agent ${agentId}`);
-      }
-      await this.#manager.delete(agentId);
-      this.#store.deleteNodeGrants(agentId);
-    });
+    await this.#existing(agentId, (id) => this.#manager.delete(id));
+    this.#store.deleteNodeGrants(agentId);
   }
 
   /** Permit later workspace calls to visit this paired node. The home node is always accessible. */
@@ -259,10 +237,8 @@ export class Admin {
    * model request. Only a provider with a key, a model in its catalog, and a thinking level that model accepts.
    */
   async configureAgent(agentId: string, input: z.input<typeof SettingsInput>): Promise<void> {
-    await this.#serialAgentWrite(agentId, () =>
-      this.#existing(agentId, (id) =>
-        this.#manager.configure(id, this.#settings(parseInput(SettingsInput, input))),
-      ),
+    await this.#existing(agentId, (id) =>
+      this.#manager.configure(id, this.#settings(parseInput(SettingsInput, input))),
     );
   }
 
@@ -366,35 +342,19 @@ export class Admin {
 
   /** Close every Agent, then the admin module's own connection to the control store. */
   async close(): Promise<void> {
-    await Promise.all(this.#agentWrites.values());
     await this.#manager.close();
     this.#store.close();
   }
 
   async #changeNodeGrant(agentId: string, nodeId: string, change: () => void): Promise<void> {
-    await this.#serialAgentWrite(agentId, () =>
-      this.#existing(agentId, async (id) => {
-        const { nodeId: homeNodeId } = await this.#manager.describe(id);
-        if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId))
-          throw new AdminError("unknown-node", `no paired node ${nodeId}`);
-        if (nodeId === homeNodeId)
-          throw new AdminError("invalid-input", "the home node is always accessible");
-        change();
-      }),
-    );
-  }
-
-  #serialAgentWrite<T>(agentId: string, work: () => Promise<T>): Promise<T> {
-    const result = (this.#agentWrites.get(agentId) ?? Promise.resolve()).then(work);
-    const tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.#agentWrites.set(agentId, tail);
-    void tail.then(() => {
-      if (this.#agentWrites.get(agentId) === tail) this.#agentWrites.delete(agentId);
+    await this.#existing(agentId, async (id) => {
+      const { nodeId: homeNodeId } = await this.#manager.describe(id);
+      if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId))
+        throw new AdminError("unknown-node", `no paired node ${nodeId}`);
+      if (nodeId === homeNodeId)
+        throw new AdminError("invalid-input", "the home node is always accessible");
+      change();
     });
-    return result;
   }
 
   /**

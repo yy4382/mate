@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join, win32 } from "node:path";
-import { EXIT_DO_NOT_RESTART } from "./service-constants.ts";
+import { EXIT_DO_NOT_RESTART } from "../installation.ts";
 import {
   lstatOrUndefined,
   markedFileOwnership,
@@ -28,22 +28,11 @@ $record = $null
 $processes = @()
 if ($null -ne $task) {
   $definition = $task.Definition
-  $principal = $definition.Principal.UserId
-  if (-not $principal.StartsWith('S-1-')) {
-    try {
-      $principal = (New-Object Security.Principal.NTAccount($principal)).Translate([Security.Principal.SecurityIdentifier]).Value
-    } catch { $principal = '' }
-  }
-  $actions = @($definition.Actions)
-  $instances = @($task.GetInstances(0) | ForEach-Object { @{ id = $_.InstanceGuid; enginePid = [int]$_.EnginePID } })
+  $instances = @($task.GetInstances(0) | ForEach-Object { [int]$_.EnginePID })
   $record = @{
     state = [int]$task.State
     enabled = [bool]$task.Enabled
-    principal = $principal
-    logonType = [int]$definition.Principal.LogonType
     description = $definition.RegistrationInfo.Description
-    command = $(if ($actions.Count -eq 1) { $actions[0].Path } else { '' })
-    arguments = $(if ($actions.Count -eq 1) { $actions[0].Arguments } else { '' })
     instances = $instances
   }
   if ($instances.Count -gt 0) {
@@ -52,7 +41,6 @@ if ($null -ne $task) {
         pid = [int]$_.ProcessId
         parent = [int]$_.ParentProcessId
         executable = $_.ExecutablePath
-        commandLine = $_.CommandLine
         created = $(if ($null -ne $_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null })
       }
     })
@@ -65,11 +53,8 @@ type ProcessInfo = {
   pid: number;
   parent: number;
   executable: string | null;
-  commandLine: string | null;
   created: string | null;
 };
-
-type TaskInstance = { id: string; enginePid: number };
 
 type Snapshot = {
   name: string;
@@ -77,23 +62,18 @@ type Snapshot = {
   task: null | {
     state: number;
     enabled: boolean;
-    principal: string;
-    logonType: number;
     description: string;
-    command: string;
-    arguments: string;
-    instances: TaskInstance[];
+    instances: number[];
   };
   processes: ProcessInfo[];
 };
 
-function powershell(script: string, input?: object): string {
+function powershell(script: string): string {
   const result = spawnSync(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-Command", script],
     {
       encoding: "utf8",
-      env: { ...process.env, MATE_SERVICE_INPUT: JSON.stringify(input ?? {}) },
       windowsHide: true,
       maxBuffer: 16 * 1024 * 1024,
     },
@@ -123,40 +103,9 @@ function quotedArgument(value: string): string {
   return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
 }
 
-function commandArguments(commandLine: string): string[] {
-  const result: string[] = [];
-  let argument = "";
-  let quoted = false;
-  for (let index = 0; index < commandLine.length; index += 1) {
-    const character = commandLine[index]!;
-    if (character === "\\") {
-      let count = 1;
-      while (commandLine[index + count] === "\\") count += 1;
-      if (commandLine[index + count] === '"') {
-        argument += "\\".repeat(Math.floor(count / 2));
-        if (count % 2 === 0) quoted = !quoted;
-        else argument += '"';
-        index += count;
-      } else {
-        argument += "\\".repeat(count);
-        index += count - 1;
-      }
-    } else if (character === '"') {
-      quoted = !quoted;
-    } else if (/\s/.test(character) && !quoted) {
-      if (argument.length > 0) result.push(argument);
-      argument = "";
-    } else {
-      argument += character;
-    }
-  }
-  if (argument.length > 0) result.push(argument);
-  return result;
-}
-
 export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
   const runtime = join(paths.program, bundle.runtime);
-  const script = join(paths.program, bundle.script);
+  const script = join(paths.program, "lib/mate.mjs");
   const argumentsText = `${quotedArgument(script)} node run --service`;
   const log = join(paths.data, "node.log");
 
@@ -165,12 +114,7 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
     const task = snapshot.task;
     let ownership = markedFileOwnership(paths.unit, `<!-- ${MARKER} -->`);
     if (task !== null) {
-      const owned =
-        task.principal === snapshot.sid &&
-        task.logonType === 3 &&
-        task.description === MARKER &&
-        samePath(task.command, runtime) &&
-        task.arguments === argumentsText;
+      const owned = task.description === MARKER;
       if (!owned || ownership === "foreign") ownership = "foreign";
       else ownership = "mate";
     }
@@ -204,30 +148,15 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
     snapshot: Snapshot,
     process: ProcessInfo,
     since: string,
-  ): TaskInstance | undefined {
-    if (
-      !samePath(process.executable, runtime) ||
-      process.commandLine === null ||
-      process.created === null
-    )
-      return undefined;
+  ): number | undefined {
+    if (!samePath(process.executable, runtime) || process.created === null) return undefined;
     const created = Date.parse(process.created);
     if (!Number.isFinite(created) || created > Date.parse(since)) return undefined;
-    const args = commandArguments(process.commandLine);
-    if (
-      args.length !== 5 ||
-      !samePath(args[0]!, runtime) ||
-      !samePath(args[1]!, script) ||
-      args[2] !== "node" ||
-      args[3] !== "run" ||
-      args[4] !== "--service"
-    )
-      return undefined;
     const byPid = new Map(snapshot.processes.map((entry) => [entry.pid, entry]));
     const visited = new Set<number>();
     let ancestor: ProcessInfo | undefined = process;
     while (ancestor !== undefined && !visited.has(ancestor.pid)) {
-      const instance = snapshot.task?.instances.find((entry) => entry.enginePid === ancestor!.pid);
+      const instance = snapshot.task?.instances.find((pid) => pid === ancestor!.pid);
       if (instance !== undefined) return instance;
       visited.add(ancestor.pid);
       const parent = byPid.get(ancestor.parent);
@@ -249,53 +178,37 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
       throw new Error(`${paths.unit} is not Mate's service; it was left alone.`);
     if (!before.state.loaded) return ["No node service is installed; nothing to stop."];
     schtasks("/Change", "/TN", before.snapshot.name, "/DISABLE");
-    const handled = new Set<string>();
-    const deadline = Date.now() + 15_000;
-    while (true) {
-      const { snapshot, state } = read();
-      if (state.ownership === "foreign")
-        throw new Error(
-          "The task definition changed while stopping; its process and program were left in place.",
-        );
-      if (state.activity === "stopped") break;
-      const instances = snapshot.task?.instances ?? [];
-      for (const process of snapshot.processes) {
-        const instance = processInstance(snapshot, process, new Date().toISOString());
-        if (instance === undefined || handled.has(instance.id)) continue;
-        const killed = spawnSync("taskkill.exe", ["/PID", String(process.pid), "/T", "/F"], {
-          encoding: "utf8",
-          windowsHide: true,
-        });
-        if (killed.error !== undefined) throw new Error(`taskkill failed: ${killed.error.message}`);
-        if (killed.status !== 0) {
-          throw new Error(
-            `Could not confirm that the node process tree stopped: ${killed.stderr.trim() || killed.stdout.trim()}. The task is disabled; its program was left in place.`,
-          );
-        }
-        handled.add(instance.id);
-      }
-      if (
-        (state.activity === "running" && instances.length === 0) ||
-        instances.some((instance) => !handled.has(instance.id))
-      ) {
+    const { snapshot, state } = read();
+    if (state.ownership === "foreign")
+      throw new Error("The task definition changed while stopping; its process was left alone.");
+    for (const instance of snapshot.task?.instances ?? []) {
+      const process = snapshot.processes.find(
+        (entry) => processInstance(snapshot, entry, new Date().toISOString()) === instance,
+      );
+      if (process === undefined)
         throw new Error(
           "The node task is running, but its process identity could not be verified. It is now disabled; its process and program were left in place.",
         );
-      }
-      if (instances.length > 0) {
-        try {
-          schtasks("/End", "/TN", snapshot.name);
-        } catch (error) {
-          if (read().state.activity !== "stopped") throw error;
-        }
-      }
-      if (state.activity === "unknown")
+      const killed = spawnSync("taskkill.exe", ["/PID", String(process.pid), "/T", "/F"], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      if (killed.error !== undefined || killed.status !== 0)
         throw new Error(
-          "The node task state is unknown; its process and program were left in place.",
+          `Could not stop the node process tree: ${killed.error?.message ?? (killed.stderr.trim() || killed.stdout.trim())}. The task is disabled; its program was left in place.`,
         );
-      if (Date.now() >= deadline)
-        throw new Error("The node task has not stopped; its program was left in place.");
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+    if (state.activity !== "stopped") {
+      let endError;
+      try {
+        schtasks("/End", "/TN", snapshot.name);
+      } catch (error) {
+        endError = error;
+      }
+      if (read().state.activity !== "stopped")
+        throw (
+          endError ?? new Error("The node task has not stopped; its program was left in place.")
+        );
     }
     return ["Stopped and disabled the node service; it stays stopped until `mate node start`."];
   }
@@ -331,8 +244,8 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
       const report: string[] = [];
       const bytes = Buffer.from(`\uFEFF${task}`, "utf16le");
       if (writeServiceFile(paths.unit, bytes)) report.push(`Wrote ${paths.unit}.`);
-      if (!state.loaded) {
-        schtasks("/Create", "/TN", snapshot.name, "/XML", paths.unit);
+      if (state.activity === "stopped") {
+        schtasks("/Create", "/TN", snapshot.name, "/XML", paths.unit, "/F");
         report.push(`Registered ${snapshot.name}; it is disabled until \`mate node start\`.`);
       }
       return report;

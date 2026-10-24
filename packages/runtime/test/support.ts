@@ -10,7 +10,6 @@ import {
   type ChatPort,
   type Clock,
   type CredentialsLookup,
-  type WorkspacePort,
 } from "../src/index.ts";
 
 export { FakeClock, FakeWorkspace, toolText as text } from "@mate/testkit";
@@ -26,7 +25,6 @@ export type TestAgent = {
     chat?: ChatPort;
     /** Read at every model request; defaults to a fixed key for every provider. */
     credentials?: CredentialsLookup;
-    workspace?: WorkspacePort;
   }): Promise<{ runtime: AgentRuntime; database: () => FaultyDatabase }>;
 };
 
@@ -55,7 +53,7 @@ export async function testAgent(
       const runtime = await openAgentRuntime({
         file,
         credentials: options.credentials ?? (() => ({ apiKey: "test-key" })),
-        workspace: options.workspace ?? workspace,
+        workspace,
         resolveModel: ({ provider: name, modelId }) => {
           const model = catalog.getModel(name, modelId);
           return model === undefined

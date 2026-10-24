@@ -2,42 +2,35 @@ import { bundleLayouts } from "./bundle-layout.ts";
 import { launchd } from "./launchd.ts";
 import { posixLauncher, windowsLauncher } from "./launcher.ts";
 import { darwinLayout, linuxLayout, windowsLayout } from "./layout.ts";
-import { posixPrivateFiles, windowsPrivateFiles } from "./private-files.ts";
 import { scheduler } from "./scheduler.ts";
-import { darwinCommands, linuxCommands, windowsCommands } from "./shells.ts";
+import { posixCommands, windowsCommands } from "./shells.ts";
 import { systemd } from "./systemd.ts";
 import type { Platform, PlatformId } from "./types.ts";
 import { posixWorkspacePaths, windowsWorkspacePaths } from "./workspace-paths.ts";
 
 export const platforms: Record<PlatformId, Platform> = {
   linux: {
-    id: "linux",
-    bundle: bundleLayouts.linux,
     layout: linuxLayout,
-    commands: linuxCommands,
+    commands: posixCommands,
     service: (paths) => systemd(paths, bundleLayouts.linux),
     launcher: posixLauncher(bundleLayouts.linux),
-    privateFiles: posixPrivateFiles,
+    checkIdentityMode: true,
     workspacePaths: posixWorkspacePaths,
   },
   darwin: {
-    id: "darwin",
-    bundle: bundleLayouts.darwin,
     layout: darwinLayout,
-    commands: darwinCommands,
+    commands: posixCommands,
     service: (paths) => launchd(paths, bundleLayouts.darwin),
     launcher: posixLauncher(bundleLayouts.darwin),
-    privateFiles: posixPrivateFiles,
+    checkIdentityMode: true,
     workspacePaths: posixWorkspacePaths,
   },
   win32: {
-    id: "win32",
-    bundle: bundleLayouts.win32,
     layout: windowsLayout,
     commands: windowsCommands,
     service: (paths) => scheduler(paths, bundleLayouts.win32),
     launcher: windowsLauncher(bundleLayouts.win32),
-    privateFiles: windowsPrivateFiles,
+    checkIdentityMode: false,
     workspacePaths: windowsWorkspacePaths,
   },
 };

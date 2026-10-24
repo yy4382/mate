@@ -3,7 +3,7 @@ import { dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import type { WorkspacePaths } from "./types.ts";
 
 export const posixWorkspacePaths: WorkspacePaths = {
-  async resolve(root, _input, resolved) {
+  async resolve(root, _configuredRoot, _input, resolved) {
     const real = await realExistingPrefix(resolved);
     return real !== undefined && inside(root, resolved) && inside(root, real)
       ? resolved
@@ -12,35 +12,23 @@ export const posixWorkspacePaths: WorkspacePaths = {
 };
 
 export const windowsWorkspacePaths: WorkspacePaths = {
-  async resolve(root, input, resolved) {
+  async resolve(root, configuredRoot, input, resolved) {
     const segments = input.split(/[\\/]/);
     if (segments.includes("..")) return undefined;
-    if (segments.some((segment) => segment !== "." && /[. ]$/.test(segment))) return undefined;
-    if (segments.some((segment) => /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment)))
-      return undefined;
-    if (
-      segments.some(
-        (segment, index) => segment.includes(":") && !(index === 0 && /^[a-z]:$/i.test(segment)),
-      )
-    )
-      return undefined;
     if (input.startsWith("\\\\") || input.startsWith("//")) return undefined;
     if (/^[a-z]:(?![\\/])/i.test(input)) return undefined;
     if (/^[\\/](?![\\/])/.test(input)) return undefined;
 
-    const canonicalRoot = await realpath(root).catch(() => undefined);
-    const canonical = await windowsPathWithoutLinks(resolved);
-    return canonicalRoot !== undefined &&
-      canonical !== undefined &&
-      insideWindows(canonicalRoot, canonical)
-      ? canonical
-      : undefined;
+    if (!insideWindows(root, resolved)) {
+      if (!insideWindows(configuredRoot, resolved)) return undefined;
+      resolved = win32.join(root, win32.relative(configuredRoot, resolved));
+    }
+    return windowsPathWithoutLinks(root, resolved);
   },
 };
 
-async function windowsPathWithoutLinks(path: string): Promise<string | undefined> {
-  const root = win32.parse(path).root;
-  const segments = path.slice(root.length).split(win32.sep).filter(Boolean);
+async function windowsPathWithoutLinks(root: string, path: string): Promise<string | undefined> {
+  const segments = win32.relative(root, path).split(win32.sep).filter(Boolean);
   let current = root;
   for (let index = 0; index < segments.length; index++) {
     const next = win32.join(current, segments[index]!);
@@ -50,12 +38,12 @@ async function windowsPathWithoutLinks(path: string): Promise<string | undefined
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
-      const existing = await realpath(current).catch(() => undefined);
-      return existing === undefined ? undefined : win32.join(existing, ...segments.slice(index));
+      return win32.join(current, ...segments.slice(index));
     }
-    current = next;
+    current = await realpath(next);
+    if (!insideWindows(root, current)) return undefined;
   }
-  return realpath(current).catch(() => undefined);
+  return current;
 }
 
 function inside(root: string, path: string): boolean {

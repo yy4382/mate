@@ -151,21 +151,11 @@ export function renameNode(db: DatabaseSync, nodeId: string, name: string): void
       "a node name must be 1 to 32 lowercase letters, digits or hyphens, starting with a letter or digit",
     );
   }
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const node = db.prepare("SELECT name FROM nodes WHERE id=?").get(nodeId);
-    if (node === undefined) throw new GatewayError("unknown-node", `no paired node ${nodeId}`);
-    if (node.name !== name) {
-      if (db.prepare("SELECT id FROM nodes WHERE name=?").get(name) !== undefined) {
-        throw new GatewayError("name-taken", `node name ${name} is already taken`);
-      }
-      db.prepare("UPDATE nodes SET name=? WHERE id=?").run(name, nodeId);
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  const owner = db.prepare("SELECT id FROM nodes WHERE name=?").get(name);
+  if (owner !== undefined && owner.id !== nodeId)
+    throw new GatewayError("name-taken", `node name ${name} is already taken`);
+  const updated = db.prepare("UPDATE nodes SET name=? WHERE id=?").run(name, nodeId);
+  if (updated.changes === 0) throw new GatewayError("unknown-node", `no paired node ${nodeId}`);
 }
 
 function availableName(db: DatabaseSync, hostname: string, nodeId: string): string {

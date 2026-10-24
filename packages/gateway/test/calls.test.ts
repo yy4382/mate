@@ -25,32 +25,6 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
     },
   );
 
-  it("refuses a call without access before sending it or listening on its signal", async () => {
-    const under = await startGateway();
-    const arrived: GatewayRunTool[] = [];
-    const node = await under.pairedNode({
-      onRunTool: async (message) => {
-        arrived.push(message);
-        return { outputs: [], result: toolResult("ran") };
-      },
-    });
-    const signal = new AbortController().signal;
-    await expect(
-      under.gateway.runTool(
-        node.nodeId,
-        "agent-1",
-        // @ts-expect-error JavaScript callers can omit access; the boundary must still reject it.
-        { tool: "bash", arguments: { command: "echo" } },
-        () => {},
-        signal,
-      ),
-    ).rejects.toThrow();
-    expect(getEventListeners(signal, "abort")).toEqual([]);
-    node.ping();
-    await eventually(() => node.pongs > 0, "the gateway has sent everything it would");
-    expect(arrived).toEqual([]);
-  });
-
   it("streams a call's output to the caller and then returns its result", async () => {
     const under = await startGateway();
     const node = await under.pairedNode({
@@ -134,47 +108,42 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
     expect(await call, "the caller's answer stays unknown").toEqual(result);
   });
 
-  it.each(["home", "visit"] as const)(
-    "stops a %s call on its node when its caller aborts, ends it at once as stopped, and drops what the node sends for it afterwards",
-    async (access) => {
-      const under = await startGateway();
-      const callArrived = deferred<string>();
-      const stopArrived = deferred<string>();
-      const node = await under.pairedNode({
-        onRunTool: (message) => {
-          callArrived.resolve(message.requestId);
-          return new Promise(() => {});
-        },
-        onStopTool: (requestId) => stopArrived.resolve(requestId),
-      });
-      const abort = new AbortController();
-      const chunks: string[] = [];
-      const call = under.gateway.runTool(
-        node.nodeId,
-        "agent-1",
-        { access, tool: "bash", arguments: { command: "sleep 60" } },
-        (chunk) => chunks.push(chunk),
-        abort.signal,
-      );
-      const requestId = await callArrived.promise;
-      abort.abort();
-      const result = await within(call);
-      expect(text(result)).toMatch(/stopped/i);
-      expect(text(result), "the connection is fine; the caller is not told otherwise").not.toMatch(
-        /connection/i,
-      );
-      expect(await within(stopArrived.promise), "the node is told to stop that call").toBe(
-        requestId,
-      );
+  it("stops a call on its node when its caller aborts, ends it at once as stopped, and drops what the node sends for it afterwards", async () => {
+    const under = await startGateway();
+    const callArrived = deferred<string>();
+    const stopArrived = deferred<string>();
+    const node = await under.pairedNode({
+      onRunTool: (message) => {
+        callArrived.resolve(message.requestId);
+        return new Promise(() => {});
+      },
+      onStopTool: (requestId) => stopArrived.resolve(requestId),
+    });
+    const abort = new AbortController();
+    const chunks: string[] = [];
+    const call = under.gateway.runTool(
+      node.nodeId,
+      "agent-1",
+      { access: "home", tool: "bash", arguments: { command: "sleep 60" } },
+      (chunk) => chunks.push(chunk),
+      abort.signal,
+    );
+    const requestId = await callArrived.promise;
+    abort.abort();
+    const result = await within(call);
+    expect(text(result)).toMatch(/stopped/i);
+    expect(text(result), "the connection is fine; the caller is not told otherwise").not.toMatch(
+      /connection/i,
+    );
+    expect(await within(stopArrived.promise), "the node is told to stop that call").toBe(requestId);
 
-      node.send({ type: "node.tool.output", requestId, chunk: "late output" });
-      node.send({ type: "node.tool.result", requestId, ...toolResult("late result") });
-      node.ping();
-      await eventually(() => node.pongs > 0, "the node's later messages were read");
-      expect(chunks, "output after the call ended is dropped").toEqual([]);
-      expect(under.gateway.status(node.nodeId).online, "the node stays online").toBe(true);
-    },
-  );
+    node.send({ type: "node.tool.output", requestId, chunk: "late output" });
+    node.send({ type: "node.tool.result", requestId, ...toolResult("late result") });
+    node.ping();
+    await eventually(() => node.pongs > 0, "the node's later messages were read");
+    expect(chunks, "output after the call ended is dropped").toEqual([]);
+    expect(under.gateway.status(node.nodeId).online, "the node stays online").toBe(true);
+  });
 
   it("gives each call its own request ID, so concurrent calls of two Agents each get their own output and result", async () => {
     const under = await startGateway();

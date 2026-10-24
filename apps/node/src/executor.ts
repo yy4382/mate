@@ -41,16 +41,7 @@ export class Executor {
     if (call.tool !== "bash") return runFileTool(call.tool, call.arguments, directory, signal);
     const args = parseBashArguments(call.arguments);
     if (!args.ok) return failure(args.error);
-    const env = { ...process.env };
-    if (process.platform === "win32") {
-      for (const key of Object.keys(env)) {
-        if (key.toUpperCase() === "PWD" || (home && key.toUpperCase() === "HOME")) {
-          delete env[key];
-        }
-      }
-    }
-    env["PWD"] = directory;
-    if (home) env["HOME"] = directory;
+    const env = { ...process.env, PWD: directory, ...(home ? { HOME: directory } : {}) };
     return this.#commands.run(
       {
         command: args.arguments.command,

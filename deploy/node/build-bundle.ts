@@ -69,7 +69,7 @@ for (const runtime of runtimes) {
     { path: layout.runtime, content: files.node, executable: true },
     { path: "node/LICENSE", content: files.license, executable: false },
     {
-      path: layout.script,
+      path: "lib/mate.mjs",
       content: Buffer.from(script.outputFiles[0]!.contents),
       executable: false,
     },

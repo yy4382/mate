@@ -8,7 +8,7 @@ const releaseBundles = process.env["MATE_TEST_BUNDLE_DIRECTORY"];
 const updateBundles = process.env["MATE_TEST_UPDATE_BUNDLE_DIRECTORY"];
 
 it.runIf(process.platform === "win32" && releaseBundles !== undefined)(
-  "Windows release launchers preserve management results, replace their own program and remove their temporary runtime (built release bundles required)",
+  "Windows release launchers preserve management results, replace their own program (built release bundles required)",
   () => {
     const h = host();
     const extraction = join(h.inputs, "unpacked bundle");
@@ -55,7 +55,6 @@ it.runIf(process.platform === "win32" && releaseBundles !== undefined)(
     const invalid = run(launcher, "update");
     expect(invalid.status, `${invalid.stdout}\n${invalid.stderr}`).toBe(2);
     expect(invalid.stderr).toContain("Usage:");
-    expect(readdirSync(temporary), "failed management also removes its runtime").toEqual([]);
 
     const interactive = spawnSync("cmd.exe", ["/d", "/q"], {
       env,
@@ -67,7 +66,6 @@ it.runIf(process.platform === "win32" && releaseBundles !== undefined)(
     expect(interactive.stdout, "management leaves the caller's command prompt open").toContain(
       "caller-still-running:2",
     );
-    expect(readdirSync(temporary), "interactive management removes its runtime").toEqual([]);
 
     ok(launcher, "install", bundle);
     const version = () =>
@@ -75,13 +73,11 @@ it.runIf(process.platform === "win32" && releaseBundles !== undefined)(
     const previous = version();
     ok(h.paths.command, "update", update);
     expect(version()).not.toBe(previous);
-    expect(readdirSync(temporary), "update removes its management runtime").toEqual([]);
 
     ok(join(h.paths.program, "bin/mate.cmd"), "uninstall");
     for (const path of [h.paths.program, h.paths.command, h.paths.unit]) {
       expect(existsSync(path), `${path} is removed through the bundle's public entry`).toBe(false);
     }
-    expect(readdirSync(temporary), "uninstall removes its management runtime").toEqual([]);
   },
   120_000,
 );

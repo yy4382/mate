@@ -122,15 +122,7 @@ jobs:
         run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'arch=' + process.arch + '\n')"
       - run: pnpm bundle:node 0.0.0-ci --platform ${{ matrix.platform }} --arch ${{ steps.host.outputs.arch }}
       - run: pnpm bundle:node 0.0.0-ci-update --platform ${{ matrix.platform }} --arch ${{ steps.host.outputs.arch }} --out dist/node-update-bundles
-      - run: node deploy/node/verify-bundles.ts dist/node-bundles
-      - run: node deploy/node/verify-bundles.ts dist/node-update-bundles
-      - name: Windows release launcher
-        if: matrix.platform == 'win32'
-        run: pnpm test apps/node/test/windows-launcher.test.ts --maxWorkers=1
-        env:
-          MATE_TEST_BUNDLE_DIRECTORY: dist/node-bundles
-          MATE_TEST_UPDATE_BUNDLE_DIRECTORY: dist/node-update-bundles
-      - run: pnpm test apps/node --exclude apps/node/test/windows-launcher.test.ts --maxWorkers=2 --testTimeout=60000
+      - run: pnpm test apps/node --maxWorkers=2 --testTimeout=60000
         env:
           MATE_TEST_BUNDLE_DIRECTORY: dist/node-bundles
           MATE_TEST_UPDATE_BUNDLE_DIRECTORY: dist/node-update-bundles

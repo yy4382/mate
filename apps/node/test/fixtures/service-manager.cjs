@@ -68,17 +68,8 @@ if (tool === "systemctl") {
     state.journal.push(args);
     print("a journal line");
   } else {
-    if (
-      state.active === "activating" &&
-      state.enabled === "disabled" &&
-      state.queuedReads !== undefined
-    ) {
-      if (state.queuedReads === 0) state.active = "active";
-      else state.queuedReads -= 1;
-    }
     const sid = "S-1-5-21-12345";
     const runtime = path.join(paths.program, "node/node.exe");
-    const script = path.join(paths.program, "lib/mate.mjs");
     const states = {
       active: 4,
       inactive: 1,
@@ -93,12 +84,8 @@ if (tool === "systemctl") {
       : {
           state: states[state.active] ?? 0,
           enabled: state.enabled === "enabled",
-          principal: sid,
-          logonType: 3,
           description: state.foreignDefinition ? "Someone else's task" : "Written by mate node.",
-          command: runtime,
-          arguments: '"' + script + '" node run --service',
-          instances: state.active === "active" ? [{ id: "instance-" + pid, enginePid: pid }] : [],
+          instances: state.active === "active" ? [pid] : [],
         };
     const processes =
       state.active !== "active"
@@ -108,7 +95,6 @@ if (tool === "systemctl") {
               pid,
               parent: 1,
               executable: state.unverifiedProcess ? "C:\\unrelated.exe" : runtime,
-              commandLine: '"' + runtime + '" "' + script + '" node run --service',
               created: state.created ?? "2000-01-01T00:00:00.000Z",
             },
           ];

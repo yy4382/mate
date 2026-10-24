@@ -1,45 +1,32 @@
-import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { darwinProcesses, linuxProcesses, PosixProcessGroup } from "./posix-processes.ts";
+import { spawn, spawnSync } from "node:child_process";
+import { PosixProcessGroup } from "./posix-processes.ts";
 import type { CommandProcess, ShellRequest } from "./types.ts";
-import { WindowsProcessTree } from "./windows-processes.ts";
 
-export const linuxCommands = {
+export const posixCommands = {
   start(request: ShellRequest): CommandProcess {
-    return startPosix(request, linuxProcesses);
+    const child = spawn("/bin/sh", ["-c", request.command], {
+      cwd: request.cwd,
+      env: request.env,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const group = child.pid === undefined ? undefined : new PosixProcessGroup(child.pid);
+    return {
+      child,
+      kill() {
+        group?.kill();
+        return { ok: true };
+      },
+      background() {
+        return group?.running() ? "running" : "finished";
+      },
+    };
   },
 };
-
-export const darwinCommands = {
-  start(request: ShellRequest): CommandProcess {
-    return startPosix(request, darwinProcesses);
-  },
-};
-
-function startPosix(request: ShellRequest, processes: typeof linuxProcesses): CommandProcess {
-  const child = spawn("/bin/sh", ["-c", request.command], {
-    cwd: request.cwd,
-    env: request.env,
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const group = child.pid === undefined ? undefined : new PosixProcessGroup(child.pid, processes);
-  return {
-    child,
-    kill() {
-      return group?.kill() ?? { ok: true };
-    },
-    background() {
-      return group?.background() ?? "finished";
-    },
-  };
-}
 
 export const windowsCommands = {
   start(request: ShellRequest): CommandProcess {
-    const marker = `mate-command-${randomUUID()}`;
     const prefix = [
-      `$mateCommand = '${marker}'`,
       "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)",
       "$OutputEncoding = [Console]::OutputEncoding",
     ];
@@ -51,7 +38,12 @@ export const windowsCommands = {
       prefix.push("Set-Variable -Name HOME -Value $env:HOME -Force");
     }
     const quotedCommand = request.command.replace(/['\u2018-\u201b]/g, "$&$&");
-    const invocation = `${prefix.join("; ")}\n& ([ScriptBlock]::Create('${quotedCommand}'))`;
+    const invocation = [
+      prefix.join("; "),
+      `. ([ScriptBlock]::Create('${quotedCommand}'))`,
+      "$mateCommandSucceeded = $?",
+      "if ($LASTEXITCODE) { exit $LASTEXITCODE } elseif (-not $mateCommandSucceeded) { exit 1 }",
+    ].join("\n");
     const child = spawn(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-Command", invocation],
@@ -62,14 +54,34 @@ export const windowsCommands = {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    const tree = new WindowsProcessTree(child, marker);
+    let exited = false;
+    let killed = false;
+    child.once("exit", () => {
+      exited = true;
+    });
+    child.once("error", () => {
+      exited = true;
+    });
     return {
       child,
       kill() {
-        return tree.kill();
+        if (child.pid === undefined || exited || killed) return { ok: true };
+        const result = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+          stdio: ["ignore", "pipe", "pipe"],
+          encoding: "utf8",
+          timeout: 15_000,
+          windowsHide: true,
+        });
+        killed = result.status === 0;
+        if (killed) return { ok: true };
+        const reason = result.error?.message || result.stderr.trim() || result.stdout.trim();
+        return {
+          ok: false,
+          reason: reason || `Windows process-tree termination exited with code ${result.status}`,
+        };
       },
       background() {
-        return tree.background();
+        return exited || killed ? "finished" : "running";
       },
     };
   },

@@ -1,26 +1,20 @@
 {
   "ownerPassword": "fixture owner password",
-  "ownerSessionToken": "582A6MREXahTM86yy3UAjvGSl03pkL5kBYoMFfWIlNI",
+  "ownerSessionToken": "wAQxbJBF9du5sCVz1hvQ3ouxyeVO7x8q-ijdB5TuQVs",
   "openaiApiKey": "sk-fixture-not-a-real-key",
-  "pairingToken": "T8601BftBL-U1JqzucZb4DeV8L9mSjNBGx29Af732h8",
+  "pairingToken": "OPWJVasxxJ7l6P8RJ1ZlD4gSXG9LC2blStMVzOxJJHk",
   "pairedNodes": [
     {
       "nodeId": "abcdef01-0000-4000-8000-000000000002",
-      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJOXnuqnMB15Dxxd/R68xomiaWWjOVb3O6e/95kUftFR\n-----END PRIVATE KEY-----\n",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAdi0LLqqVqXWbq9EXkk8TAoKaA5Y/qkngnfEy26y3EjI=\n-----END PUBLIC KEY-----\n",
-      "lastConnectedAt": "2026-10-23T17:17:51.566Z"
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIHtWP+9+St58DdVTIfutUASciz22k8/FphRTmR+0bXrT\n-----END PRIVATE KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAFgjCy1xL583yJtgFIMyILJgTmcBK/cpTcFsehWyU8RE=\n-----END PUBLIC KEY-----\n",
+      "lastConnectedAt": "2026-10-24T02:48:02.181Z"
     },
     {
       "nodeId": "abcdef01-0000-4000-8000-000000000001",
-      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIO375W2qkrMibrVU6WHaqgbe55mw6nL6QZiNXIR7jzVn\n-----END PRIVATE KEY-----\n",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAa23Lbm/fdJFVc2qmboJrfDUFFGChqVaQ+3Ef4cEHvxM=\n-----END PUBLIC KEY-----\n",
-      "lastConnectedAt": "2026-10-23T17:17:51.584Z"
-    },
-    {
-      "nodeId": "12345678-0000-4000-8000-000000000003",
-      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJVYp6sdoe3LMMuwf4Ihpb79b/gqFRQNW108Fsg4A9aI\n-----END PRIVATE KEY-----\n",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAYvK/BnVravFqYahr5M/K3syJ1TxJHGBc2U7ncSoBQ18=\n-----END PUBLIC KEY-----\n",
-      "lastConnectedAt": "2026-10-23T17:17:51.586Z"
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINHUTleseCpa6jUFrr6sIJ/hg6JY2W8i36htxYUmJBjS\n-----END PRIVATE KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXfFk+0GzN8qQRSRkChZBDJnsJfzHc1pLyxUZl6tOYRk=\n-----END PUBLIC KEY-----\n",
+      "lastConnectedAt": "2026-10-24T02:48:02.203Z"
     }
   ],
   "releasedAgent": {

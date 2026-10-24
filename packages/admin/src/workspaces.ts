@@ -18,56 +18,53 @@ export function gatewayWorkspaces(
         throw new Error(`preparing the workspace on node ${nodeId} failed: ${reason}`);
       }
     },
-    port: (homeNodeId, agentId) => ({
-      async run({ node: name, tool, arguments: args }, output, signal) {
-        const nodes = gateway.nodes();
-        const target = nodes.find((node) =>
-          name === undefined ? node.nodeId === homeNodeId : node.name === name,
-        );
-        const access = target && store.nodeAccess(agentId, homeNodeId, target.nodeId);
-        if (target === undefined || access === undefined) {
-          const available = nodes
-            .filter((node) => store.nodeAccess(agentId, homeNodeId, node.nodeId) !== undefined)
-            .map((node) => node.name);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Node ${name ?? "主 node"} 不可用。可访问的 node：${available.join(", ")}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-        const result = await gateway.runTool(
-          target.nodeId,
-          agentId,
-          { tool, arguments: args, access },
-          output,
-          signal,
-        );
-        return result.isError
-          ? {
-              ...result,
-              content: [{ type: "text", text: `Node ${target.name}\n` }, ...result.content],
-            }
-          : result;
-      },
-      async nodes() {
-        return gateway.nodes().flatMap((node) => {
+    port: (homeNodeId, agentId) => {
+      const accessibleNodes = () =>
+        gateway.nodes().flatMap((node) => {
           const access = store.nodeAccess(agentId, homeNodeId, node.nodeId);
-          return access === undefined
-            ? []
-            : [
-                {
-                  name: node.name,
-                  online: node.online,
-                  platform: node.system?.platform ?? null,
-                  home: access === "home",
-                },
-              ];
+          return access === undefined ? [] : [{ node, access }];
         });
-      },
-    }),
+      return {
+        async run({ node: name, tool, arguments: args }, output, signal) {
+          const accessible = accessibleNodes();
+          const target = accessible.find(({ node }) =>
+            name === undefined ? node.nodeId === homeNodeId : node.name === name,
+          );
+          if (target === undefined) {
+            const available = accessible.map(({ node }) => node.name);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Node ${name ?? homeNodeId} is unavailable. Accessible nodes: ${available.join(", ")}`,
+                },
+              ],
+              isError: true,
+            };
+          }
+          const { node, access } = target;
+          if (!node.online)
+            return {
+              content: [{ type: "text", text: `Node offline: ${node.name}` }],
+              isError: true,
+            };
+          return gateway.runTool(
+            node.nodeId,
+            agentId,
+            { tool, arguments: args, access },
+            output,
+            signal,
+          );
+        },
+        async nodes() {
+          return accessibleNodes().map(({ node, access }) => ({
+            name: node.name,
+            online: node.online,
+            platform: node.system?.platform ?? null,
+            home: access === "home",
+          }));
+        },
+      };
+    },
   };
 }

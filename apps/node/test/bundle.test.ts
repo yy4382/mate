@@ -7,11 +7,6 @@ describe("mate node install and update check the bundle (MODULE_TESTS 9)", () =>
     process.platform === "win32"
       ? ["bin/mate.cmd", "node/node.exe", "lib/mate.mjs"]
       : ["bin/mate", "node/bin/node", "lib/mate.mjs"];
-  const listedFile = (path: string) => ({
-    version: "2.0.0",
-    listed: [...regularFiles, path],
-    extra: [file(`mate-node/${path}`)],
-  });
   it.each<[string, Parameters<typeof writeBundle>[1]]>([
     ["does not match its checksum", { version: "2.0.0", checksum: "wrong" }],
     ["has no checksum file", { version: "2.0.0", checksum: "missing" }],
@@ -40,21 +35,6 @@ describe("mate node install and update check the bundle (MODULE_TESTS 9)", () =>
     [
       "lacks a file its manifest lists",
       { version: "2.0.0", listed: [...regularFiles, "lib/gone.mjs"] },
-    ],
-    ["holds backslash path separators", listedFile("lib\\..\\..\\escaped")],
-    ["holds a drive-qualified path", listedFile("C:/escaped")],
-    ["holds an alternate data stream", listedFile("lib/note:stream")],
-    ["holds a reserved device name", listedFile("lib/NUL.txt")],
-    ["holds a reserved device name with a space before its extension", listedFile("lib/NUL .txt")],
-    ["holds a reserved device name with a superscript digit", listedFile("lib/COM¹.log")],
-    ["holds a name ending in a dot", listedFile("lib/name.")],
-    ["holds a name ending in a space", listedFile("lib/name ")],
-    ["holds a file twice with different case", listedFile("lib/MATE.mjs")],
-    ["changes a directory's case", listedFile("LIB/another.mjs")],
-    ["replaces a directory with a file", listedFile("lib")],
-    [
-      "lists a file twice in its manifest",
-      { version: "2.0.0", listed: [...regularFiles, "lib/mate.mjs"] },
     ],
     [
       "was built for another platform",

@@ -1,9 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { crc32, inflateRawSync } from "node:zlib";
 import { bundleLayouts } from "../../apps/node/src/platforms/bundle-layout.ts";
 import type { PlatformId } from "../../apps/node/src/platforms/types.ts";
 
@@ -74,9 +72,6 @@ export async function readNodeRuntime(
     );
     if (!response.ok) throw new Error(`downloading ${name}: HTTP ${response.status}`);
     content = Buffer.from(await response.arrayBuffer());
-    if (sha256(content) !== runtime.sha256) {
-      throw new Error(`downloaded ${name} does not match the pinned SHA-256`);
-    }
     writeFileSync(`${archive}.part`, content);
     renameSync(`${archive}.part`, archive);
   }
@@ -86,115 +81,20 @@ export async function readNodeRuntime(
   }
   const nodePath = `${name}/${layout.runtime.slice("node/".length)}`;
   const licensePath = `${name}/LICENSE`;
-  if (runtime.format === "zip") {
-    const files = readZipFiles(content, [nodePath, licensePath]);
-    return { node: files.get(nodePath)!, license: files.get(licensePath)! };
-  }
-  const unpacked = mkdtempSync(join(tmpdir(), "mate-node-runtime-"));
-  try {
-    const result = spawnSync("tar", ["-xzf", archive, "-C", unpacked, nodePath, licensePath], {
-      stdio: "inherit",
-    });
+  const extract = (path: string): Buffer => {
+    const useUnzip = runtime.format === "zip" && process.platform !== "win32";
+    const command = useUnzip ? "unzip" : "tar";
+    const args = useUnzip ? ["-p", archive, path] : ["-xOf", archive, path];
+    const result = spawnSync(command, args, { maxBuffer: 256 * 1024 * 1024 });
     if (result.error !== undefined) throw result.error;
-    if (result.status !== 0) throw new Error(`tar could not unpack ${archive}`);
-    return {
-      node: readFileSync(join(unpacked, nodePath)),
-      license: readFileSync(join(unpacked, licensePath)),
-    };
-  } finally {
-    rmSync(unpacked, { recursive: true, force: true });
-  }
+    if (result.status !== 0) {
+      throw new Error(`${command} could not extract ${path}: ${result.stderr.toString()}`);
+    }
+    return result.stdout;
+  };
+  return { node: extract(nodePath), license: extract(licensePath) };
 }
 
 function sha256(content: Buffer): string {
   return createHash("sha256").update(content).digest("hex");
-}
-
-function readZipFiles(archive: Buffer, wanted: readonly string[]): Map<string, Buffer> {
-  let end = archive.length - 22;
-  const earliest = Math.max(0, end - 0xffff);
-  while (end >= earliest) {
-    if (
-      archive.readUInt32LE(end) === 0x06054b50 &&
-      end + 22 + archive.readUInt16LE(end + 20) === archive.length
-    ) {
-      break;
-    }
-    end -= 1;
-  }
-  if (end < earliest) throw new Error("Node zip has no central directory");
-  const count = archive.readUInt16LE(end + 10);
-  const directorySize = archive.readUInt32LE(end + 12);
-  const directoryOffset = archive.readUInt32LE(end + 16);
-  if (
-    archive.readUInt16LE(end + 4) !== 0 ||
-    archive.readUInt16LE(end + 6) !== 0 ||
-    archive.readUInt16LE(end + 8) !== count ||
-    count === 0xffff ||
-    directoryOffset + directorySize !== end
-  ) {
-    throw new Error("Node zip must use a single non-ZIP64 central directory");
-  }
-
-  const files = new Map<string, Buffer>();
-  let offset = directoryOffset;
-  for (let index = 0; index < count; index += 1) {
-    if (offset + 46 > end || archive.readUInt32LE(offset) !== 0x02014b50) {
-      throw new Error("Node zip has an invalid central directory entry");
-    }
-    const flags = archive.readUInt16LE(offset + 8);
-    const method = archive.readUInt16LE(offset + 10);
-    const checksum = archive.readUInt32LE(offset + 16);
-    const compressedSize = archive.readUInt32LE(offset + 20);
-    const size = archive.readUInt32LE(offset + 24);
-    const nameLength = archive.readUInt16LE(offset + 28);
-    const extraLength = archive.readUInt16LE(offset + 30);
-    const commentLength = archive.readUInt16LE(offset + 32);
-    const localOffset = archive.readUInt32LE(offset + 42);
-    const entryEnd = offset + 46 + nameLength + extraLength + commentLength;
-    if (entryEnd > end) throw new Error("Node zip has a truncated central directory entry");
-    const name = archive.toString("utf8", offset + 46, offset + 46 + nameLength);
-    offset = entryEnd;
-    if (!wanted.includes(name)) continue;
-    if (files.has(name)) throw new Error(`Node zip lists ${name} twice`);
-    if ((flags & 1) !== 0 || (method !== 0 && method !== 8)) {
-      throw new Error(`Node zip uses an unsupported compression method for ${name}`);
-    }
-    if (
-      compressedSize === 0xffffffff ||
-      size === 0xffffffff ||
-      localOffset + 30 > directoryOffset ||
-      archive.readUInt32LE(localOffset) !== 0x04034b50
-    ) {
-      throw new Error(`Node zip has an invalid local entry for ${name}`);
-    }
-    const localNameLength = archive.readUInt16LE(localOffset + 26);
-    const localExtraLength = archive.readUInt16LE(localOffset + 28);
-    const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
-    const localName = archive.toString(
-      "utf8",
-      localOffset + 30,
-      localOffset + 30 + localNameLength,
-    );
-    if (
-      localName !== name ||
-      archive.readUInt16LE(localOffset + 6) !== flags ||
-      archive.readUInt16LE(localOffset + 8) !== method ||
-      dataOffset + compressedSize > directoryOffset
-    ) {
-      throw new Error(`Node zip has an inconsistent local entry for ${name}`);
-    }
-    const compressed = archive.subarray(dataOffset, dataOffset + compressedSize);
-    const content =
-      method === 0 ? compressed : inflateRawSync(compressed, { maxOutputLength: size });
-    if (content.length !== size || crc32(content) !== checksum) {
-      throw new Error(`Node zip has corrupt content for ${name}`);
-    }
-    files.set(name, content);
-  }
-  if (offset !== end) throw new Error("Node zip central directory has unexpected data");
-  for (const name of wanted) {
-    if (!files.has(name)) throw new Error(`Node zip lacks ${name}`);
-  }
-  return files;
 }

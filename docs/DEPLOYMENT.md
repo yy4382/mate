@@ -114,11 +114,11 @@ tar -xzf $bundle
 Remove-Item -Recurse .\mate-node
 ```
 
-`install` 自己也校验整个包，再在暂存目录解包检查：只能有普通文件和目录，路径在 `mate-node/` 内，文件与清单 `manifest.json` 一一对应，平台和架构与本机相同。归档统一使用 `/` 分隔的相对路径，拒绝反斜线、盘符、ADS、保留设备名、尾点空格和大小写重名，避免 Windows 将条目解释为另一个路径。任何一项不通过，已有安装不变。
+`install` 自己也校验整个包，再在暂存目录解包检查：只能有普通文件和目录，路径在 `mate-node/` 内，文件与清单 `manifest.json` 一一对应，平台和架构与本机相同。任何一项不通过，已有安装不变。
 
 安装放好程序、命令和服务定义，**不启动服务**。POSIX 的命令是 `~/.local/bin/mate` 符号链接；Windows 是 `%LOCALAPPDATA%\Mate\bin\mate.cmd` 普通文件，不需要符号链接特权。CLI 不改用户的持久 PATH；把对应 bin 目录加入自己的 PATH，或使用安装输出中的完整命令路径。
 
-Windows 的已安装命令在更新或卸载时，先把管理入口和运行时复制到 TEMP 下的临时目录，从那里执行并在结束后清理。这样管理进程不会锁住待替换的 `node.exe`，也不会在删除自己的命令文件后丢掉清理步骤。服务仍直接使用程序目录中的运行时。
+Windows 的已安装命令在更新或卸载时，先把管理入口和运行时复制到 TEMP 下的临时目录，从那里执行，临时副本留在 TEMP 中。这样管理进程不会锁住待替换的 `node.exe`。服务仍直接使用程序目录中的运行时。
 
 **配置和启动。** 在网页的“节点管理”里生成一次性配对令牌，然后运行：
 
@@ -186,7 +186,7 @@ mate node start
 
 中途失败就重跑同一个命令。程序目录要么是完整旧版本、完整新版本，要么不存在。清单外的文件不会被更新或卸载悄悄删除。
 
-**链路。** `node run` 在数据目录的 `link.json` 原子记录 `{ pid, connected, since }`。`mate node status` 只有在服务正在运行，并能核对它的执行进程时才显示 `Link: connected/disconnected since <时间>`；否则显示 `Link: none`。Linux 核对 MainPID，macOS 核对 launchctl PID，Windows 核对任务实例与 CIM 进程路径、参数和创建时间，不能把 Task Scheduler 的 EnginePID 直接当作 node PID。服务运行本身不表示已连接控制面。
+**链路。** `node run` 在数据目录的 `link.json` 原子记录 `{ pid, connected, since }`。`mate node status` 只有在服务正在运行，并能核对它的执行进程时才显示 `Link: connected/disconnected since <时间>`；否则显示 `Link: none`。Linux 核对 MainPID，macOS 核对 launchctl PID，Windows 核对任务实例与 CIM 进程路径和创建时间，不能把 Task Scheduler 的 EnginePID 直接当作 node PID。服务运行本身不表示已连接控制面。
 
 **退出与重启。** 没有配置或身份被拒绝时，前台 `node run` 以 78 退出。Linux 用 RestartPreventExitStatus 阻止重启；macOS 和 Windows 由服务直接执行 `node run --service`，把这个不可重试退出映射为 0，原因仍记入日志。其他失败由服务管理器重启。Windows 计划任务按系统允许的间隔重试，有次数上限，不承诺 systemd 的无限重试。计划任务只在当前账号登录时运行，不保存账号密码，不切换到 LocalSystem。
 
@@ -298,7 +298,7 @@ pnpm check          # 格式、类型检查、全部测试（只跳过明确限�
 pnpm test:linux     # 在非 root 的 Linux 容器里跑 node 的测试套件（以子进程启动 node，真实的进程组与文件系统）
 ```
 
-开发机可用 `pnpm bundle:node <版本>` 构建全部六个包；`--platform linux|darwin|win32` 与 `--arch x64|arm64` 可缩小目标，产物在 `dist/node-bundles/`。`node deploy/node/verify-bundles.ts dist/node-bundles` 验证实际产物并运行与宿主匹配的包内 CLI。自动部署继续只使用 Linux 包，macOS/Windows node 手动安装和更新。
+开发机可用 `pnpm bundle:node <版本>` 构建全部六个包；`--platform linux|darwin|win32` 与 `--arch x64|arm64` 可缩小目标，产物在 `dist/node-bundles/`。自动部署继续只使用 Linux 包，macOS/Windows node 手动安装和更新。
 
 控制面可以在本机启动，前端要先构建，再用 `MATE_WEB_DIRECTORY` 指给它：
 

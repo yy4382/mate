@@ -26,8 +26,8 @@ it("9. an Agent visits a second node only between the admin's HTTP grant and rev
     })
     .step("grant access and try again", async (request) => {
       refusal = output(request, calls[0]);
-      expect(refusal).toContain("不可用");
-      expect(refusal).toContain("可访问的 node：server");
+      expect(refusal).toContain("unavailable");
+      expect(refusal).toContain("Accessible nodes: server");
       await system.api("PUT", grantPath, undefined, 204);
       calls = request.call([visit]);
     })

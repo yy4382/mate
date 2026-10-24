@@ -368,15 +368,13 @@ interface AgentManager {
 
 **node 的名字和系统信息。** UUID 只做身份，配对、签名认证、工具调用和 Agent 文件都继续使用它。**node 名字**是管理员可改的人读名字，在全部已配对 node 中唯一。名字有 1 到 32 个小写字母、数字或 `-`，以字母或数字开头。**系统信息**是 node 每次握手现取的一份完整报告，包含 `platform`、`arch`、`hostname`、`osRelease`、`version`，五项都是字符串。前四项来自 `process.platform`、`process.arch`、`os.hostname()`、`os.release()`；`version` 是构建发布包时写入程序的发布版本，源码运行时为 `dev`。
 
-新 node 的 `node.authenticate`、`node.pair` 都必须带 `system`。网关容忍旧 node 缺少这个字段，保留此前收到的报告；带了字段就必须是完整报告。新配对的名字取 hostname，转成小写、把非法字符逐个换成 `-`、去掉开头的 `-`、截到 32 位。结果为空或旧 node 没有报告时，用 `node-<UUID 前 8 位>`。名字冲突时依次加 `-2`、`-3`，先为后缀留出长度。之后的握手只更新系统信息，保留管理员设定的名字。
+新 node 的 `node.authenticate`、`node.pair` 都必须带 `system`。网关容忍旧 node 缺少这个字段；带了字段就必须是完整报告。新配对的名字取 hostname，转成小写、把非法字符逐个换成 `-`、去掉开头的 `-`、截到 32 位。结果为空或旧 node 没有报告时，用 `node-<UUID 前 8 位>`。名字冲突时依次加 `-2`、`-3`，先为后缀留出长度。配对时，令牌消耗、身份、名字、系统报告和连接时间在同一个事务提交。认证时一起更新系统报告、报告时间和连接时间，之后才登记在线连接；旧握手只更新连接时间，不清空已有报告。改名只改名字，之后的握手保留它；网关的拒绝用 `GatewayError` 表示，不改变已存事实。
 
 **工具调用按"整个调用"转发。** runtime 把一次完整的工具调用（工具名、参数、可选 node 名字）交给工作区端口，管理模块选择目标和访问方式后交给网关，网关发给 node，node 在本地执行，边执行边把输出流回来，最后返回结果。这样每次工具调用只有一次往返，不需要在网络上逐个实现 Durable 执行环境接口的二十多个文件方法。网关为每次调用生成自己的请求 ID（随机 UUID），输出、结果和停止都按它对应；调用方的任何 ID 都不上线路，所以不同 Agent 的调用不可能撞号。node 工具调用不按 ID 去重：有副作用的工具崩溃后不重做（4.2 规则 2），可重做的 `read` 重做一次也无妨。
 
 - **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于本次执行目录的 `NodeExecutionEnv`（**工作区环境**）上：`home` 的根是 Agent 工作区，`visit` 的根是 node 账号主目录。参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
 
-  `read` 比较同一个已打开文件在读取前后的大小和修改时间。文件缩小，或大小不变而修改时间变化时，重读一次；再次检测到变化就返回 `changed while it was read`。文件增长按追加处理。这个检查不锁住其他写入者，不提供无锁原地覆盖期间的原子快照。尤其在 Windows 上，写句柄关闭前不保证修改时间反映每次写入，见 [Microsoft 的文件时间说明](https://learn.microsoft.com/en-us/windows/win32/sysinfo/file-times)。
-
-- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 是 `/bin/sh -c`，Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及后台进程仍在运行或状态无法确认。PowerShell 对外部程序退出码的处理遵循自身规则，node 不追加 `exit $LASTEXITCODE` 改写命令。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
+- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 是 `/bin/sh -c`，Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及 POSIX 后台进程仍在运行。PowerShell 保留原生程序的非零退出码。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
 
 **接口（给管理模块）：**
 
@@ -413,20 +411,19 @@ type NodeStatusResult = {
 2. **node 离线时 Agent 照常运行**，需要该 node 的工具直接返回"节点离线"错误，管理模块在错误结果中标出目标名字。主 node 离线不影响访问其他在线 node，反之亦然。
 3. **连接断开时，node 停掉那些已经没人等结果的命令进程组。** 各平台能追踪的范围见第 5 条；Agent 有意放到后台、脱离了这个范围的进程（比如 POSIX 上的 `setsid`），由 Agent 自己负责。
 4. **`home` 调用执行前只检查 Agent 工作目录是否存在。** 不检查 `MEMORY.md` 的权限，也不检查任何 Agent 能自己改动的文件：Agent 改动自己的文件，不应该让自己的命令全部失败。工作目录没有标记文件：路径由主 node 的工作区根和 Agent ID 确定，只由创建流程准备，执行调用不会重建它。
-5. **平台差异只由一张平台表选择。** 每条记录提供 shell 与命令进程组、服务管理、目录布局、启动命令、私有文件权限和工作区路径规则；安装策略和命令结果处理各只有一份。Linux 和 macOS 用独立的 POSIX 进程组，shell 退出后仍能停止同组的后台进程；Linux 用 `/proc` 区分僵尸并核对启动时间，macOS 用 `ps` 观察组成员和启动时间。Windows 用 `taskkill /PID <pid> /T /F` 停止仍存活的 shell 及当时可发现的子孙，杀前核对该 shell 的身份，shell 退出后不再对旧 PID 操作。Windows 没有等价的稳定进程集合，不能保证收回已失去父链的孤儿进程；后台状态未知时结果明确说明，不能声称它们仍在运行或已经全部结束。三者都短暂等待退出后的输出，再返回并标明可能不完整。
-6. **谁在等结果，谁决定停。** 停止只有一种方式：调用方中止自己那次调用的 signal，网关就向 node 发这次调用的停止消息，node 杀掉它的命令进程组；POSIX 上命令已经返回、只剩后台进程占着输出时收到停止，也杀掉那些后台进程；Windows 的可追踪范围见第 5 条。暂停 Agent 就是关闭它的 runtime，runtime 中止所有进行中调用的 signal，所以不需要另一个"按 Agent 停止"的入口。node 按连接记录进行中的调用，连接断开停掉这条连接上的所有进行中调用；node 自己正常关闭时杀掉它仍能追踪的所有命令进程组，追踪范围遵守第 5 条。终止失败时，结果明确说明进程可能仍在运行，保留仍可追踪的句柄供关闭时重试；关闭会尝试所有命令后再报告失败，不会无限等待一个无法终止的进程。Windows 的进程信号不提供 POSIX 的优雅关闭；CLI 停止服务时先停用任务，再终止已核对身份的 node 进程树。
+5. 与架构无关的执行细节：进程组、僵尸进程判断、PID 复用防护、后台子进程占住输出管道时短暂等待后返回并标明、按序列化后的大小检查帧长度。 平台差异由一张表选择；Windows 用 `taskkill /T /F`，只能停止仍挂在活 shell 下的进程。macOS 用进程组存活检测，不区分僵尸或识别 PID 复用。
+6. **谁在等结果，谁决定停。** 调用方中止 signal，网关就通知 node 停掉该次调用；暂停 Agent、连接断开和 node 正常关闭同样清理仍可追踪的命令。终止失败要报告，并保留句柄供关闭时重试。
 7. **身份被拒绝时退出，网络失败时退避重连。** 网关拒绝 node 的身份或配对令牌时发 `gateway.refused`，直接运行的 node 进程以 78 退出，不重试（`unknown_identity` 而 node 手里有令牌时除外，见第 8 条）；网关因为用法出错结束连接（格式错误、顺序错误、握手超时、内部错误）时发 `gateway.error`，node 和连不上、连接中断时一样，从 250ms 起倍增、最多 10 秒重连。退出还是重连由消息类型决定，node 不维护错误码清单。systemd 用 `RestartPreventExitStatus=78` 停止重启；LaunchAgent 和计划任务直接执行 `node run --service`，服务入口将不可重试的 78 转为 0，保留错误日志。服务不靠 wrapper 等待子进程，所以服务的执行进程就是 node。
 8. **先签名，令牌只在"不认识"之后用。** node 每次连接都先用签名认证，只有网关对这次认证明确回答 `unknown_identity`，才改用配对令牌；连不上、连接中断、握手超时都只是重连，下一次仍先用签名。配对令牌只存 SHA-256 哈希，只能用一次，过期作废。配对只会新增 node：已经配对过的 node ID 不能再配对，它的公钥不变，这次用的令牌也不算用掉。
 9. **一个 node 一条连接，调用绑定在连接上。** 同一个 node 新认证的连接关闭旧连接。每个工具调用只接受发出它的那条连接送回的输出和结果；连接结束时，它带着的调用以"结果未知"结束并被忘掉，之后谁送来它的结果都不会交给调用方。
 10. **违规的连接立即结束。** 未认证的连接最多 32 条，超出的直接关闭；单条消息按收到的序列化帧计不超过 1 MiB，超出的由 WebSocket 层关闭；无法解析、不认识的消息、认证前发别的消息、重复认证，网关回一个 `gateway.error` 后关闭连接，并且从这一刻起不再读取这条连接送来的任何东西，node 立即离线。心跳超时（TCP 没断但收不到数据也算）同样结束连接。
 
-**访问方式只选择执行环境。** `home` 使用 `<工作区根>/<agentId>`，目录必须存在，`HOME` 和 `PWD` 设为该目录；`visit` 使用 `os.homedir()`，`PWD` 设为该目录，保留 node 进程原来的 `HOME`（包括未设置），不创建工作区或 `MEMORY.md`，也不碰工作区根。两者共用文件工具的路径限制、命令进程组、超时、停止、断线和截断逻辑。Windows 设置 home 环境时先去掉大小写不同的 HOME/PWD 键；PowerShell 只在环境中有 HOME 时覆盖其自动 `$HOME`，visit 缺少 HOME 时保留 PowerShell 自己的主目录值。
+**访问方式只选择执行环境。** `home` 使用 `<工作区根>/<agentId>`，目录必须存在，`HOME` 和 `PWD` 设为该目录；`visit` 使用 `os.homedir()`，`PWD` 设为该目录，保留 node 进程原来的 `HOME`（包括未设置），不创建工作区或 `MEMORY.md`，也不碰工作区根。两者共用文件工具的路径限制、命令进程组、超时、停止、断线和截断逻辑。PowerShell 在 visit 缺少 HOME 时保留自己的主目录值。
 
 访问方式由管理模块决定，runtime 和 node 都不判断授权。旧 node 不认识 `access` 时仍按工作区执行，访问调用因工作区不存在而失败；访问其他 node 前，先把目标 node 升级到支持此功能的版本。
 
 **持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。POSIX 目录和私有文件分别用 0700、0600；Windows 存在当前账号的 `%LOCALAPPDATA%\Mate` 下，依靠该目录对普通账号的默认 ACL 隔离，不用 `chmod` 模拟 Windows 权限。网关的 node 注册表和配对令牌存在**控制库** `data/control.sqlite`，这个文件和 Web 外壳的登录、管理模块的 API key 共用：
 - 网关结构第 2 版在 `nodes` 中加入唯一且非空的 `name`、完整系统报告的 `system_json` 和报告时间 `reported_at`。迁移给已有 node 起名 `node-<UUID 前 8 位>`；前缀相同的按 UUID 排序，第二个起加 `-2`、`-3`。公钥、配对时间和上次连接时间保留，系统报告和报告时间为空，等下次新格式握手补齐。
-- 配对时，令牌消耗、node 身份、名字、系统报告和上次连接时间在同一个事务提交。认证时，系统报告、报告时间和上次连接时间一起更新，之后才登记在线连接。缺少 `system` 的旧握手只更新连接时间，不清空已有报告。改名只改名字；网关的拒绝用 `GatewayError` 表示，不改变已存事实。
 - 每个模块用 `@mate/control-store` 的 `openControlTables(dataDirectory, { module, migrations })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
 - 每个模块只建、只检查自己的表。结构版本记在 `schema_versions` 表里，每个模块一行（网关是 `gateway`）。模块的结构是一份 `Migrations`（`@mate/migrations`）：按版本递增的迁移列表。一个模块的版本比代码新、或不是列表里的版本，只有这个模块拒绝启动，抛出带文件路径的 `ControlStoreIncompatible`；别的模块照常打开。
 - 打开时在同一个事务里把模块带到最新版本：没有记录就跑完整个列表并插入一行；记录在列表里的某个版本，就只跑它之后的迁移并更新这一行。迁移中途失败，事务回滚，存储留在原来的版本，拒绝启动。第一条迁移的建表用不带 `IF NOT EXISTS` 的 `CREATE TABLE`，表名和别的模块撞了同样拒绝启动，不会两个模块悄悄共用一张表。
@@ -482,15 +479,15 @@ interface Admin {
 }
 ```
 
-拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`name-taken`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。对现有 Agent 的管理写操作排在该 Agent 的队列里执行，排队期间 Agent 被删掉，同样是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
+拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`name-taken`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。对不存在的 Agent 操作是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
 
 **工作区宿主与授权。** `WorkspaceHost.port(homeNodeId, agentId)` 返回的端口接受 `{ tool, arguments, node? }`，runtime 统一将 `node` 从四个工具的参数中取出，node 收到的 `arguments` 不变。端口的 `nodes()` 返回 `{ name, online, platform, home }[]`。每次调用从网关取一次 node 快照，缺省目标为主 node，否则按名字解析。
 
-**只有 `nodeAccess(agentId, homeNodeId, targetNodeId)` 决定访问方式。** 主 node 返回 `home`，现读授权表命中的其他 node 返回 `visit`，其余拒绝。工具调用和 `nodes()` 共用这个函数；以后增加权限规则只改它和它读的数据。解析、判定和发出调用之间不 await。未知名字和未授权名字返回相同错误，列出可访问的名字，不向任何 node 发请求，也不泄露其他 node 是否存在。授权按 ID 保存，改名后仍有效。
+**只有 `nodeAccess(agentId, homeNodeId, targetNodeId)` 决定访问方式。** 主 node 返回 `home`，现读授权表命中的其他 node 返回 `visit`，其余拒绝。工具调用和 `nodes()` 共用这个函数；以后增加权限规则只改它和它读的数据。未知名字和未授权名字返回相同错误，列出可访问的名字，不向任何 node 发请求，也不泄露其他 node 是否存在。授权按 ID 保存，改名后仍有效。
 
 授权和收回只影响之后开始的调用，已发出的前台调用、后台命令继续运行。操作要求 Agent 存在（否则 `unknown-agent`）、node 已配对（否则 `unknown-node`），主 node 不能授权或收回（`invalid-input`）。
 
-管理模块为同一个 Agent 的全部管理写操作共用一条队列。创建、暂停、恢复、改设置、授权、收回和删除按到达顺序执行，存在性检查也在轮到操作时进行。创建先确定 Agent ID，再排入队列。这样删除即使正在等此前的授权，后来的生命周期操作也不能越过它。运行工具和只读观察不加入这个队列。删除先让 Manager 完成删除，再清理授权；清理失败时，只有聊天账号已停用且种类为 Agent 才允许在文件已删除后重做清理。已删除的 Agent ID 不能复用，遗留授权不会给新 Agent 带来权限。
+删除 Agent 后清理其授权；中途失败或并发操作留下的授权行无害，因为已删除的 Agent ID 不能复用。
 
 **模型和 API key：** 模型来自 pi-ai 自带的目录（runtime 的 `catalogModels`，Agent 的请求也在这个目录里解析）。管理界面提供 OpenAI（Responses API）和 DeepSeek 两家；凭据按提供商存 `{ apiKey, baseUrl? }`，`baseUrl` 替换目录里这个提供商所有模型的地址。设置模型时先检查（创建 Agent 时也一样，在任何东西被创建之前）：提供商是这两家之一、已经存了 key、目录里有这个模型、thinking 级别在这个模型接受的级别里。不接受的级别直接拒绝，不降级。runtime 每次模型请求都现读凭据，所以改了 key 从下一次请求起生效，再存一次同样的值不影响任何正在运行的 Agent；删了 key，这个提供商的请求不发出就失败。
 
@@ -656,5 +653,5 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 | 9 | 要不要 CI？ | 要。GitHub Actions 对每个 PR 和 main 各检查一次：`pnpm check` 和 `pnpm test:linux` 的内容拆成几个并行任务（格式与类型、node 和系统场景以外的测试、两片 `test:linux`、`mate-deploy` 的测试），node 套件另在 macOS 和 Windows 原生 runner 上运行，并用本机实际发布包验证服务，汇总成一个 `checks` 结果；`v*` 标签不重跑，等这个提交在 main 上的 `checks` 通过后发布镜像和 node 发布包，设了部署主机时再自动部署（失败回退到原版本和部署前的数据备份） | `.github/workflows/ci.yml` |
 | 10 | 几个人怎么共用？ | 每个人是一个人类账号，各有登录（handle 加密码）、名字、已读位置和推送。角色只有管理员和普通人类两种：角色和登录归外壳的 `humans` 表，名字和账号种类归聊天 app，两边靠 externalId 对上。任何时候至少有一个有效的管理员；第一个人类（管理员）由初始密码文件和初始 handle 在第一次启动时创建；原来的所有者升级后成为 handle 为 `owner` 的管理员 | 4.7、第 6 节 |
 | 11 | 怎样区分配对的机器，又不让改名影响身份？ | UUID 继续用于配对、认证、工具调用和 Agent 文件；网关保存唯一的 node 名字及 node 握手报告的系统信息，管理员只改名字。Agent 列表从网关现查名字 | 4.5、4.6、4.7、第 6 节 |
-| 12 | node 支持哪些平台，Windows 用什么 shell？ | Linux、macOS、Windows，分别支持 x64 和 arm64。平台表选择 shell、进程管理、服务、布局、权限和路径规则，公共安装与命令流程不复制。Windows 用自带的 PowerShell 5.1，进程树追踪的限制如实写进结果；macOS 和 Windows 由管理员手动安装，不加入 Linux 的自动部署 | 4.5、第 7 节、DEPLOYMENT §3.2 |
+| 12 | node 支持哪些平台，Windows 用什么 shell？ | Linux、macOS、Windows，分别支持 x64 和 arm64。平台表选择 shell、进程管理、服务、布局、权限和路径规则，公共安装与命令流程不复制。Windows 用自带的 PowerShell 5.1，进程树追踪范围见 4.5；macOS 和 Windows 由管理员手动安装，不加入 Linux 的自动部署 | 4.5、第 7 节、DEPLOYMENT §3.2 |
 | 13 | Agent 能访问哪些 node？ | 主 node 始终可用，其他 node 由管理员逐个授权。管理模块唯一的 nodeAccess 函数在每次调用开始时现读授权；收回不停止已发出的调用。runtime 只转发目标，node 只按访问方式执行 | 4.2、4.5、4.6 |

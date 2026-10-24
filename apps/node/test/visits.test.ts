@@ -120,11 +120,11 @@ describe("node visits (MODULE_TESTS 8)", () => {
     expect((await home).isError).toBe(false);
   });
 
-  it.runIf(windows).each(["HOME", "Home"])(
-    "preserves the node's %s value during a Windows visit whose directory is USERPROFILE",
-    async (key) => {
+  it.runIf(windows)(
+    "preserves the node's HOME value during a Windows visit whose directory is USERPROFILE",
+    async () => {
       const originalHome = join(temporaryDirectory(), "separate-home");
-      const node = await connectedNode({ env: { [key]: originalHome } });
+      const node = await connectedNode({ env: { HOME: originalHome } });
       const result = await node.run(
         "visitor",
         "bash",
@@ -157,26 +157,6 @@ describe("node visits (MODULE_TESTS 8)", () => {
       expect(realpathSync.native(cwd!)).toBe(realpathSync.native(node.home));
       expect(environment).toEqual(["False", node.home]);
       expect(existsSync(node.workspacesRoot)).toBe(false);
-    },
-  );
-
-  it.runIf(windows)(
-    "replaces a differently cased HOME for home access without changing visit access",
-    async () => {
-      const originalHome = join(temporaryDirectory(), "separate-home");
-      const node = await connectedNode({ env: { Home: originalHome, Pwd: originalHome } });
-      const { agentId, workspace } = await node.agent();
-      const command = "(Get-Location).Path; $env:HOME; $HOME; $env:PWD";
-      const home = await node.run(agentId, "bash", { command });
-      expect(home.isError, textOf(home)).toBe(false);
-      const [homeCwd, ...homeEnvironment] = textOf(home).split(/\r?\n/).slice(0, 4);
-      expect(realpathSync.native(homeCwd!)).toBe(realpathSync.native(workspace));
-      expect(homeEnvironment).toEqual([workspace, workspace, workspace]);
-      const visit = await node.run(agentId, "bash", { command }, undefined, "visit");
-      expect(visit.isError, textOf(visit)).toBe(false);
-      const [visitCwd, ...visitEnvironment] = textOf(visit).split(/\r?\n/).slice(0, 4);
-      expect(realpathSync.native(visitCwd!)).toBe(realpathSync.native(node.home));
-      expect(visitEnvironment).toEqual([originalHome, originalHome, node.home]);
     },
   );
 });

@@ -96,10 +96,6 @@ it.runIf(out !== undefined)(
           await page.screenshot({ path: join(dir, `${view.name}-node-access.png`) });
         }
       }
-      await page.goto(`${site.origin}/app/admin/nodes`);
-      await page.locator(`[data-node="${nodeId}"]`).getByRole("button", { name: "改名" }).click();
-      await page.getByRole("dialog", { name: "修改 Node 名字" }).waitFor();
-      await page.screenshot({ path: join(dir, `${view.name}-node-rename.png`) });
       await page.goto(`${site.origin}/app/c/${general}`);
       await page.waitForTimeout(600);
       await page.getByText("下午再跑一次 smoke test").hover();

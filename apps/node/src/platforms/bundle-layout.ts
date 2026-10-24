@@ -60,36 +60,21 @@ exit /b 1
 
 :manage
 "%~dp0node.exe" "%~dp0mate.mjs" %*
-set "mate_exit=%errorlevel%"
-rem End this batch before deleting it; exit /b would try to reopen the deleted file.
-(goto) 2>nul & (
-  del /Q "%~dp0node.exe" "%~dp0mate.mjs" "%~f0"
-  if errorlevel 1 echo Could not remove the temporary management files in "%~dp0". 1>&2
-  rmdir "%~dp0"
-  if errorlevel 1 echo Could not remove the temporary management directory "%~dp0". 1>&2
-  "%ComSpec%" /d /c exit %mate_exit%
-)
+exit /b %errorlevel%
 `.replaceAll("\n", "\r\n");
 
+const POSIX_BUNDLE = {
+  runtime: "node/bin/node",
+  command: "bin/mate",
+  launcher: POSIX_LAUNCHER,
+};
+
 export const bundleLayouts: Record<PlatformId, BundleLayout> = {
-  linux: {
-    name: "linux",
-    runtime: "node/bin/node",
-    script: "lib/mate.mjs",
-    command: "bin/mate",
-    launcher: POSIX_LAUNCHER,
-  },
-  darwin: {
-    name: "darwin",
-    runtime: "node/bin/node",
-    script: "lib/mate.mjs",
-    command: "bin/mate",
-    launcher: POSIX_LAUNCHER,
-  },
+  linux: { ...POSIX_BUNDLE, name: "linux" },
+  darwin: { ...POSIX_BUNDLE, name: "darwin" },
   win32: {
     name: "win",
     runtime: "node/node.exe",
-    script: "lib/mate.mjs",
     command: "bin/mate.cmd",
     launcher: WINDOWS_LAUNCHER,
   },

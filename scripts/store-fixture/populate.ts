@@ -13,6 +13,7 @@ import { openAdmin } from "@mate/admin";
 import { ChatApp } from "@mate/chat";
 import { systemClock } from "@mate/clock";
 import { createNodeGateway } from "@mate/gateway";
+import { FakeNode } from "@mate/testkit";
 import { OwnerLogin } from "./src/login.ts";
 import { vapidKeys } from "./src/push.ts";
 import { openShellTables } from "./src/store.ts";
@@ -75,66 +76,23 @@ server.on("upgrade", (request, socket, head) => gateway.handleUpgrade(request, s
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const gatewayUrl = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/nodes/connect`;
 const pairedNodes = [];
-for (const nodeId of [
-  HOME_NODE,
-  "abcdef01-0000-4000-8000-000000000001",
-  "12345678-0000-4000-8000-000000000003",
-]) {
+for (const nodeId of [HOME_NODE, "abcdef01-0000-4000-8000-000000000001"]) {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519", {
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
   const token = gateway.createPairingToken().pairingToken;
-  await new Promise<void>((resolve, reject) => {
-    const socket = new WebSocket(gatewayUrl);
-    let paired = false;
-    socket.onmessage = ({ data }) => {
-      const message = JSON.parse(String(data));
-      if (message.type === "gateway.challenge") {
-        socket.send(
-          JSON.stringify({
-            type: "node.pair",
-            requestId: `fixture-pair-${nodeId}`,
-            nodeId,
-            publicKey,
-            signature: sign(
-              null,
-              Buffer.from(message.nonce),
-              createPrivateKey(privateKey),
-            ).toString("base64url"),
-            pairingToken: token,
-          }),
-        );
-      } else if (message.type === "gateway.paired") {
-        paired = true;
-        if (nodeId === HOME_NODE) {
-          void createPausedAgent().then(
-            () => socket.close(),
-            (error: unknown) => {
-              reject(error);
-              socket.close();
-            },
-          );
-        } else {
-          socket.close();
-        }
-      } else if (message.type === "gateway.prepare.workspace") {
-        socket.send(
-          JSON.stringify({
-            type: "node.tool.result",
-            requestId: message.requestId,
-            content: [{ type: "text", text: "Workspace ready" }],
-            isError: false,
-          }),
-        );
-      } else {
-        reject(new Error(`pairing fixture node: ${JSON.stringify(message)}`));
-        socket.close();
-      }
-    };
-    socket.onerror = () => reject(new Error("fixture node could not connect"));
-    socket.onclose = () => (paired ? resolve() : reject(new Error("fixture node did not pair")));
+  const node = new FakeNode({
+    gatewayUrl,
+    nodeId,
+    publicKey,
+    pairingToken: token,
+    sign: (nonce) =>
+      sign(null, Buffer.from(nonce), createPrivateKey(privateKey)).toString("base64url"),
   });
+  await node.connect();
+  if (nodeId === HOME_NODE) await createPausedAgent();
+  await node.close();
   pairedNodes.push({
     nodeId,
     privateKey,
