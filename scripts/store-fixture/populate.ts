@@ -13,6 +13,7 @@ import { openAdmin } from "@mate/admin";
 import { ChatApp } from "@mate/chat";
 import { systemClock } from "@mate/clock";
 import { createNodeGateway } from "@mate/gateway";
+import { FakeNode } from "@mate/testkit";
 import { OwnerLogin } from "./src/login.ts";
 import { vapidKeys } from "./src/push.ts";
 import { openShellTables } from "./src/store.ts";
@@ -64,44 +65,22 @@ const pairedNodes = [];
 for (const nodeId of [
   "abcdef01-0000-4000-8000-000000000002",
   "abcdef01-0000-4000-8000-000000000001",
-  "12345678-0000-4000-8000-000000000003",
 ]) {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519", {
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
   const token = gateway.createPairingToken().pairingToken;
-  await new Promise<void>((resolve, reject) => {
-    const socket = new WebSocket(gatewayUrl);
-    let paired = false;
-    socket.onmessage = ({ data }) => {
-      const message = JSON.parse(String(data));
-      if (message.type === "gateway.challenge") {
-        socket.send(
-          JSON.stringify({
-            type: "node.pair",
-            requestId: `fixture-pair-${nodeId}`,
-            nodeId,
-            publicKey,
-            signature: sign(
-              null,
-              Buffer.from(message.nonce),
-              createPrivateKey(privateKey),
-            ).toString("base64url"),
-            pairingToken: token,
-          }),
-        );
-      } else if (message.type === "gateway.paired") {
-        paired = true;
-        socket.close();
-      } else {
-        reject(new Error(`pairing fixture node: ${JSON.stringify(message)}`));
-        socket.close();
-      }
-    };
-    socket.onerror = () => reject(new Error("fixture node could not connect"));
-    socket.onclose = () => (paired ? resolve() : reject(new Error("fixture node did not pair")));
+  const node = new FakeNode({
+    gatewayUrl,
+    nodeId,
+    publicKey,
+    pairingToken: token,
+    sign: (nonce) =>
+      sign(null, Buffer.from(nonce), createPrivateKey(privateKey)).toString("base64url"),
   });
+  await node.connect();
+  await node.close();
   pairedNodes.push({
     nodeId,
     privateKey,

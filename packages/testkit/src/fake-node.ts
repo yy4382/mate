@@ -4,8 +4,6 @@ import {
   type GatewayBrowse,
   type GatewayRunTool,
   type NodeBrowseOutcome,
-  type NodeAuthenticate,
-  type NodePair,
   type NodeRequest,
   type NodeSystem,
   type ToolResult,
@@ -99,12 +97,15 @@ export class FakeNode {
     if (msg.type === "gateway.challenge") {
       this.#challenge = msg.nonce;
       const sig = this.#options.sign(msg.nonce);
-      this.#sendHandshake({
-        type: "node.authenticate",
+      const message = {
+        type: "node.authenticate" as const,
         requestId: randomUUID(),
         nodeId: this.#options.nodeId,
         signature: sig,
-      });
+      };
+      const system = this.#options.system;
+      if (system === undefined) this.#ws?.send(JSON.stringify(message));
+      else this.send({ ...message, system });
       return;
     }
 
@@ -117,14 +118,17 @@ export class FakeNode {
         pairingToken !== undefined &&
         publicKey !== undefined
       ) {
-        this.#sendHandshake({
-          type: "node.pair",
+        const message = {
+          type: "node.pair" as const,
           requestId: randomUUID(),
           nodeId: this.#options.nodeId,
           publicKey,
           signature: this.#options.sign(challenge),
           pairingToken,
-        });
+        };
+        const system = this.#options.system;
+        if (system === undefined) this.#ws?.send(JSON.stringify(message));
+        else this.send({ ...message, system });
         return;
       }
       this.#onAuthError?.(new Error(`Gateway refused: ${msg.code} — ${msg.message}`));
@@ -213,18 +217,6 @@ export class FakeNode {
         ],
         isError: true,
       });
-    }
-  }
-
-  /**
-   * An older node can omit system information; every current-format message goes through the sending schema.
-   */
-  #sendHandshake(message: Omit<NodeAuthenticate, "system"> | Omit<NodePair, "system">): void {
-    const system = this.#options.system;
-    if (system === undefined) {
-      if (this.#ws?.readyState === WebSocket.OPEN) this.#ws.send(JSON.stringify(message));
-    } else {
-      this.send({ ...message, system });
     }
   }
 

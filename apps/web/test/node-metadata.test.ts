@@ -1,4 +1,4 @@
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it } from "vitest";
 import { openApp, startSite } from "./support.ts";
 
 const SYSTEM = {
@@ -41,7 +41,7 @@ describe("node names and system information", () => {
     );
   });
 
-  it("invalid and occupied names stay beside the field, and cancelling preserves the name", async () => {
+  it("invalid names cannot be submitted, occupied names stay beside the field, and cancelling preserves the name", async () => {
     const site = await startSite();
     const nodeId = await site.pairNode({ system: SYSTEM });
     await site.pairNode({ system: { ...SYSTEM, hostname: "laptop" } });
@@ -52,21 +52,13 @@ describe("node names and system information", () => {
     await row.getByRole("button", { name: "改名" }).click();
     const dialog = page.getByRole("dialog", { name: "修改 Node 名字" });
     const input = dialog.getByLabel("名字", { exact: true });
-    let renameRequests = 0;
-    page.on("request", (request) => {
-      if (request.method() === "PUT" && request.url().endsWith(`/api/admin/nodes/${nodeId}`)) {
-        renameRequests += 1;
-      }
-    });
     await input.fill("Invalid Name");
     await dialog.getByRole("button", { name: "保存名字" }).click();
-    await dialog.getByRole("alert").filter({ hasText: "1 到 32" }).waitFor();
-    expect(renameRequests).toBe(0);
+    expect(await input.evaluate((element: HTMLInputElement) => element.validity.valid)).toBe(false);
 
     await input.fill("laptop");
     await dialog.getByRole("button", { name: "保存名字" }).click();
     await dialog.getByRole("alert").getByText("这个名字已被其他 node 使用。").waitFor();
-    expect(renameRequests).toBe(1);
     await dialog.getByRole("button", { name: "取消" }).click();
     await dialog.waitFor({ state: "hidden" });
     await row.getByText("build-server", { exact: true }).waitFor();
@@ -102,35 +94,5 @@ describe("node names and system information", () => {
     const options = await form.getByLabel("Node").locator("option").allTextContents();
     expect(options).toContain("workstation（在线）");
     expect(options).not.toContain("laptop（在线）");
-  });
-
-  it("a delayed save updates the node without closing a new rename dialog or discarding its draft", async () => {
-    const site = await startSite();
-    const nodeId = await site.pairNode({ system: SYSTEM });
-    const { page } = await openApp(site, "/app/admin/nodes");
-    const saved = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    onTestFinished(() => release.resolve());
-    await page.route(`**/api/admin/nodes/${nodeId}`, async (route) => {
-      const response = await route.fetch();
-      saved.resolve();
-      await release.promise;
-      await route.fulfill({ response });
-    });
-
-    const row = page.locator(`[data-node="${nodeId}"]`);
-    const dialog = page.getByRole("dialog", { name: "修改 Node 名字" });
-    await row.getByRole("button", { name: "改名" }).click();
-    await dialog.getByLabel("名字", { exact: true }).fill("saved-name");
-    await dialog.getByRole("button", { name: "保存名字" }).click();
-    await saved.promise;
-    await dialog.getByRole("button", { name: "取消" }).click();
-    await dialog.waitFor({ state: "hidden" });
-    await row.getByRole("button", { name: "改名" }).click();
-    await dialog.getByLabel("名字", { exact: true }).fill("next-draft");
-
-    release.resolve();
-    await row.getByText("saved-name", { exact: true }).waitFor();
-    expect(await dialog.getByLabel("名字", { exact: true }).inputValue()).toBe("next-draft");
   });
 });

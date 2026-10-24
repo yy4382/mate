@@ -255,10 +255,10 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 node 根据当前系统选择能力的唯一入口。Linux、macOS、Windows 各有一条记录，提供 shell、命令进程组、服务、布局、启动命令、私有文件保护和工作区路径规则。共同的安装流程、超时和输出处理不随平台复制。
 
 **node 名字**（node name）
-网关保存的、人读的机器名字，例如 `server`、`laptop`。名字在已配对 node 中唯一，有 1 到 32 个小写字母、数字或 `-`，以字母或数字开头。新配对时从 hostname 规范化生成，冲突加后缀，管理员之后可以改。UUID 继续用于身份和调用；改名不改 Agent 文件里的 node ID。
+网关保存的、管理员可改且唯一的机器名字；UUID 仍用于身份和调用（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
 
 **系统信息**（NodeSystem）
-node 每次配对或认证时现取的完整报告，包含 `platform`、`arch`、`hostname`、`osRelease`、`version`。`version` 是正在运行的 node 程序的发布版本，开发时为 `dev`。网关保存最近一次报告和报告时间，管理员不能修改；旧 node 没有报告时保留上次的值，从未报告则为 `null`。
+node 在握手时报告的宿主平台、架构、hostname、系统版本和程序版本，由网关保存最近一份（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
 
 **链路**（link）
 `node run` 与网关之间的连接是否已经握手成功。node 在数据目录的 `link.json` 里记下 `{ pid, connected, since }`（握手成功或连接结束时原子替换；启动时先写 `connected: false`）。`mate node status` 的 `Link:` 行只在服务正在运行、且能确认文件属于它的执行进程时读它，否则是 `Link: none`。Linux 核对 systemd 的 MainPID，macOS 核对 launchctl 的 PID，Windows 核对任务实例与进程路径、参数、创建时间，所以崩溃进程留下的文件不会被当成已连接。自动部署用 `Link: connected` 判断新 node 起好了。
