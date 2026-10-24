@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { join } from "node:path";
+import { hostname, release } from "node:os";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { createNodeGateway } from "@mate/gateway";
@@ -56,6 +57,13 @@ describe("node authentication against the real gateway (MODULE_TESTS 7)", () => 
 
     const nodeData = join(home, "node");
     const { identity } = loadOrCreateNodeIdentity(nodeData);
+    const system = {
+      platform: process.platform,
+      arch: process.arch,
+      hostname: hostname(),
+      osRelease: release(),
+      version: "dev",
+    };
     const firstRun = await startNodeAgainstProxy(
       proxy,
       nodeData,
@@ -65,6 +73,9 @@ describe("node authentication against the real gateway (MODULE_TESTS 7)", () => 
       () => gateway.nodes().some((node) => node.nodeId === identity.id && node.online),
       "a new node is told it is unknown, then pairs with its token",
     );
+    expect(gateway.nodes()).toEqual([
+      expect.objectContaining({ nodeId: identity.id, online: true, system }),
+    ]);
     firstRun.abort();
     await eventually(() => !gateway.status(identity.id).online, "the first run ended");
 
@@ -83,6 +94,10 @@ describe("node authentication against the real gateway (MODULE_TESTS 7)", () => 
       "the node is back by its signature",
       15_000,
     );
+
+    expect(gateway.nodes()).toEqual([
+      expect.objectContaining({ nodeId: identity.id, online: true, system }),
+    ]);
 
     // Had the node sent the token on any of those attempts, the gateway would have used it up.
     const { privateKey, publicKey } = generateKeyPairSync("ed25519", {

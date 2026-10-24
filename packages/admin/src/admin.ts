@@ -138,6 +138,7 @@ export class Admin {
     const accounts = new Map(
       this.#chat.listAccounts().map((account) => [account.accountId, account]),
     );
+    const nodeNames = new Map(this.#gateway.nodes().map((node) => [node.nodeId, node.name]));
     const views = await Promise.all(
       this.#manager.list().map(async ({ agentId }): Promise<AgentView | undefined> => {
         const account = this.#chat.findAccount(agentId);
@@ -150,9 +151,11 @@ export class Admin {
         try {
           if (names === undefined) throw new Error(`Agent ${agentId} has no chat account`);
           const description = await this.#manager.describe(agentId);
-          const node = this.#gateway.nodes().find((node) => node.nodeId === description.nodeId);
-          if (node === undefined) throw new Error(`Agent ${agentId} has no paired node`);
-          return { ...names, ...description, nodeName: node.name };
+          return {
+            ...names,
+            ...description,
+            nodeName: nodeNames.get(description.nodeId) ?? description.nodeId,
+          };
         } catch (error) {
           // Deleted since it was listed.
           if (error instanceof AgentStoreMissing) return undefined;

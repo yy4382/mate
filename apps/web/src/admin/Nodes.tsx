@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Link2, Pencil, Server } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ApiError, post, put } from "../shell/api.ts";
+import { refusalText } from "../shell/humans.ts";
 import {
   Badge,
   Button,
@@ -17,6 +18,7 @@ import {
 import { adminKeys, useNodes, type NodeView } from "./data.ts";
 
 const NAME_HINT = "1 到 32 个小写字母、数字或 -，以字母或数字开头。";
+const NODE_NAME_PATTERN = "[a-z0-9][a-z0-9\\-]{0,31}";
 
 function RenameNode({ node, onClose }: { node: NodeView; onClose: () => void }) {
   const qc = useQueryClient();
@@ -32,8 +34,8 @@ function RenameNode({ node, onClose }: { node: NodeView; onClose: () => void }) 
     },
     onError: (cause) => {
       if (!(cause instanceof ApiError)) return;
-      if (cause.reason === "name-taken") setNameError("这个名字已被其他 node 使用。");
-      if (cause.reason === "invalid-input") setNameError(NAME_HINT);
+      if (cause.reason === "name-taken" || cause.reason === "invalid-input")
+        setNameError(refusalText(cause));
     },
   });
 
@@ -42,14 +44,8 @@ function RenameNode({ node, onClose }: { node: NodeView; onClose: () => void }) 
       <form
         className="grid gap-4"
         aria-label="修改 Node 名字"
-        noValidate
         onSubmit={(event) => {
           event.preventDefault();
-          if (rename.isPending) return;
-          if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(name)) {
-            setNameError(NAME_HINT);
-            return;
-          }
           setNameError(undefined);
           rename.mutate(name, { onSuccess: onClose });
         }}
@@ -64,12 +60,15 @@ function RenameNode({ node, onClose }: { node: NodeView; onClose: () => void }) 
             }}
             autoCapitalize="none"
             spellCheck={false}
+            pattern={NODE_NAME_PATTERN}
             maxLength={32}
             disabled={rename.isPending}
             required
           />
         </Field>
-        <ErrorLine error={nameError === undefined ? rename.error : null} />
+        <ErrorLine
+          error={nameError === undefined && rename.error ? refusalText(rename.error) : null}
+        />
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>取消</Button>
           <Button type="submit" variant="primary" disabled={rename.isPending}>

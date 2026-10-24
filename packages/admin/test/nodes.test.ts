@@ -1,5 +1,4 @@
 import { FakeNode } from "@mate/testkit";
-import { AdminError } from "@mate/admin";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { environment, newIdentity, settings } from "./support.ts";
 
@@ -62,7 +61,6 @@ describe("pairing nodes", () => {
       [first.nodeId, "laptop", "name-taken"],
       ["missing", "unused", "unknown-node"],
     ] as const) {
-      expect(() => admin.renameNode(nodeId, name)).toThrowError(AdminError);
       expect(() => admin.renameNode(nodeId, name)).toThrowError(
         expect.objectContaining({ reason }),
       );

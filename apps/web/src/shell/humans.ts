@@ -29,6 +29,7 @@ export const useCurrentHuman = () =>
   useQuery({ queryKey: currentHumanKey, queryFn: () => get<HumanView>("/api/me") });
 
 const REFUSALS: Record<string, string> = {
+  "name-taken": "这个名字已被其他 node 使用。",
   "handle-taken": "这个 handle 已被占用。",
   "last-admin": "必须至少保留一个有效的管理员。",
   "admin-only": "需要管理员权限。",
