@@ -207,23 +207,39 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
     }
   });
 
-  it("reports a file that keeps changing while it is read instead of mixing old and new content", async () => {
+  it("reports changes published in a file's modification time and reads it after the writer stops", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     const path = join(workspace, "busy.txt");
-    const line = (letter: string) => `${letter.repeat(99)}\n`;
-    writeFileSync(path, line("a").repeat(40_000));
-    // Another process rewrites the file in place, alternating every line between all a's and all b's.
+    const line = `${"a".repeat(99)}\n`;
+    writeFileSync(path, line.repeat(40_000));
     const writer = spawn(process.execPath, [
       "-e",
       `const fs = require("node:fs");
        const fd = fs.openSync(${JSON.stringify(path)}, "r+");
-       const versions = ["a", "b"].map((l) => Buffer.from((l.repeat(99) + "\\n").repeat(40000)));
-       for (let i = 0; ; i++) fs.writeSync(fd, versions[i % 2], 0, versions[0].length, 0);`,
+       const content = Buffer.from(${JSON.stringify(line)}.repeat(40000));
+       const started = Date.now() / 1000;
+       let revision = 0;
+       function rewrite() {
+         fs.writeSync(fd, content, 0, content.length, 0);
+         fs.futimesSync(fd, started, started + 2 * ++revision);
+       }
+       rewrite();
+       fs.writeSync(1, "ready\\n");
+       for (;;) rewrite();`,
     ]);
-    onTestFinished(() => void writer.kill("SIGKILL"));
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    const closed = new Promise<void>((resolve) => writer.once("close", () => resolve()));
+    onTestFinished(async () => {
+      writer.kill("SIGKILL");
+      await closed;
+    });
+    await new Promise<void>((resolve, reject) => {
+      writer.once("error", reject);
+      writer.once("exit", (code) => reject(new Error(`writer exited before ready (${code})`)));
+      writer.stdout.once("data", () => resolve());
+    });
 
+    const expected = `${line.repeat(300)}[info] 39701 more lines in file. Use offset=301 to continue.`;
     let changed = 0;
     for (let attempt = 0; attempt < 20; attempt++) {
       const result = await node.run(agentId, "read", { path: "busy.txt", limit: 300 });
@@ -233,11 +249,14 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
         changed++;
         continue;
       }
-      const lines = text.split("\n").filter((l) => l !== "" && !l.startsWith("["));
-      expect(lines.length).toBe(300);
-      expect(new Set(lines).size, "never a mix of the two versions").toBe(1);
-      expect(lines[0]).toMatch(/^(a{99}|b{99})$/);
+      expect(text).toBe(expected);
     }
-    expect(changed, "a file that never holds still is reported as changed").toBeGreaterThan(0);
+    expect(changed, "published modification times are detected during reads").toBeGreaterThan(0);
+
+    writer.kill("SIGKILL");
+    await closed;
+    const result = await node.run(agentId, "read", { path: "busy.txt", limit: 300 });
+    expect(result.isError, textOf(result)).toBe(false);
+    expect(textOf(result)).toBe(expected);
   });
 });
