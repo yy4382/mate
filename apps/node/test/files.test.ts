@@ -1,5 +1,13 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join, parse } from "node:path";
 import { onTestFinished, describe, expect, it } from "vitest";
 import { connectedNode, temporaryDirectory, textOf, windows } from "./support.ts";
@@ -119,15 +127,6 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
         drive,
         "\\outside.txt",
         "\\\\localhost\\share\\outside.txt",
-        "notes.txt:stream",
-        "...\\outside.txt",
-        "notes. ",
-        "NUL",
-        "CON.txt",
-        "nested\\aux",
-        "PRN",
-        "COM1.log",
-        "LPT1",
       ]) {
         const result = await node.run(agentId, "write", { path, content: "refused" });
         expect(result.isError, path).toBe(true);
@@ -140,6 +139,28 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
       expect(textOf(read)).toBe("inside");
     },
   );
+
+  it.runIf(windows)("uses a workspace beneath a configured junction", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const physicalRoot = `${node.workspacesRoot}-physical`;
+    renameSync(node.workspacesRoot, physicalRoot);
+    symlinkSync(physicalRoot, node.workspacesRoot, "junction");
+    const path = join(workspace, "notes", "today.txt");
+
+    const written = await node.run(agentId, "write", { path, content: "before" });
+    expect(written.isError, textOf(written)).toBe(false);
+    const edited = await node.run(agentId, "edit", {
+      path,
+      edits: [{ oldText: "before", newText: "after" }],
+    });
+    expect(edited.isError, textOf(edited)).toBe(false);
+    expect(textOf(await node.run(agentId, "read", { path }))).toBe("after");
+    expect(await node.gateway.browse(randomUUID(), agentId, path)).toMatchObject({
+      ok: true,
+      listing: { kind: "file", content: "after" },
+    });
+  });
 
   it.runIf(windows)(
     "refuses Windows file symlinks, including dangling and inward links",

@@ -73,12 +73,20 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
 
     const ok = await node.run(agentId, "bash", { command: "echo fine" });
     expect(ok.isError).toBe(false);
-    expect(textOf(ok).split(/\r?\n/)[0]).toBe("fine");
+    expect(textOf(ok).trimEnd()).toBe("fine");
 
     const failed = await node.run(agentId, "bash", { command: "echo partial; exit 3" });
     expect(failed.isError).toBe(true);
     expect(textOf(failed), "output survives a nonzero exit").toContain("partial");
     expect(textOf(failed)).toContain("Command exited with code 3");
+  });
+
+  it.runIf(windows)("preserves native command exit codes", async () => {
+    const node = await connectedNode();
+    const { agentId } = await node.agent();
+    const result = await node.run(agentId, "bash", { command: "cmd /c exit 5" });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe("Command exited with code 5");
   });
 
   it.runIf(windows)(
@@ -235,15 +243,6 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     expect(textOf(output)).toContain("结束");
     expect(textOf(output)).toContain("Output truncated");
     expect(textOf(output)).not.toContain("�");
-  });
-
-  it.runIf(windows)("reports unknown background status after PowerShell exits", async () => {
-    const node = await connectedNode();
-    const { agentId } = await node.agent();
-    const result = await node.run(agentId, "bash", { command: "Write-Output finished" });
-    expect(result.isError).toBe(false);
-    expect(textOf(result)).toContain("Background process status is unknown");
-    expect(textOf(result)).not.toContain("are still running");
   });
 
   it.skipIf(windows)(

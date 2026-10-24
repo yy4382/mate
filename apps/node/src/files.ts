@@ -43,7 +43,7 @@ export async function runFileTool(
   signal: AbortSignal,
 ): Promise<ToolResult> {
   try {
-    const env = new WorkspaceEnv(await realpath(workspace));
+    const env = new WorkspaceEnv(await realpath(workspace), workspace);
     return await fileTools[name](args, env, withAbortSignal(signal, BACKGROUND_CONTEXT));
   } catch (error) {
     return text(error instanceof Error ? error.message : String(error), true);
@@ -139,10 +139,12 @@ function localApi<D extends JsonValue>(
  */
 export class WorkspaceEnv extends NodeExecutionEnv {
   readonly #root: string;
+  readonly #configuredRoot: string;
 
-  constructor(root: string) {
+  constructor(root: string, configuredRoot: string) {
     super({ cwd: root });
     this.#root = root;
+    this.#configuredRoot = configuredRoot;
   }
 
   override async absolutePath(path: string, context: Context): Promise<Result<string, FileError>> {
@@ -150,6 +152,7 @@ export class WorkspaceEnv extends NodeExecutionEnv {
     if (!resolved.ok) return resolved;
     const accepted = await currentPlatform().workspacePaths.resolve(
       this.#root,
+      this.#configuredRoot,
       path,
       resolved.value,
     );

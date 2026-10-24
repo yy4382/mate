@@ -1,5 +1,4 @@
 import type { ChildProcessByStdio } from "node:child_process";
-import type { Stats } from "node:fs";
 import type { Readable } from "node:stream";
 
 export type PlatformId = "linux" | "darwin" | "win32";
@@ -17,12 +16,11 @@ export type Layout = {
 export type BundleLayout = {
   name: "linux" | "darwin" | "win";
   runtime: string;
-  script: string;
   command: string;
   launcher: string;
 };
 
-export type Background = "running" | "finished" | "unknown";
+export type Background = "running" | "finished";
 
 export type CommandProcess = {
   child: ChildProcessByStdio<null, Readable, Readable>;
@@ -62,25 +60,20 @@ export type Launcher = {
   remove(paths: Layout): string[];
 };
 
-export type PrivateFiles = {
-  directoryMode: number | undefined;
-  fileMode: number | undefined;
-  protectDirectory(path: string): void;
-  protectFile(path: string): void;
-  isPrivate(stat: Stats): boolean;
-};
-
 export type WorkspacePaths = {
-  resolve(root: string, input: string, resolved: string): Promise<string | undefined>;
+  resolve(
+    root: string,
+    configuredRoot: string,
+    input: string,
+    resolved: string,
+  ): Promise<string | undefined>;
 };
 
 export type Platform = {
-  id: PlatformId;
-  bundle: BundleLayout;
   layout(home?: string, env?: NodeJS.ProcessEnv): Layout;
   commands: { start(request: ShellRequest): CommandProcess };
   service(paths: Layout): ServiceManager;
   launcher: Launcher;
-  privateFiles: PrivateFiles;
+  checkIdentityMode: boolean;
   workspacePaths: WorkspacePaths;
 };

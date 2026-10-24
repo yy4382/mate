@@ -19,7 +19,7 @@ import {
 const nativeService = process.env["MATE_TEST_NATIVE_SERVICE"] === "1";
 
 it.runIf(nativeService)(
-  "the published bundle installs a native service, reports its real link, stops its process tree and does not retry identity refusal (dedicated CI account only)",
+  "the published bundle installs a native service, reports its real link, restarts a crashed Windows node, stops its process tree and does not retry identity refusal (dedicated CI account only)",
   async () => {
     expect(process.env["CI"], "native service smoke must use a disposable CI account").toBe("true");
     expect(["darwin", "win32"]).toContain(process.platform);
@@ -106,8 +106,57 @@ it.runIf(nativeService)(
       "the native manager verifies the node process that wrote link.json",
       30_000,
     );
-    const firstPid = JSON.parse(readFileSync(join(paths.data, "link.json"), "utf8")).pid as number;
-    expect(running(firstPid)).toBe(true);
+    const linkFile = join(paths.data, "link.json");
+    let nodePid = JSON.parse(readFileSync(linkFile, "utf8")).pid as number;
+    expect(running(nodePid)).toBe(true);
+    const powershell = (script: string): string => {
+      const result = spawnSync(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command", script],
+        {
+          encoding: "utf8",
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    const task = `
+$ErrorActionPreference = 'Stop'
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$name = 'Mate node ' + $sid
+$scheduler = New-Object -ComObject 'Schedule.Service'
+$scheduler.Connect()
+$folder = $scheduler.GetFolder('\\')
+$task = $folder.GetTask($name)
+`;
+    if (windows) {
+      const authentications = gateway.authentications;
+      powershell(`
+$ErrorActionPreference = 'Stop'
+Add-Type -Name NativeProcess -Namespace MateTest -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true)] public static extern bool TerminateProcess(IntPtr handle, uint exitCode);'
+$node = Get-Process -Id ${nodePid}
+if (-not [MateTest.NativeProcess]::TerminateProcess($node.Handle, 1)) { throw 'Could not terminate node' }
+$node.WaitForExit()
+if ($node.ExitCode -ne 1) { throw "Expected node exit 1, got $($node.ExitCode)" }
+`);
+      await eventually(
+        () => gateway.authentications > authentications,
+        "Task Scheduler restarts a node that exited with code 1 after its one-minute restart interval",
+        90_000,
+      );
+      await eventually(
+        () => {
+          const link = JSON.parse(readFileSync(linkFile, "utf8"));
+          return link.pid !== nodePid && link.connected;
+        },
+        "the restarted node publishes its new connection",
+        30_000,
+      );
+      const restartedPid = JSON.parse(readFileSync(linkFile, "utf8")).pid as number;
+      expect(running(nodePid)).toBe(false);
+      nodePid = restartedPid;
+      expect(ok("status")).toContain("Link: connected since");
+    }
 
     const agentId = randomUUID();
     expect((await gateway.prepareWorkspace(randomUUID(), agentId)).isError).toBe(false);
@@ -120,7 +169,7 @@ it.runIf(nativeService)(
     ok("stop");
     await command;
     await eventually(
-      () => !running(firstPid) && descendants.every((pid) => !running(pid)),
+      () => !running(nodePid) && descendants.every((pid) => !running(pid)),
       "native stop kills the node and its live command tree",
       30_000,
     );
@@ -138,7 +187,20 @@ it.runIf(nativeService)(
     const beforeVersion = JSON.parse(
       readFileSync(join(paths.program, "manifest.json"), "utf8"),
     ).version;
+    if (windows) {
+      powershell(`${task}
+$definition = $task.Definition
+$definition.Actions.Item(1).Arguments += ' --obsolete-argument'
+$folder.RegisterTaskDefinition($name, $definition, 6, $sid, $null, 3, $null) | Out-Null
+`);
+    }
     ok("update", update);
+    if (windows) {
+      const argumentsText = powershell(`${task}
+$task.Definition.Actions.Item(1).Arguments`);
+      expect(argumentsText).not.toContain("--obsolete-argument");
+      expect(argumentsText.trim()).toMatch(/ node run --service$/);
+    }
     const updatedVersion = JSON.parse(
       readFileSync(join(paths.program, "manifest.json"), "utf8"),
     ).version;
@@ -175,5 +237,5 @@ it.runIf(nativeService)(
     expect(existsSync(paths.config)).toBe(true);
     expect(existsSync(paths.data)).toBe(true);
   },
-  180_000,
+  300_000,
 );

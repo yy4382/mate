@@ -223,10 +223,6 @@ function render(
   }
   if (background === "running") {
     remarks.push("[Background processes started by this command are still running]");
-  } else if (background === "unknown") {
-    remarks.push(
-      "[Background process status is unknown: Windows cannot track orphaned processes after the command shell exits]",
-    );
   }
   const outcome = describe(ending, timeoutSeconds);
   if (outcome !== undefined) remarks.push(outcome);

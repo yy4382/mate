@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { EXIT_DO_NOT_RESTART } from "./service-constants.ts";
+import { EXIT_DO_NOT_RESTART } from "../installation.ts";
 import { markedFileOwnership, reportToStderr, writeServiceFile } from "./service-files.ts";
 import type { BundleLayout, Layout, ServiceManager, ServiceState } from "./types.ts";
 
@@ -31,7 +31,7 @@ Description=Mate node
 
 [Service]
 Type=exec
-ExecStart=${quotedPath(join(paths.program, bundle.runtime))} ${quotedPath(join(paths.program, bundle.script))} node run --service
+ExecStart=${quotedPath(join(paths.program, bundle.runtime))} ${quotedPath(join(paths.program, "lib/mate.mjs"))} node run --service
 Restart=on-failure
 RestartSec=5s
 RestartPreventExitStatus=${EXIT_DO_NOT_RESTART}

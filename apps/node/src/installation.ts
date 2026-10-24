@@ -8,14 +8,10 @@ import { currentPlatform } from "./platforms/index.ts";
 import { lstatOrUndefined } from "./platforms/service-files.ts";
 import type { Layout, Ownership } from "./platforms/types.ts";
 
-export { EXIT_DO_NOT_RESTART } from "./platforms/service-constants.ts";
+export const EXIT_DO_NOT_RESTART = 78;
 export type { Layout } from "./platforms/types.ts";
 
 const SCRATCH = /^\.mate-node-(staging|old)-/;
-
-export function layout(home?: string): Layout {
-  return currentPlatform().layout(home);
-}
 
 type Program =
   | { kind: "absent" }

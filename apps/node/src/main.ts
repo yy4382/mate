@@ -5,7 +5,6 @@ import { readConfig, writeConfig } from "./config.ts";
 import {
   EXIT_DO_NOT_RESTART,
   install,
-  layout,
   logs,
   start,
   status,
@@ -39,7 +38,7 @@ try {
 }
 
 async function manage(command: string, args: string[]): Promise<number> {
-  const paths = layout();
+  const paths = currentPlatform().layout();
   const print = (lines: string[]) => {
     process.stdout.write(`${lines.join("\n")}\n`);
     return 0;
@@ -104,7 +103,7 @@ async function run(args: string[]): Promise<never> {
   const { values } = parsed(() =>
     parseArgs({ args, options: { service: { type: "boolean", default: false } } }),
   );
-  const paths = layout();
+  const paths = currentPlatform().layout();
   const service = currentPlatform().service(paths);
   const report = (message: string) => {
     if (values.service) service.report(message);

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { EXIT_DO_NOT_RESTART } from "./service-constants.ts";
+import { EXIT_DO_NOT_RESTART } from "../installation.ts";
 import {
   fileLogs,
   markedFileOwnership,
@@ -36,7 +36,7 @@ ${MARKER}
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key><array>
     <string>${xmlText(join(paths.program, bundle.runtime))}</string>
-    <string>${xmlText(join(paths.program, bundle.script))}</string>
+    <string>${xmlText(join(paths.program, "lib/mate.mjs"))}</string>
     <string>node</string><string>run</string><string>--service</string>
   </array>
   <key>Disabled</key><true/>
