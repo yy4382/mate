@@ -251,6 +251,12 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 **node**
 以宿主机上一个普通账号（node 账号，不是控制面的账号，也不在 docker 组里）运行的执行进程，由 `mate node` CLI 管理成 systemd 用户服务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
 
+**node 名字**（node name）
+网关保存的、管理员可改且唯一的机器名字；UUID 仍用于身份和调用（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
+
+**系统信息**（NodeSystem）
+node 在握手时报告的宿主平台、架构、hostname、系统版本和程序版本，由网关保存最近一份（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
+
 **链路**（link）
 `node run` 与网关之间的连接是否已经握手成功。node 在数据目录的 `link.json` 里记下 `{ pid, connected, since }`（握手成功或连接结束时原子替换；启动时先写 `connected: false`）。`mate node status` 的 `Link:` 行只在服务正在运行、且文件里的 pid 等于 systemd 报告的 `MainPID` 时读它，否则是 `Link: none`，所以崩溃进程留下的文件不会被当成已连接。自动部署用 `Link: connected` 判断新 node 起好了。
 避免：把服务 `active` 叫连上（systemd 只知道进程在跑）。
@@ -274,6 +280,9 @@ Agent Manager 看到的"工作区在哪里"：在一个 node 上为一个 Agent 
 
 **node 网关**（node gateway）
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
+
+**网关操作拒绝**（NodeGatewayError）
+`@mate/gateway` 对 node 操作的拒绝异常，带 `reason`，与线路上的 `gateway.error` 消息不同（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
 
 **工作区**（workspace）
 Agent 在 node 上的工作目录。Agent 在里面自由组织记忆、文件和脚本。

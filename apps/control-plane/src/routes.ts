@@ -287,6 +287,12 @@ export function adminRoutes(admin: Admin): Route[] {
     { method: "GET", path: "/api/admin/models", json: () => admin.models() },
     { method: "GET", path: "/api/admin/nodes", json: () => admin.nodes() },
     {
+      method: "PUT",
+      path: "/api/admin/nodes/:id",
+      json: ({ params, body }) =>
+        admin.renameNode(params.id ?? "", forwarded<{ name: string }>(body).name),
+    },
+    {
       method: "POST",
       path: "/api/admin/pairing-tokens",
       json: () => admin.createPairingToken(),

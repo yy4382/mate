@@ -5,11 +5,15 @@
 //
 // usage: node --conditions=mate-source populate.ts <data-directory> <facts-file>
 import { writeFileSync } from "node:fs";
+import { createPrivateKey, generateKeyPairSync, sign } from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { openAdmin } from "@mate/admin";
 import { ChatApp } from "@mate/chat";
 import { systemClock } from "@mate/clock";
 import { createNodeGateway } from "@mate/gateway";
+import { FakeNode } from "@mate/testkit";
 import { OwnerLogin } from "./src/login.ts";
 import { vapidKeys } from "./src/push.ts";
 import { openShellTables } from "./src/store.ts";
@@ -53,6 +57,39 @@ const gateway = createNodeGateway({
   pairingTokenTtlMs: 100 * 365 * 24 * 60 * 60 * 1000,
 });
 const admin = await openAdmin({ dataDirectory, chat, owner, gateway, clock: systemClock });
+const server = createServer();
+server.on("upgrade", (request, socket, head) => gateway.handleUpgrade(request, socket, head));
+await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+const gatewayUrl = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/nodes/connect`;
+const pairedNodes = [];
+for (const nodeId of [
+  "abcdef01-0000-4000-8000-000000000002",
+  "abcdef01-0000-4000-8000-000000000001",
+]) {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519", {
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  });
+  const token = gateway.createPairingToken().pairingToken;
+  const node = new FakeNode({
+    gatewayUrl,
+    nodeId,
+    publicKey,
+    pairingToken: token,
+    sign: (nonce) =>
+      sign(null, Buffer.from(nonce), createPrivateKey(privateKey)).toString("base64url"),
+  });
+  await node.connect();
+  node.close();
+  await node.closed();
+  pairedNodes.push({
+    nodeId,
+    privateKey,
+    publicKey,
+    lastConnectedAt: gateway.status(nodeId).lastConnectedAt,
+  });
+}
+await new Promise<void>((resolve) => server.close(() => resolve()));
 
 const ada = chat.ensureAccount({ externalId: AGENT_ONE, displayName: "Ada", handle: "ada" });
 const bo = chat.ensureAccount({ externalId: AGENT_TWO, displayName: "Bo", handle: "bo" });
@@ -120,6 +157,7 @@ writeFileSync(
       ownerSessionToken: session.session.token,
       openaiApiKey: API_KEY,
       pairingToken,
+      pairedNodes,
       agentExternalIds: [AGENT_ONE, AGENT_TWO],
       pushEndpoint: PUSH_ENDPOINT,
       ownerUnread: {

@@ -1,11 +1,12 @@
 import type { Clock } from "@mate/clock";
 import {
   GatewayMessageSchema,
+  NodeAuthenticateSchema,
+  NodePairSchema,
   NodeRequestSchema,
   type GatewayError,
   type GatewayMessage,
   type GatewayRefused,
-  type NodeRequest,
   type ToolResult,
 } from "@mate/node-protocol";
 import { randomBytes } from "node:crypto";
@@ -22,11 +23,17 @@ import {
   isEd25519PublicKey,
   nodePublicKey,
   pairNode,
-  touchNodeConnection,
+  recordNodeConnection,
   verifyEd25519,
 } from "./storage.ts";
 
 const HANDSHAKE_TIMEOUT_MS = 10_000;
+const ReceivedNodeRequestSchema = z.union([
+  NodeRequestSchema,
+  NodeAuthenticateSchema.partial({ system: true }),
+  NodePairSchema.partial({ system: true }),
+]);
+type ReceivedNodeRequest = z.infer<typeof ReceivedNodeRequestSchema>;
 /**
  * The largest message the gateway reads, measured on the serialized frame as it arrives. The WebSocket server enforces
  * it before buffering the rest, and closes the connection with 1009.
@@ -150,7 +157,7 @@ function handleMessage(ws: WebSocket, data: RawData, ctx: GatewayContext): void 
     return;
   }
 
-  const parsed = NodeRequestSchema.safeParse(raw);
+  const parsed = ReceivedNodeRequestSchema.safeParse(raw);
   if (!parsed.success) {
     const rid = requestIdOf.safeParse(raw);
     rejectSocket(
@@ -170,7 +177,7 @@ function handleMessage(ws: WebSocket, data: RawData, ctx: GatewayContext): void 
 
 function dispatch(
   ws: WebSocket,
-  msg: NodeRequest,
+  msg: ReceivedNodeRequest,
   session: NodeSession,
   ctx: GatewayContext,
 ): void {
@@ -203,7 +210,7 @@ function dispatch(
 
 function handleAuthenticate(
   ws: WebSocket,
-  msg: Extract<NodeRequest, { type: "node.authenticate" }>,
+  msg: Extract<ReceivedNodeRequest, { type: "node.authenticate" }>,
   session: NodeSession,
   ctx: GatewayContext,
 ): void {
@@ -228,13 +235,14 @@ function handleAuthenticate(
     );
     return;
   }
+  recordNodeConnection(ctx.db, msg.nodeId, msg.system, () => ctx.clock.now());
   markConnected(ws, msg.nodeId, session, ctx);
   sendGateway(ws, { type: "gateway.authenticated", requestId: msg.requestId, nodeId: msg.nodeId });
 }
 
 function handlePair(
   ws: WebSocket,
-  msg: Extract<NodeRequest, { type: "node.pair" }>,
+  msg: Extract<ReceivedNodeRequest, { type: "node.pair" }>,
   session: NodeSession,
   ctx: GatewayContext,
 ): void {
@@ -258,7 +266,11 @@ function handlePair(
     );
     return;
   }
-  if (!pairNode(ctx.db, msg.pairingToken, msg.nodeId, msg.publicKey, () => ctx.clock.now())) {
+  if (
+    !pairNode(ctx.db, msg.pairingToken, msg.nodeId, msg.publicKey, msg.system, () =>
+      ctx.clock.now(),
+    )
+  ) {
     rejectSocket(
       ws,
       ctx,
@@ -293,7 +305,6 @@ function markConnected(
   session.nodeId = nodeId;
   session.lastHeartbeatAt = ctx.clock.now();
   ctx.connected.set(nodeId, ws);
-  touchNodeConnection(ctx.db, nodeId, () => ctx.clock.now());
   void watchHeartbeat(ws, session, ctx);
 }
 

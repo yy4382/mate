@@ -1,8 +1,22 @@
 {
   "ownerPassword": "fixture owner password",
-  "ownerSessionToken": "vZ6utcUNXM08TjiOzkrkmYGAozJ6GgH2uJHfhHMNvyM",
+  "ownerSessionToken": "ffxXysM5kbzQnJyllHeFV_fE6wMHg5qjXv6sU7nn0o4",
   "openaiApiKey": "sk-fixture-not-a-real-key",
-  "pairingToken": "GnQqm6xMKPCVveoTRukawwEgKZKtoKn9s81dPHALa1k",
+  "pairingToken": "kJpm6bIy6c0yQr5uNLVxkiT2taVxSwfk7Cz9TTRtzU0",
+  "pairedNodes": [
+    {
+      "nodeId": "abcdef01-0000-4000-8000-000000000002",
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIDczKJXy1DcS/q/m/RFNxTIrjs64rXWJIIvcVCYev1TR\n-----END PRIVATE KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA9MSO0Db0d8ZlGXqFI+jaxV1dfGkvsC4uqUg0cN4oYtQ=\n-----END PUBLIC KEY-----\n",
+      "lastConnectedAt": "2026-10-24T02:26:42.716Z"
+    },
+    {
+      "nodeId": "abcdef01-0000-4000-8000-000000000001",
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIG4f+Mevhjv/fnmpEezt5V47hooHTzcz6dN7WFG6qr0R\n-----END PRIVATE KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA9ewWENTXeXfXWNIWwX3T3OzR+xHFxtts7zMSd2yP9tQ=\n-----END PUBLIC KEY-----\n",
+      "lastConnectedAt": "2026-10-24T02:26:42.720Z"
+    }
+  ],
   "agentExternalIds": [
     "11111111-1111-4111-8111-111111111111",
     "22222222-2222-4222-8222-222222222222"

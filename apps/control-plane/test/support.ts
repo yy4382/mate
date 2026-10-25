@@ -94,7 +94,7 @@ export function environment(options: { webDirectory?: string } = {}) {
         /** Pair a fake node with a token an admin made, connected through the control plane's own HTTP server. */
         async pairNode(
           admin: Browser,
-          behaviour: Pick<FakeNodeOptions, "onBrowse" | "onPrepareWorkspace"> = {},
+          behaviour: Pick<FakeNodeOptions, "onBrowse" | "onPrepareWorkspace" | "system"> = {},
           token?: string,
         ): Promise<string> {
           const pairingToken =
@@ -131,7 +131,7 @@ export type Site = {
   close(): Promise<void>;
   pairNode(
     admin: Browser,
-    behaviour?: Pick<FakeNodeOptions, "onBrowse" | "onPrepareWorkspace">,
+    behaviour?: Pick<FakeNodeOptions, "onBrowse" | "onPrepareWorkspace" | "system">,
     pairingToken?: string,
   ): Promise<string>;
 };

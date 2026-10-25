@@ -120,6 +120,21 @@ describe("the owner's HTTP operations", () => {
     });
     expect(closed).toBe("refused");
   });
+
+  it("renames nodes over HTTP and maps an occupied name to a conflict", async () => {
+    const site = await environment().start();
+    const admin = site.browser();
+    await admin.logInAdmin();
+    const first = await site.pairNode(admin);
+    const second = await site.pairNode(admin);
+
+    expect(
+      (await admin.request("PUT", `/api/admin/nodes/${first}`, { name: "worker" })).status,
+    ).toBe(204);
+    expect(
+      refusal(await admin.request("PUT", `/api/admin/nodes/${second}`, { name: "worker" })),
+    ).toEqual([409, "name-taken"]);
+  });
 });
 
 /** GET `path` exactly as written, without the URL normalisation fetch applies. */

@@ -44,7 +44,11 @@ async function gatewayWithNode(): Promise<{
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
-  await eventually(() => gateway.status(identity.id).online, "the node is online", 8_000);
+  await eventually(
+    () => gateway.nodes().some((node) => node.nodeId === identity.id && node.online),
+    "the node is online",
+    8_000,
+  );
   return { gateway, nodeId: identity.id, workspacesRoot, stopNode };
 }
 

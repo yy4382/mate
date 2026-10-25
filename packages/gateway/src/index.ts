@@ -6,3 +6,4 @@ export {
   type RunToolRequest,
 } from "./gateway.ts";
 export type { BrowseOutcome } from "./pending-calls.ts";
+export { NodeGatewayError, type NodeGatewayErrorReason } from "./node-gateway-error.ts";

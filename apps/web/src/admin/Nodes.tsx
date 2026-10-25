@@ -1,17 +1,128 @@
-import { Check, Copy, Link2, Server } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Check, Copy, Link2, Pencil, Server } from "lucide-react";
 import { useEffect, useState } from "react";
-import { post } from "../shell/api.ts";
+import { ApiError, post, put } from "../shell/api.ts";
+import { refusalText } from "../shell/humans.ts";
 import {
   Badge,
   Button,
   Dialog,
   EmptyState,
   ErrorLine,
+  Field,
+  Input,
   PageHeader,
   StatusDot,
   buttonClass,
 } from "../shell/ui.tsx";
-import { useNodes } from "./data.ts";
+import { adminKeys, useNodes, type NodeView } from "./data.ts";
+
+const NAME_HINT = "1 到 32 个小写字母、数字或 -，以字母或数字开头。";
+const NODE_NAME_PATTERN = "[a-z0-9][a-z0-9\\-]{0,31}";
+
+function RenameNode({ node, onClose }: { node: NodeView; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState(node.name);
+  const rename = useMutation({
+    mutationFn: (value: string) => put(`/api/admin/nodes/${node.nodeId}`, { name: value }),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: adminKeys.nodes }),
+        qc.invalidateQueries({ queryKey: adminKeys.agents }),
+      ]);
+    },
+  });
+  const nameError =
+    rename.error instanceof ApiError && rename.error.reason === "name-taken"
+      ? refusalText(rename.error)
+      : undefined;
+
+  return (
+    <Dialog title="修改 Node 名字" description={`当前名字是 ${node.name}。`} onClose={onClose}>
+      <form
+        className="grid gap-4"
+        aria-label="修改 Node 名字"
+        onSubmit={(event) => {
+          event.preventDefault();
+          rename.mutate(name, { onSuccess: onClose });
+        }}
+      >
+        <Field label="名字" hint={NAME_HINT} error={nameError}>
+          <Input
+            value={name}
+            onChange={(event) => {
+              setName(event.target.value);
+              rename.reset();
+            }}
+            autoCapitalize="none"
+            spellCheck={false}
+            pattern={NODE_NAME_PATTERN}
+            maxLength={32}
+            disabled={rename.isPending}
+            required
+          />
+        </Field>
+        <ErrorLine
+          error={nameError === undefined && rename.error ? refusalText(rename.error) : null}
+        />
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>取消</Button>
+          <Button type="submit" variant="primary" disabled={rename.isPending}>
+            {rename.isPending ? "保存中…" : "保存名字"}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function NodeRow({ node }: { node: NodeView }) {
+  const [renaming, setRenaming] = useState(false);
+  return (
+    <li data-node={node.nodeId} className="grid gap-3 p-4">
+      <div className="flex items-center gap-3">
+        <StatusDot tone={node.online ? "success" : "neutral"} />
+        <span className="min-w-0 flex-1 break-all font-medium">{node.name}</span>
+        <Badge tone={node.online ? "success" : "neutral"}>{node.online ? "在线" : "离线"}</Badge>
+        <Button size="sm" onClick={() => setRenaming(true)}>
+          <Pencil aria-hidden />
+          改名
+        </Button>
+      </div>
+      {node.system === null ? (
+        <p className="text-xs text-muted">尚未收到系统信息。</p>
+      ) : (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
+          <div className="min-w-0">
+            <dt className="text-muted">系统</dt>
+            <dd className="mt-1 break-all">
+              {node.system.platform} · {node.system.osRelease}
+            </dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-muted">架构</dt>
+            <dd className="mt-1 break-all">{node.system.arch}</dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-muted">主机名</dt>
+            <dd className="mt-1 break-all">{node.system.hostname}</dd>
+          </div>
+          <div className="min-w-0">
+            <dt className="text-muted">Node 版本</dt>
+            <dd className="mt-1 break-all">{node.system.version}</dd>
+          </div>
+        </dl>
+      )}
+      <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs text-muted">
+        <code className="break-all font-mono">{node.nodeId}</code>
+        {node.lastConnectedAt === null ? null : (
+          <span>上次连接 {new Date(node.lastConnectedAt).toLocaleString("zh-CN")}</span>
+        )}
+      </div>
+      {renaming ? <RenameNode node={node} onClose={() => setRenaming(false)} /> : null}
+    </li>
+  );
+}
 
 /** A mono block with a button that copies its text; the button shows a check for two seconds. */
 function CopyBlock(props: { label: string; text: string; testId?: string }) {
@@ -85,26 +196,7 @@ export function Nodes() {
       {nodes.data === undefined || empty ? null : (
         <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
           {nodes.data.map((node) => (
-            <li
-              key={node.nodeId}
-              data-node={node.nodeId}
-              className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:gap-3"
-            >
-              <div className="flex min-w-0 items-center gap-3">
-                <StatusDot tone={node.online ? "success" : "neutral"} />
-                <code title={node.nodeId} className="truncate font-mono text-sm">
-                  {node.nodeId}
-                </code>
-                <Badge tone={node.online ? "success" : "neutral"}>
-                  {node.online ? "在线" : "离线"}
-                </Badge>
-              </div>
-              {node.lastConnectedAt === null ? null : (
-                <span className="text-xs text-muted sm:ml-auto">
-                  上次连接 {new Date(node.lastConnectedAt).toLocaleString("zh-CN")}
-                </span>
-              )}
-            </li>
+            <NodeRow key={node.nodeId} node={node} />
           ))}
         </ul>
       )}

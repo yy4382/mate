@@ -2,7 +2,11 @@ import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { openControlTables, type ControlTables } from "@mate/control-store";
 import { Migrations } from "@mate/migrations";
+import { NodeSystemSchema, type NodeSystem } from "@mate/node-protocol";
 import { z } from "zod";
+import { NodeGatewayError } from "./node-gateway-error.ts";
+
+const NodeNameSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/);
 
 const GATEWAY_TABLES: ControlTables = {
   module: "gateway",
@@ -22,6 +26,30 @@ CREATE TABLE pairing_tokens (
   expires_at INTEGER NOT NULL,
   used INTEGER NOT NULL DEFAULT 0
 );
+`,
+    },
+    {
+      version: 2,
+      sql: `
+CREATE TABLE nodes_next (
+  id TEXT PRIMARY KEY,
+  public_key TEXT NOT NULL,
+  paired_at INTEGER NOT NULL,
+  last_connected_at INTEGER,
+  name TEXT NOT NULL UNIQUE,
+  system_json TEXT,
+  reported_at INTEGER,
+  CHECK ((system_json IS NULL) = (reported_at IS NULL))
+);
+INSERT INTO nodes_next (id, public_key, paired_at, last_connected_at, name)
+SELECT id, public_key, paired_at, last_connected_at,
+  'node-' || lower(substr(id, 1, 8)) || CASE WHEN ordinal = 1 THEN '' ELSE '-' || ordinal END
+FROM (
+  SELECT *, row_number() OVER (PARTITION BY lower(substr(id, 1, 8)) ORDER BY id) AS ordinal
+  FROM nodes
+);
+DROP TABLE nodes;
+ALTER TABLE nodes_next RENAME TO nodes;
 `,
     },
   ]),
@@ -58,6 +86,7 @@ export function pairNode(
   token: string,
   nodeId: string,
   publicKey: string,
+  system: NodeSystem | undefined,
   now: () => number,
 ): boolean {
   const at = now();
@@ -68,9 +97,18 @@ export function pairNode(
       .run(hashToken(token), at);
     const added = db
       .prepare(
-        "INSERT INTO nodes(id,public_key,paired_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING",
+        `INSERT INTO nodes(id, public_key, paired_at, last_connected_at, name, system_json, reported_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
       )
-      .run(nodeId, publicKey, at);
+      .run(
+        nodeId,
+        publicKey,
+        at,
+        at,
+        availableName(db, system?.hostname ?? "", nodeId),
+        system === undefined ? null : JSON.stringify(system),
+        system === undefined ? null : at,
+      );
     const paired = used.changes === 1 && added.changes === 1;
     db.exec(paired ? "COMMIT" : "ROLLBACK");
     return paired;
@@ -87,8 +125,55 @@ export function nodePublicKey(db: DatabaseSync, nodeId: string): string | undefi
     .parse(db.prepare("SELECT public_key FROM nodes WHERE id=?").get(nodeId))?.public_key;
 }
 
-export function touchNodeConnection(db: DatabaseSync, nodeId: string, now: () => number): void {
-  db.prepare("UPDATE nodes SET last_connected_at=? WHERE id=?").run(now(), nodeId);
+export function recordNodeConnection(
+  db: DatabaseSync,
+  nodeId: string,
+  system: NodeSystem | undefined,
+  now: () => number,
+): void {
+  const at = now();
+  if (system === undefined) {
+    db.prepare("UPDATE nodes SET last_connected_at=? WHERE id=?").run(at, nodeId);
+  } else {
+    db.prepare("UPDATE nodes SET last_connected_at=?, system_json=?, reported_at=? WHERE id=?").run(
+      at,
+      JSON.stringify(system),
+      at,
+      nodeId,
+    );
+  }
+}
+
+export function renameNode(db: DatabaseSync, nodeId: string, name: string): void {
+  if (!NodeNameSchema.safeParse(name).success) {
+    throw new NodeGatewayError(
+      "invalid-input",
+      "a node name must be 1 to 32 lowercase letters, digits or hyphens, starting with a letter or digit",
+    );
+  }
+  const owner = db.prepare("SELECT id FROM nodes WHERE name=?").get(name);
+  if (owner !== undefined && owner.id !== nodeId)
+    throw new NodeGatewayError("name-taken", `node name ${name} is already taken`);
+  const updated = db.prepare("UPDATE nodes SET name=? WHERE id=?").run(name, nodeId);
+  if (updated.changes === 0) throw new NodeGatewayError("unknown-node", `no paired node ${nodeId}`);
+}
+
+function availableName(db: DatabaseSync, hostname: string, nodeId: string): string {
+  const hostnameName = hostname
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/^-+/, "")
+    .slice(0, 32);
+  const base = hostnameName || `node-${nodeId.slice(0, 8).toLowerCase()}`;
+  let name = base;
+  let ordinal = 2;
+  const exists = db.prepare("SELECT id FROM nodes WHERE name=?");
+  while (exists.get(name) !== undefined) {
+    const suffix = `-${ordinal}`;
+    name = `${base.slice(0, 32 - suffix.length)}${suffix}`;
+    ordinal += 1;
+  }
+  return name;
 }
 
 export function listNodes(db: DatabaseSync): NodeStatus[] {
@@ -96,20 +181,32 @@ export function listNodes(db: DatabaseSync): NodeStatus[] {
     .array(
       z.object({
         id: z.string(),
+        name: z.string(),
         last_connected_at: z.number().nullable(),
+        system_json: z.string().nullable(),
       }),
     )
-    .parse(db.prepare("SELECT id, last_connected_at FROM nodes ORDER BY paired_at, id").all());
+    .parse(
+      db
+        .prepare(
+          "SELECT id, name, last_connected_at, system_json FROM nodes ORDER BY paired_at, id",
+        )
+        .all(),
+    );
   return rows.map((row) => ({
     nodeId: row.id,
+    name: row.name,
     lastConnectedAt:
       row.last_connected_at === null ? null : new Date(row.last_connected_at).toISOString(),
+    system: row.system_json === null ? null : NodeSystemSchema.parse(JSON.parse(row.system_json)),
   }));
 }
 
 export interface NodeStatus {
   nodeId: string;
+  name: string;
   lastConnectedAt: string | null;
+  system: NodeSystem | null;
 }
 
 export function isEd25519PublicKey(pem: string): boolean {

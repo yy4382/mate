@@ -6,6 +6,7 @@ import {
   type GatewayPrepareWorkspace,
   type GatewayRunTool,
   type JsonValue,
+  type NodeSystem,
   type ToolName,
   type ToolResult,
 } from "@mate/node-protocol";
@@ -28,7 +29,8 @@ import {
   stoppedResult,
   type BrowseOutcome,
 } from "./pending-calls.ts";
-import { createPairingToken, listNodes, openGatewayDatabase } from "./storage.ts";
+import { NodeGatewayError } from "./node-gateway-error.ts";
+import { createPairingToken, listNodes, openGatewayDatabase, renameNode } from "./storage.ts";
 
 const DEFAULT_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_UNAUTHENTICATED = 32;
@@ -78,6 +80,9 @@ export interface NodeGateway {
   /** Every paired node and whether it is online. */
   nodes(): NodeStatusResult[];
 
+  /** Change a paired node's name. Refuses invalid, taken names and unknown nodes with NodeGatewayError. */
+  renameNode(nodeId: string, name: string): void;
+
   /** Create a single-use pairing token for a new node. */
   createPairingToken(): { pairingToken: string; expiresAt: string };
 
@@ -90,8 +95,10 @@ export interface NodeGateway {
 
 export interface NodeStatusResult {
   nodeId: string;
+  name: string;
   online: boolean;
   lastConnectedAt: string | null;
+  system: NodeSystem | null;
 }
 
 export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
@@ -113,10 +120,6 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   wss.on("connection", (ws: WebSocket) => acceptNodeSocket(ws, ctx));
-
-  function statusOf(nodeId: string, lastConnectedAt: string | null): NodeStatusResult {
-    return { nodeId, online: ctx.connected.has(nodeId), lastConnectedAt };
-  }
 
   /**
    * Send one request to a node and wait for its answer. The gateway picks the request ID, so calls from different
@@ -188,11 +191,17 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
 
     status(nodeId) {
       const node = listNodes(ctx.db).find((n) => n.nodeId === nodeId);
-      return statusOf(nodeId, node?.lastConnectedAt ?? null);
+      if (node === undefined)
+        throw new NodeGatewayError("unknown-node", `no paired node ${nodeId}`);
+      return { ...node, online: ctx.connected.has(nodeId) };
     },
 
     nodes() {
-      return listNodes(ctx.db).map((n) => statusOf(n.nodeId, n.lastConnectedAt));
+      return listNodes(ctx.db).map((node) => ({ ...node, online: ctx.connected.has(node.nodeId) }));
+    },
+
+    renameNode(nodeId, name) {
+      renameNode(ctx.db, nodeId, name);
     },
 
     createPairingToken() {

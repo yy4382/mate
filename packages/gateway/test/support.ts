@@ -33,7 +33,7 @@ export async function startGateway(
   options: Partial<NodeGatewayOptions> = {},
 ): Promise<GatewayUnderTest> {
   const clock = new FakeClock();
-  const dataDirectory = temporaryDirectory();
+  const dataDirectory = options.dataDirectory ?? temporaryDirectory();
   const create = () =>
     createNodeGateway({
       dataDirectory,

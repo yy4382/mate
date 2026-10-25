@@ -5,6 +5,7 @@ import {
   type GatewayRunTool,
   type NodeBrowseOutcome,
   type NodeRequest,
+  type NodeSystem,
   type ToolResult,
 } from "@mate/node-protocol";
 import { randomUUID } from "node:crypto";
@@ -20,6 +21,8 @@ export interface FakeNodeOptions {
   sign: (nonce: string) => string;
   publicKey?: string | undefined;
   pairingToken?: string | undefined;
+  /** Omitted for an older node that does not report system information. */
+  system?: NodeSystem;
   onRunTool?: (msg: GatewayRunTool) => Promise<{
     outputs: string[];
     result: ToolResult;
@@ -94,12 +97,14 @@ export class FakeNode {
     if (msg.type === "gateway.challenge") {
       this.#challenge = msg.nonce;
       const sig = this.#options.sign(msg.nonce);
-      this.send({
-        type: "node.authenticate",
+      const message = {
+        type: "node.authenticate" as const,
         requestId: randomUUID(),
         nodeId: this.#options.nodeId,
         signature: sig,
-      });
+      };
+      const system = this.#options.system;
+      this.#ws?.send(JSON.stringify(system === undefined ? message : { ...message, system }));
       return;
     }
 
@@ -112,14 +117,16 @@ export class FakeNode {
         pairingToken !== undefined &&
         publicKey !== undefined
       ) {
-        this.send({
-          type: "node.pair",
+        const message = {
+          type: "node.pair" as const,
           requestId: randomUUID(),
           nodeId: this.#options.nodeId,
           publicKey,
           signature: this.#options.sign(challenge),
           pairingToken,
-        });
+        };
+        const system = this.#options.system;
+        this.#ws?.send(JSON.stringify(system === undefined ? message : { ...message, system }));
         return;
       }
       this.#onAuthError?.(new Error(`Gateway refused: ${msg.code} — ${msg.message}`));

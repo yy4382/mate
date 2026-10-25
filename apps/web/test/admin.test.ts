@@ -41,6 +41,13 @@ describe("Agents", () => {
     const site = await startSite();
     const scripted = await site.provider();
     await site.pairNode({
+      system: {
+        platform: "linux",
+        arch: "arm64",
+        hostname: "home-server",
+        osRelease: "6.8.0",
+        version: "dev",
+      },
       onBrowse: async (request) => ({
         ok: true,
         listing:
@@ -67,6 +74,7 @@ describe("Agents", () => {
 
     await page.getByRole("button", { name: "创建 Agent" }).click();
     const form = page.getByRole("form", { name: "创建 Agent" });
+    await form.getByText("home-server", { exact: true }).waitFor();
     await form.getByLabel("显示名").fill("Richard");
     await form.getByLabel("Handle").fill("richard");
     await form.getByLabel("模型").selectOption("openai/gpt-4.1");

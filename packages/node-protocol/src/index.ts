@@ -176,12 +176,22 @@ export type NodeBrowseOutcome = z.infer<typeof NodeBrowseOutcomeSchema>;
 
 // ── Node → Gateway (node sends these) ────────────────────────────────────────
 
+export const NodeSystemSchema = z.object({
+  platform: z.string(),
+  arch: z.string(),
+  hostname: z.string(),
+  osRelease: z.string(),
+  version: z.string(),
+});
+export type NodeSystem = z.infer<typeof NodeSystemSchema>;
+
 export const NodeAuthenticateSchema = z.object({
   type: z.literal("node.authenticate"),
   requestId,
   nodeId,
   /** base64url-encoded Ed25519 signature of the challenge nonce. */
   signature: z.string().min(1),
+  system: NodeSystemSchema,
 });
 
 export const NodePairSchema = z.object({
@@ -193,6 +203,7 @@ export const NodePairSchema = z.object({
   /** base64url-encoded Ed25519 signature of the challenge nonce. */
   signature: z.string().min(1),
   pairingToken: z.string().min(1),
+  system: NodeSystemSchema,
 });
 
 export const NodePingSchema = z.object({
