@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { EXIT_DO_NOT_RESTART } from "../installation.ts";
+import { EXIT_DO_NOT_RESTART } from "./types.ts";
 import {
   fileLogs,
   markedFileOwnership,

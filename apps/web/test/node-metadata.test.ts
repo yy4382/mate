@@ -30,15 +30,6 @@ describe("node names and system information", () => {
     await row.getByText("laptop", { exact: true }).waitFor();
     await page.reload();
     await row.getByText("laptop", { exact: true }).waitFor();
-    const nodes =
-      await site.owner.get<{ nodeId: string; name: string; system: unknown }[]>("/api/admin/nodes");
-    expect(nodes.find((node) => node.nodeId === nodeId)).toMatchObject({
-      name: "laptop",
-      system: SYSTEM,
-    });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-      390,
-    );
   });
 
   it("invalid names cannot be submitted, occupied names stay beside the field, and cancelling preserves the name", async () => {

@@ -104,8 +104,7 @@ export class FakeNode {
         signature: sig,
       };
       const system = this.#options.system;
-      if (system === undefined) this.#ws?.send(JSON.stringify(message));
-      else this.send({ ...message, system });
+      this.#ws?.send(JSON.stringify(system === undefined ? message : { ...message, system }));
       return;
     }
 
@@ -127,8 +126,7 @@ export class FakeNode {
           pairingToken,
         };
         const system = this.#options.system;
-        if (system === undefined) this.#ws?.send(JSON.stringify(message));
-        else this.send({ ...message, system });
+        this.#ws?.send(JSON.stringify(system === undefined ? message : { ...message, system }));
         return;
       }
       this.#onAuthError?.(new Error(`Gateway refused: ${msg.code} — ${msg.message}`));

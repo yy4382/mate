@@ -42,6 +42,8 @@ export type ServiceState = {
   description: string;
 };
 
+export const EXIT_DO_NOT_RESTART = 78;
+
 export interface ServiceManager {
   inspect(): ServiceState;
   install(): string[];

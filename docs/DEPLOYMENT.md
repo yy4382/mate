@@ -118,7 +118,7 @@ Remove-Item -Recurse .\mate-node
 
 安装放好程序、命令和服务定义，**不启动服务**。POSIX 的命令是 `~/.local/bin/mate` 符号链接；Windows 是 `%LOCALAPPDATA%\Mate\bin\mate.cmd` 普通文件，不需要符号链接特权。CLI 不改用户的持久 PATH；把对应 bin 目录加入自己的 PATH，或使用安装输出中的完整命令路径。
 
-Windows 的已安装命令在更新或卸载时，先把管理入口和运行时复制到 TEMP 下的临时目录，从那里执行，临时副本留在 TEMP 中。这样管理进程不会锁住待替换的 `node.exe`。服务仍直接使用程序目录中的运行时。
+Windows 的已安装命令在更新或卸载时，先把管理入口和运行时复制到 TEMP 下的临时目录，从那里执行，每次留下的运行时副本约 80 MB，管理命令结束后可删除 `%TEMP%\mate-node-cli-*` 目录。这样管理进程不会锁住待替换的 `node.exe`。服务仍直接使用程序目录中的运行时。
 
 **配置和启动。** 在网页的“节点管理”里生成一次性配对令牌，然后运行：
 
@@ -188,7 +188,7 @@ mate node start
 
 **链路。** `node run` 在数据目录的 `link.json` 原子记录 `{ pid, connected, since }`。`mate node status` 只有在服务正在运行，并能核对它的执行进程时才显示 `Link: connected/disconnected since <时间>`；否则显示 `Link: none`。Linux 核对 MainPID，macOS 核对 launchctl PID，Windows 核对任务实例与 CIM 进程路径和创建时间，不能把 Task Scheduler 的 EnginePID 直接当作 node PID。服务运行本身不表示已连接控制面。
 
-**退出与重启。** 没有配置或身份被拒绝时，前台 `node run` 以 78 退出。Linux 用 RestartPreventExitStatus 阻止重启；macOS 和 Windows 由服务直接执行 `node run --service`，把这个不可重试退出映射为 0，原因仍记入日志。Linux/macOS 的其他失败由服务管理器重启。Windows 计划任务不保证在进程异常退出后重启：原生 CI 中以 1 退出后，`RestartOnFailure` 也未触发重启。因此 Windows node 崩溃后需执行 `mate node start`，或在下次登录时启动。计划任务只在当前账号登录时运行，不保存账号密码，不切换到 LocalSystem。
+**退出与重启。** 没有配置或身份被拒绝时，前台 `node run` 以 78 退出。Linux 用 RestartPreventExitStatus 阻止重启；macOS 的服务入口 `node run --service` 把这个不可重试退出映射为 0，原因仍记入日志。Linux/macOS 的其他失败由服务管理器重启。Windows 计划任务不保证在进程异常退出后重启：原生 CI 中以 1 退出后，`RestartOnFailure` 也未触发重启。因此 Windows node 崩溃后需执行 `mate node start`，或在下次登录时启动。此时任务仍启用，`status` 可能显示 `Service: ready, enabled`，不能据此判断进程是否崩溃；`Link: none` 表示没有已确认的链路。计划任务只在当前账号登录时运行，不保存账号密码，不切换到 LocalSystem。
 
 POSIX 管理命令拒绝 root。Mate 不创建账号、不配置 linger、不修改 Windows ACL，也不授予提权能力。
 

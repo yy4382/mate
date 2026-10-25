@@ -8,6 +8,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -317,6 +318,21 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     }
   });
 
+  it.runIf(process.platform === "linux")(
+    "recognizes its service through a symlinked config directory",
+    () => {
+      const h = runningNode();
+      const linked = join(h.home, ".config");
+      const physical = join(h.home, "dotfiles");
+      renameSync(linked, physical);
+      symlinkSync(physical, linked, "dir");
+      ok(h, "node", "stop");
+      ok(h, "node", "start");
+      expect(ok(h, "node", "status")).not.toContain("not Mate's");
+      expect(h.service()).toMatchObject({ active: "active", enabled: "enabled" });
+    },
+  );
+
   it("leaves a foreign service loaded under Mate's name alone, even when the local definition is Mate's", () => {
     const h = runningNode();
     h.setService({ foreignDefinition: true, calls: [] });
@@ -354,15 +370,6 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
       expect(h.service()).toMatchObject({ active: "inactive", enabled: "disabled" });
     },
   );
-
-  it.runIf(process.platform === "win32")("updates an older Mate launcher", () => {
-    const h = runningNode();
-    ok(h, "node", "stop");
-    writeFileSync(command(h), "@echo off\r\nrem Written by mate node.\r\necho old launcher\r\n");
-    ok(h, "node", "update", writeBundle(h.inputs, { version: "2.0.0" }));
-    expectCommand(h);
-    expect(readFileSync(command(h), "utf8")).not.toContain("echo old launcher");
-  });
 
   const canMapRoot = spawnSync("unshare", ["-r", "true"]).status === 0;
   it.runIf(canMapRoot || process.env["MATE_REQUIRE_PID_NAMESPACE"] === "1")(

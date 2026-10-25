@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   symlinkSync,
   writeFileSync,
@@ -11,6 +12,20 @@ import {
 import { join, parse } from "node:path";
 import { onTestFinished, describe, expect, it } from "vitest";
 import { connectedNode, temporaryDirectory, textOf, windows } from "./support.ts";
+
+function shortPath(path: string): string {
+  const result = spawnSync(
+    "cmd.exe",
+    ["/d", "/c", 'for %I in ("%MATE_TEST_DIRECTORY%") do @echo %~sI'],
+    {
+      env: { ...process.env, MATE_TEST_DIRECTORY: path },
+      encoding: "utf8",
+      windowsVerbatimArguments: true,
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  return result.stdout.trim();
+}
 
 describe("node file tools (MODULE_TESTS 8.2)", () => {
   it("writes, edits, and reads files the way Durable's local tools do", async () => {
@@ -137,6 +152,46 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
       expect(written.isError, textOf(written)).toBe(false);
       const read = await node.run(agentId, "read", { path: "mixed.txt" });
       expect(textOf(read)).toBe("inside");
+    },
+  );
+
+  it.runIf(windows)(
+    "reads, writes, edits and browses the same directory through its short and long names",
+    async () => {
+      const node = await connectedNode();
+      const { agentId, workspace } = await node.agent();
+      const long = realpathSync.native(workspace);
+      const short = shortPath(long);
+      expect(short.toLowerCase(), "this filesystem exposes a distinct Windows short name").not.toBe(
+        long.toLowerCase(),
+      );
+
+      const written = await node.run(agentId, "write", {
+        path: join(short.toUpperCase(), "new", "notes.txt"),
+        content: "first",
+      });
+      expect(written.isError, textOf(written)).toBe(false);
+      const edited = await node.run(agentId, "edit", {
+        path: join(long, "new", "notes.txt"),
+        edits: [{ oldText: "first", newText: "second" }],
+      });
+      expect(edited.isError, textOf(edited)).toBe(false);
+
+      for (const base of [short, long]) {
+        const read = await node.run(agentId, "read", { path: join(base, "new", "notes.txt") });
+        expect(read.isError, textOf(read)).toBe(false);
+        expect(textOf(read)).toBe("second");
+        expect(await node.gateway.browse(randomUUID(), agentId, join(base, "new"))).toEqual({
+          ok: true,
+          listing: {
+            kind: "directory",
+            path: "new",
+            entries: [{ name: "notes.txt", kind: "file", size: 6 }],
+            truncated: false,
+          },
+        });
+      }
+      expect(readFileSync(join(workspace, "new", "notes.txt"), "utf8")).toBe("second");
     },
   );
 
