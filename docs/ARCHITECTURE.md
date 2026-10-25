@@ -379,13 +379,13 @@ interface AgentManager {
 **接口（给管理模块）：**
 
 ```ts
-type NodeAccess = "home" | "visit" // 授权关系；线路保留 access 字段以兼容旧 node，新控制面统一发送 home
+type NodeAccess = "home" | "visit" // 主 node 或获准访问的非主 node，准备与执行共用
 
 interface NodeGateway {
   // 转发一次工具调用，把输出流式交给 onOutput，最后返回结果。从不重发，也没有自己的期限：调用在 node 回答、连接断开
   // 或 signal 中止时结束。中止 signal 时网关让 node 停掉这一次调用，并立即以"已停止"结束它
   runTool(nodeId, agentId, { access, tool, arguments }, onOutput, signal): ToolResult
-  prepareWorkspace(nodeId, agentId): ToolResult // 建工作目录和空的 MEMORY.md，可重复；离线时返回"节点离线"
+  prepareWorkspace(nodeId, agentId, access = "home"): ToolResult // home 创建目录和缺失的 MEMORY.md；visit 准备工作区，不初始化 MEMORY.md。可重复，离线返回错误
   status(nodeId): NodeStatusResult
   nodes(): NodeStatusResult[] // 所有已配对 node，给管理界面用
   renameNode(nodeId, name) // 名字不合法为 invalid-input，被其他 node 占用为 name-taken，不存在为 unknown-node；原名不变
@@ -410,7 +410,7 @@ type NodeStatusResult = {
 1. **控制面从不重发工具调用，也不给调用设期限。** 连接是否还活着由心跳判断，命令跑多久由 `bash` 自己的 `timeout` 决定；网关不会因为一次调用跑得久，就把健康连接上的调用说成"结果未知"。 连接断了，进行中的调用立即以"结果未知：节点连接中断，命令可能执行了也可能没有，不会重试"返回给模型，之后迟到的结果直接丢弃。模型自己决定要不要检查。所以**没有回执对账**：node 不需要操作账本，控制面也不需要定期核对。
 2. **node 离线时 Agent 照常运行**，需要该 node 的工具直接返回"节点离线"错误，管理模块在错误结果中标出目标名字。主 node 离线不影响访问其他在线 node，反之亦然。
 3. **连接断开时，node 停掉那些已经没人等结果的命令进程组。** 各平台能追踪的范围见第 5 条；Agent 有意放到后台、脱离了这个范围的进程（比如 POSIX 上的 `setsid`），由 Agent 自己负责。
-4. **每次工具调用都先准备该 node 上的 Agent 工作区。** 路径由 node 的工作区根和 Agent ID 确定，主 node 和非主 node 使用同一规则。目录缺失就创建，只在新建目录时写入空的 `MEMORY.md`；已有目录不检查或补写 `MEMORY.md`，也不改已有文件。Agent 改动或删除自己的记忆文件不会阻断后续命令。准备失败则返回错误，不执行工具。主 node 工作区被删除后也会重新创建，原文件不会恢复。浏览工作区只读，仍不创建目录。
+4. **主工作区的初始化与访问目录的准备不同。** 创建 Agent 时显式准备主 node 的工作目录和空的 `MEMORY.md`，已有文件不覆盖；主 node 执行工具前只检查目录存在，缺失时报错，不重建，也不检查或补写 `MEMORY.md`。`visit` 的显式准备和执行前准备共用工作区准备操作，不初始化 `MEMORY.md`。两者的目录路径均由 node 工作区根和 Agent ID 确定。访问目录准备失败则返回错误，不执行工具。浏览工作区只读，不创建目录。
 5. 与架构无关的执行细节：进程组、僵尸进程判断、PID 复用防护、后台子进程占住输出管道时短暂等待后返回并标明、按序列化后的大小检查帧长度。 平台差异由一张表选择；Windows 用 `taskkill /T /F`，只能停止仍挂在活 shell 下的进程。macOS 用进程组存活检测，不区分僵尸或识别 PID 复用。
 6. **谁在等结果，谁决定停。** 停止只有一种方式：调用方中止自己那次调用的 signal，网关就向 node 发这次调用的停止消息，node 杀掉它的命令进程组；命令已经返回、只剩后台进程占着输出时收到停止，也杀掉那些后台进程。暂停 Agent 就是关闭它的 runtime，runtime 中止所有进行中调用的 signal，所以不需要另一个"按 Agent 停止"的入口。node 按连接记录进行中的调用，连接断开停掉这条连接上的所有进行中调用；node 自己关闭时杀掉它启动的所有还有活进程的命令进程组。 各平台能停止的范围见第 5 条；终止失败要报告，并保留句柄供关闭时重试。
 7. **身份被拒绝时退出，网络失败时退避重连。** 网关拒绝 node 的身份或配对令牌时发 `gateway.refused`，直接运行的 node 进程以 78 退出，不重试（`unknown_identity` 而 node 手里有令牌时除外，见第 8 条）；网关因为用法出错结束连接（格式错误、顺序错误、握手超时、内部错误）时发 `gateway.error`，node 和连不上、连接中断时一样，从 250ms 起倍增、最多 10 秒重连。退出还是重连由消息类型决定，node 不维护错误码清单。systemd 用 `RestartPreventExitStatus=78` 停止重启；LaunchAgent 直接执行 `node run --service`，服务入口将不可重试的 78 转为 0，保留错误日志。服务直接执行 node；Windows 计划任务在 node 崩溃后需手动 `mate node start`，不承诺自动重启。
@@ -418,11 +418,11 @@ type NodeStatusResult = {
 9. **一个 node 一条连接，调用绑定在连接上。** 同一个 node 新认证的连接关闭旧连接。每个工具调用只接受发出它的那条连接送回的输出和结果；连接结束时，它带着的调用以"结果未知"结束并被忘掉，之后谁送来它的结果都不会交给调用方。
 10. **违规的连接立即结束。** 未认证的连接最多 32 条，超出的直接关闭；单条消息按收到的序列化帧计不超过 1 MiB，超出的由 WebSocket 层关闭；无法解析、不认识的消息、认证前发别的消息、重复认证，网关回一个 `gateway.error` 后关闭连接，并且从这一刻起不再读取这条连接送来的任何东西，node 立即离线。心跳超时（TCP 没断但收不到数据也算）同样结束连接。
 
-**工作区统一决定执行环境。** 所有命令都以 `<工作区根>/<agentId>` 为真实工作目录，`HOME` 和 `PWD` 也设为该目录；PowerShell 的 `$HOME` 同样指向它。`read`、`write`、`edit` 的相对路径以同一目录为根，绝对路径必须位于该目录内。各 node 上的工作区和 `MEMORY.md` 独立，不同步。主 node 仍是缺省目标和恢复时读取 `MEMORY.md` 的位置。
+**工作区统一决定执行环境。** 所有命令都以 `<工作区根>/<agentId>` 为真实工作目录，`HOME` 和 `PWD` 也设为该目录；PowerShell 的 `$HOME` 同样指向它。`read`、`write`、`edit` 的相对路径以同一目录为根，绝对路径必须位于该目录内。各 node 的文件独立，不同步。`MEMORY.md` 只由主 node 初始化，作为 Agent 自己维护和读取的记忆入口约定；runtime 恢复 SQLite 中的对话，不自动读取该文件。远端工作区提供独立执行目录，Agent 可以自行在其中创建任何允许的文件。
 
-管理模块用 `home` 和 `visit` 区分授权关系，runtime 和 node 都不判断授权。线路上的 `access` 字段为兼容旧 node 保留，新控制面对所有调用发送 `home`；新版 node 接受两个值，但都执行在 Agent 工作区。
+管理模块用 `home` 和 `visit` 区分主 node 与获准访问的非主 node，并将该关系交给网关与 node；runtime 和 node 都不判断授权。两种关系共用执行目录规则，准备时仅主工作区初始化 MEMORY.md，远端准备不初始化它。
 
-**升级顺序。** 控制面先于 node 升级，node 不得比控制面新。新控制面统一发送 `access: "home"`，因此旧 node 也使用 Agent 工作区，不会把访问落到账号主目录。在线授权时的准备请求可创建旧 node 的工作区；离线授权或升级前已有授权的工作区如果尚未准备，旧 node 明确返回缺失错误。目标 node 升级后，首次调用会自动准备，无需重新授权。
+**升级顺序。** 控制面先于 node 升级，node 不得比控制面新。新版 node 在认证和配对时声明 `workspaceVisits: true`，网关只在当前认证连接上保存该声明，不落库，也不从历史系统版本推断。缺少声明的连接仍可执行原有主 node 操作；网关拒绝向它发送 `visit` 的准备和工具调用，提示升级目标 node，既不让旧 node 初始化远端 `MEMORY.md`，也不让它在账号主目录执行。新连接替代旧连接时声明随连接替换。准备消息的 `access` 缺省为 `home`，保留旧主 node 调用的含义。
 
 **持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。POSIX 目录和私有文件分别用 0700、0600；Windows 存在当前账号的 `%LOCALAPPDATA%\Mate` 下，依靠该目录对普通账号的默认 ACL 隔离，不用 `chmod` 模拟 Windows 权限。网关的 node 注册表和配对令牌存在**控制库** `data/control.sqlite`，这个文件和 Web 外壳的登录、管理模块的 API key 共用：
 - 每个模块用 `@mate/control-store` 的 `openControlTables(dataDirectory, { module, migrations })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
@@ -572,7 +572,7 @@ Manager 扫描 `data/agents/`，打开所有没有暂停的 Agent：
 
 1. 管理员在 Agent 页给笔记本授权，授权按 Agent ID 和笔记本 node ID 写入控制库，在线时立即准备该 Agent 的工作区。离线时准备延后到首次在线调用。
 2. Agent 用 `node_list` 查到笔记本名字，调用 `read({ node: "laptop", path: "notes.txt" })`。
-3. runtime 分离目标和文件参数，管理模块现读授权，网关把带 `access: "home"` 的工作区调用交给笔记本。
+3. runtime 分离目标和文件参数，管理模块现读授权，网关确认当前连接支持独立访问工作区后，把带 `access: "visit"` 的调用交给笔记本。
 4. node 确保 `<工作区根>/<agentId>` 存在，在其中读取文件并返回结果。重复准备不改已有文件。
 5. 管理员收回授权后，下一次访问被拒绝；此前已经发出的调用仍然完成。
 
@@ -651,7 +651,7 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 | 3 | 上下文压缩用哪个模型？Agent 知不知道被压缩？ | 用 Durable 自带的压缩（`settings.compaction`），摘要由这个对话自己的模型写，失败或被截断的摘要不生效，Durable 保证。被压缩掉的记录仍在存储里，历史工具读它们；历史扩展的系统提示告诉 Agent "更早的记录可以用历史工具查" | 4.2 |
 | 4 | bash 没有时限时会一直占着 Agent，要不要默认上限？ | 参照 Claude Code 的后台命令：`bash` 加 `background` 参数。前台命令默认 10 分钟、最多 1 小时，跑命令期间 Agent 不处理别的；后台命令立即返回一个命令 ID，Agent 继续工作，命令结束时结果作为一条输入（`command:<ID>`）提交给发起它的对话（主对话或工作助手），可以用 `bash_stop` 停掉。后台命令最多跑一天 | 4.2、4.5 |
 | 5 | node 注册表放 `nodes.sqlite` 还是 `control.sqlite`？ | 统一放 `control.sqlite`，尽量少分文件。控制面里的网关、登录和管理模块共用这一个文件，各自建自己的表 | 4.5、4.6、第 6 节 |
-| 6 | 一个 Agent 的工作区在哪个 node？ | 创建时选定主 node，ID 记在 Agent 文件里，之后不变。每个已授权 node 上都有独立工作区和 MEMORY.md，主 node 仍是缺省目标和恢复入口；目录由 node 幂等准备 | 4.4、4.5 |
+| 6 | 一个 Agent 的工作区在哪个 node？ | 创建时选定主 node，ID 记在 Agent 文件里，之后不变。主 node 是缺省目标，初始化目录和作为记忆入口约定的 MEMORY.md；执行时不重建丢失目录。经授权的其他 node 各有独立执行目录，准备工作区，不初始化 MEMORY.md | 4.4、4.5 |
 | 7 | 要不要 Web Push 和附件？ | 要推送；聊天接口接受附件元数据，但附件文件的上传和存储还没有实现 | 4.1 |
 | 8 | 数据库结构变了怎么升级？ | 原地向前迁移：每个存储的结构是一串按版本递增的迁移；比代码新、或版本不在列表里的存储拒绝启动；已发布版本的存储夹具证明升级可行 | 第 6 节、4.5 |
 | 9 | 要不要 CI？ | 要。GitHub Actions 对每个 PR 和 main 各检查一次：`pnpm check` 和 `pnpm test:linux` 的内容拆成几个并行任务（格式与类型、node 和系统场景以外的测试、两片 `test:linux`、`mate-deploy` 的测试），node 套件另在 macOS 和 Windows 原生 runner 上运行，并用本机实际发布包验证服务，汇总成一个 `checks` 结果；`v*` 标签不重跑，等这个提交在 main 上的 `checks` 通过后发布镜像和 node 发布包，设了部署主机时再自动部署（失败回退到原版本和部署前的数据备份） | `.github/workflows/ci.yml` |

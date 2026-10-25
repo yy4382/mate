@@ -195,6 +195,7 @@ export const NodeAuthenticateSchema = z.object({
   /** base64url-encoded Ed25519 signature of the challenge nonce. */
   signature: z.string().min(1),
   system: NodeSystemSchema,
+  workspaceVisits: z.literal(true).optional(),
 });
 
 export const NodePairSchema = z.object({
@@ -207,6 +208,7 @@ export const NodePairSchema = z.object({
   signature: z.string().min(1),
   pairingToken: z.string().min(1),
   system: NodeSystemSchema,
+  workspaceVisits: z.literal(true).optional(),
 });
 
 export const NodePingSchema = z.object({
@@ -322,6 +324,7 @@ export const GatewayPrepareWorkspaceSchema = z.object({
   type: z.literal("gateway.prepare.workspace"),
   requestId,
   agentId,
+  access: NodeAccessSchema.default("home"),
 });
 
 /** Read a path in an Agent's workspace without changing anything; the node answers with `node.browse.result`. */

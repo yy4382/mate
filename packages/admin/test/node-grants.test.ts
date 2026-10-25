@@ -45,6 +45,7 @@ describe("workspace node access", () => {
         expect(home.calls).toEqual([]);
         expect(laptop.calls).toEqual([]);
         await admin.grantNode(agentId, laptop.nodeId);
+        expect(laptop.prepared).toContainEqual({ agentId, access: "visit" });
         request.call([
           { name: "node_list", arguments: {} },
           { name: "bash", arguments: { command: "default home" } },
@@ -63,14 +64,11 @@ describe("workspace node access", () => {
         expect(laptop.calls).toEqual([
           expect.objectContaining({
             agentId,
-            access: "home",
+            access: "visit",
             arguments: expect.objectContaining({ command: "visit" }),
           }),
         ]);
         expect(laptop.calls[0]?.arguments).not.toHaveProperty("node");
-        expect(laptop.prepared, "the grant prepares a workspace before returning").toEqual([
-          agentId,
-        ]);
         request.text("visited the authorized node");
       });
 
@@ -232,7 +230,7 @@ describe("managing node grants", () => {
       });
     env.post("Visit the reconnected laptop, @richard.", [account]);
     await env.provider.received(2);
-    expect(laptop.calls).toEqual([expect.objectContaining({ agentId, access: "home" })]);
+    expect(laptop.calls).toEqual([expect.objectContaining({ agentId, access: "visit" })]);
     expect(env.reports).toEqual([]);
     env.provider.assertComplete();
   });
@@ -254,7 +252,10 @@ describe("managing node grants", () => {
     ]);
     laptop.answerPrepare = async () => {};
     await admin.grantNode(agentId, laptop.nodeId);
-    expect(laptop.prepared).toEqual([agentId, agentId]);
+    expect(laptop.prepared).toEqual([
+      { agentId, access: "visit" },
+      { agentId, access: "visit" },
+    ]);
     expect(env.reports).toHaveLength(1);
   });
 

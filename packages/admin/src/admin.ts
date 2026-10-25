@@ -228,7 +228,7 @@ export class Admin {
     await this.#changeNodeGrant(agentId, nodeId, async () => {
       this.#store.grantNode(agentId, nodeId, this.#clock.now());
       if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId && node.online)) return;
-      const result = await this.#gateway.prepareWorkspace(nodeId, agentId);
+      const result = await this.#gateway.prepareWorkspace(nodeId, agentId, "visit");
       if (result.isError)
         this.#report(
           new Error(

@@ -1,6 +1,7 @@
 import { getEventListeners } from "node:events";
 import type { GatewayRunTool, ToolResult } from "@mate/node-protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { FakeNode } from "@mate/testkit";
 import { deferred, eventually, never, startGateway, text, toolResult, within } from "./support.ts";
 
 describe("node gateway tool calls (MODULE_TESTS 7)", () => {
@@ -10,6 +11,7 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
       const under = await startGateway();
       const arrived: GatewayRunTool[] = [];
       const node = await under.pairedNode({
+        workspaceVisits: true,
         onRunTool: async (message) => {
           arrived.push(message);
           return { outputs: [], result: toolResult("done") };
@@ -24,6 +26,101 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
       ]);
     },
   );
+
+  it("refuses visit preparation and calls on a legacy connection while home calls still work", async () => {
+    const under = await startGateway();
+    const calls: GatewayRunTool[] = [];
+    const prepared: string[] = [];
+    const node = await under.pairedNode({
+      onRunTool: async (message) => {
+        calls.push(message);
+        return { outputs: [], result: toolResult("home ran") };
+      },
+      onPrepareWorkspace: async (agentId) => {
+        prepared.push(agentId);
+      },
+    });
+    const run = (access: "home" | "visit") =>
+      under.gateway.runTool(
+        node.nodeId,
+        "agent-1",
+        { access, tool: "bash", arguments: { command: "pwd" } },
+        () => {},
+        never,
+      );
+    const preparation = await under.gateway.prepareWorkspace(node.nodeId, "agent-1", "visit");
+    const visit = await run("visit");
+    for (const result of [preparation, visit]) {
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatch(/upgrade/i);
+    }
+    expect((await under.gateway.prepareWorkspace(node.nodeId, "agent-1")).isError).toBe(false);
+    expect(await run("home")).toEqual(toolResult("home ran"));
+    expect(calls.map((call) => call.access)).toEqual(["home"]);
+    expect(prepared).toEqual(["agent-1"]);
+    expect(under.gateway.status(node.nodeId).online).toBe(true);
+  });
+
+  it("forgets workspace visit support when a new legacy connection replaces a capable connection", async () => {
+    const under = await startGateway();
+    const prepared: string[] = [];
+    const node = await under.pairedNode({
+      workspaceVisits: true,
+      system: {
+        platform: "linux",
+        arch: "x64",
+        hostname: "server",
+        osRelease: "test",
+        version: "new",
+      },
+      onPrepareWorkspace: async (_agentId, access) => {
+        prepared.push(access);
+      },
+    });
+    expect((await under.gateway.prepareWorkspace(node.nodeId, "agent-1", "visit")).isError).toBe(
+      false,
+    );
+    expect(prepared).toEqual(["visit"]);
+    await node.connect();
+    expect((await under.gateway.prepareWorkspace(node.nodeId, "agent-1", "visit")).isError).toBe(
+      false,
+    );
+    const legacyCalls: GatewayRunTool[] = [];
+    const legacyPreparations: string[] = [];
+    const legacy = new FakeNode({
+      gatewayUrl: under.url,
+      nodeId: node.nodeId,
+      publicKey: node.publicKey,
+      sign: node.sign,
+      onRunTool: async (call) => {
+        legacyCalls.push(call);
+        return { outputs: [], result: toolResult("home ran") };
+      },
+      onPrepareWorkspace: async (_agentId, access) => {
+        legacyPreparations.push(access);
+      },
+    });
+    onTestFinished(() => legacy.terminate());
+    await legacy.connect();
+    expect(under.gateway.status(node.nodeId).system?.version).toBe("new");
+    const preparation = await under.gateway.prepareWorkspace(node.nodeId, "agent-1", "visit");
+    const visit = await under.gateway.runTool(
+      node.nodeId,
+      "agent-1",
+      { access: "visit", tool: "read", arguments: { path: "notes.txt" } },
+      () => {},
+      never,
+    );
+    expect(preparation.isError).toBe(true);
+    expect(visit.isError).toBe(true);
+    expect(text(preparation)).toMatch(/upgrade/i);
+    expect(text(visit)).toMatch(/upgrade/i);
+    expect(prepared).toEqual(["visit", "visit"]);
+    expect(legacyCalls).toEqual([]);
+    expect(legacyPreparations).toEqual([]);
+    expect((await under.gateway.prepareWorkspace(node.nodeId, "agent-1")).isError).toBe(false);
+    expect(legacyPreparations).toEqual(["home"]);
+  });
 
   it("streams a call's output to the caller and then returns its result", async () => {
     const under = await startGateway();

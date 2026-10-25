@@ -58,6 +58,7 @@ export interface NodeSession {
   readonly nonce: string;
   /** Set once the connection has authenticated or paired; until then the connection is unauthenticated. */
   nodeId: string | undefined;
+  workspaceVisits: boolean;
   lastHeartbeatAt: number;
   /** Aborted when authentication completes, which cancels the handshake timeout. */
   readonly handshake: AbortController;
@@ -114,6 +115,7 @@ export function acceptNodeSocket(ws: WebSocket, ctx: GatewayContext): void {
   const session: NodeSession = {
     nonce: randomBytes(32).toString("base64url"),
     nodeId: undefined,
+    workspaceVisits: false,
     lastHeartbeatAt: ctx.clock.now(),
     handshake: new AbortController(),
     ended: new AbortController(),
@@ -236,6 +238,7 @@ function handleAuthenticate(
     return;
   }
   recordNodeConnection(ctx.db, msg.nodeId, msg.system, () => ctx.clock.now());
+  session.workspaceVisits = msg.workspaceVisits === true;
   markConnected(ws, msg.nodeId, session, ctx);
   sendGateway(ws, { type: "gateway.authenticated", requestId: msg.requestId, nodeId: msg.nodeId });
 }
@@ -282,6 +285,7 @@ function handlePair(
     );
     return;
   }
+  session.workspaceVisits = msg.workspaceVisits === true;
   markConnected(ws, msg.nodeId, session, ctx);
   sendGateway(ws, { type: "gateway.paired", requestId: msg.requestId, nodeId: msg.nodeId });
 }

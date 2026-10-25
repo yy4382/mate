@@ -255,13 +255,13 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 node 根据当前系统选择能力的唯一入口。Linux、macOS、Windows 各有一条记录，提供 shell、命令进程组、服务、布局、启动命令、身份权限检查和工作区路径规则。共同的安装流程、超时和输出处理不随平台复制。
 
 **主 node**（home node）
-Agent 创建时选定的 node，ID 记在 Agent 文件里且不变。缺省工具调用和恢复时读取 MEMORY.md 在这里执行；经授权的其他 node 也各有独立工作区。
+Agent 创建时选定的 node，ID 记在 Agent 文件里且不变。缺省工具调用在这里执行，主工作区中的 MEMORY.md 是记忆入口约定；经授权的其他 node 也各有独立执行目录。
 
 **访问**（visit）
 Agent 把一次工具调用送到已授权的非主 node，在该 node 上自己的工作区里执行。
 
 **访问方式**（NodeAccess）
-管理模块判断的授权关系，主 node 为 `home`，获准访问的非主 node 为 `visit`。网关工具调用保留同名 `access` 字段以兼容旧 node，但新控制面统一发送 `home`；新版 node 不用它选择目录。
+管理模块判断的主 node 或访问关系，主 node 为 `home`，获准访问的非主 node 为 `visit`，经网关交给 node。两者使用相同的 Agent 工作区路径，但主工作区只显式初始化，访问工作区的准备不初始化 MEMORY.md。
 
 **node 授权**（node grant）
 管理员允许某个 Agent 访问一个非主 node 的记录，按两个 ID 存在控制库。主 node 不需要授权；授权先持久化，在线时准备工作区，离线时延后到首次在线调用。授权和收回只影响之后开始的调用，收回不删除工作区。
@@ -291,7 +291,7 @@ node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-n
 POSIX 上是 `~/.local/lib/mate-node`，Windows 上是 `%LOCALAPPDATA%\Mate\program`，保存解开的发布包。只会被整个放入（暂存目录改名）或整个挪走，从不原地修改，所以要么是完整的某个版本，要么不存在。配置、node 身份和工作区都在它之外。
 
 **工作区宿主**（WorkspaceHost）
-Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出以这个主 node 为缺省目标的工作区端口（`port(nodeId, agentId)`）。Agent 的主 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：创建 Agent 和在线授权时调 `prepareWorkspace`，端口按调用的可选 node 名字和最新授权选择目标，再以兼容旧 node 的 `access: home` 转给 `runTool` 并带上调用的 signal；`nodes()` 列出当前可访问的 node。Manager 的测试里用假的。
+Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出以这个主 node 为缺省目标的工作区端口（`port(nodeId, agentId)`）。Agent 的主 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：创建 Agent 时以 `home`、在线授权时以 `visit` 调 `prepareWorkspace`，端口按调用的可选 node 名字和最新授权选择目标，连同访问方式转给 `runTool` 并带上调用的 signal；`nodes()` 列出当前可访问的 node。Manager 的测试里用假的。
 
 **node 网关**（node gateway）
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
@@ -300,7 +300,7 @@ Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准
 `@mate/gateway` 对 node 操作的拒绝异常，带 `reason`，与线路上的 `gateway.error` 消息不同（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
 
 **工作区**（workspace）
-Agent 在某个 node 上的工作目录，路径为该 node 的 `<工作区根>/<agentId>`。每个已授权 node 上各有独立工作区，文件不跨 node 同步。node 执行工具前幂等准备目录，只在首次创建目录时放入空的 MEMORY.md，已有目录和文件保持原样。
+Agent 在某个 node 上的工作目录，路径为该 node 的 `<工作区根>/<agentId>`。每个已授权 node 上各有独立工作区，文件不跨 node 同步。主工作区在创建 Agent 时初始化目录与 MEMORY.md，执行时缺少目录就报错；访问工作区在授权或首次在线调用时准备，不初始化 MEMORY.md，已有文件保持原样。
 
 **命令进程组**（command process group）
 node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Windows 活 shell 的进程树，追踪与停止的范围见 [ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)。
@@ -324,7 +324,7 @@ node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 
 `pnpm smoke:deploy`：在 Docker 里用发布的镜像、Compose 文件和 node 发布包起一套控制面加 node，并以第一个管理员的身份走一遍登录、配对、创建 Agent、私信回复和重启（MODULE_TESTS 第 13 节）。
 
 **MEMORY.md**
-工作区里的一个文件，是 Agent 恢复时读的第一个入口。它只是一个约定，Mate 从不检查它。
+主工作区里的记忆入口约定，由 Agent 自己维护和选择读取。Mate 只在显式准备主工作区时创建缺失的空文件，执行工具不检查它，runtime 恢复也不自动读取它。远端工作区不预置这个文件。
 
 ## 共用基础
 

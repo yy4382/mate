@@ -66,8 +66,8 @@ export interface NodeGateway {
     signal: AbortSignal,
   ): Promise<ToolResult>;
 
-  /** Create the Agent's workspace on the node with an empty MEMORY.md; repeating it changes nothing. */
-  prepareWorkspace(nodeId: string, agentId: string): Promise<ToolResult>;
+  /** Prepare a workspace, initializing MEMORY.md only for home access. Repeating preserves existing files. */
+  prepareWorkspace(nodeId: string, agentId: string, access?: NodeAccess): Promise<ToolResult>;
 
   /**
    * Read `path` in the Agent's workspace on the node without changing anything: a directory's entries or a file's
@@ -151,6 +151,8 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
       const ws = ctx.connected.get(nodeId);
       if (ws === undefined) return offlineResult();
       if (signal.aborted) return stoppedResult();
+      if (access === "visit" && !ctx.sessions.get(ws)?.workspaceVisits)
+        return workspaceVisitUnsupported();
 
       const { requestId } = message;
       const stop = () => {
@@ -166,14 +168,17 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
       }
     },
 
-    async prepareWorkspace(nodeId, agentId) {
+    async prepareWorkspace(nodeId, agentId, access = "home") {
       const message = GatewayPrepareWorkspaceSchema.parse({
         type: "gateway.prepare.workspace",
         requestId: randomUUID(),
         agentId,
+        access,
       });
       const ws = ctx.connected.get(nodeId);
       if (ws === undefined) return offlineResult();
+      if (access === "visit" && !ctx.sessions.get(ws)?.workspaceVisits)
+        return workspaceVisitUnsupported();
       return request(ws, message, () => {});
     },
 
@@ -225,5 +230,17 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
       wss.close();
       ctx.db.close();
     },
+  };
+}
+
+function workspaceVisitUnsupported(): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: "Upgrade the target node to use independent Agent workspaces for visits.",
+      },
+    ],
+    isError: true,
   };
 }

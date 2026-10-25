@@ -68,7 +68,7 @@ function withNode(parameters: { readonly properties?: object }): ToolRegistratio
       node: {
         type: "string",
         description:
-          "要在哪个 node 上执行，用 `node_list` 查名字。不给就在你的主 node 上执行。每个已授权的 node 都有你自己的工作区，命令和文件路径都从该工作区开始。各 node 的文件独立，不会同步；恢复时读取主 node 的 `MEMORY.md`。",
+          "要在哪个 node 上执行，用 `node_list` 查名字。不给就在你的主 node 上执行。每个已授权的 node 都有你自己的工作区，命令和文件路径都从该工作区开始。各 node 的文件独立，不会同步。主 node 的 `MEMORY.md` 是你维护的记忆入口；主 node 初始化 `MEMORY.md`，其他 node 准备工作区时不初始化它。",
       },
     },
   });

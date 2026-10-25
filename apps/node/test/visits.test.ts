@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -8,6 +8,7 @@ import {
   longCommand,
   pidsOf,
   running,
+  scriptCommand,
   temporaryDirectory,
   textOf,
   windows,
@@ -36,14 +37,9 @@ describe("node visits (MODULE_TESTS 8)", () => {
     expect(home).toBe(workspace);
     expect(realpathSync.native(shellHome!)).toBe(realpathSync.native(workspace));
     expect(chunks.join("")).toContain(workspace);
-    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(true);
+    expect(existsSync(workspace)).toBe(true);
+    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
     expect(existsSync(join(node.home, "MEMORY.md"))).toBe(false);
-
-    const homeCall = await node.run(agentId, "bash", {
-      command: windows ? "(Get-Location).Path" : "pwd -P",
-    });
-    expect(homeCall.isError, textOf(homeCall)).toBe(false);
-    expect(realpathSync.native(textOf(homeCall).trim())).toBe(realpathSync.native(workspace));
   });
 
   it("uses the same workspace for bash, write, edit and read and refuses outside file paths", async () => {
@@ -150,12 +146,13 @@ describe("node visits (MODULE_TESTS 8)", () => {
         ).isError,
       ).toBe(false);
     }
-    await Promise.all(
+    const preparations = await Promise.all(
       agents.flatMap((agentId) => [
-        node.gateway.prepareWorkspace(randomUUID(), agentId),
-        node.gateway.prepareWorkspace(randomUUID(), agentId),
+        node.gateway.prepareWorkspace(randomUUID(), agentId, "visit"),
+        node.gateway.prepareWorkspace(randomUUID(), agentId, "visit"),
       ]),
     );
+    for (const result of preparations) expect(result.isError, textOf(result)).toBe(false);
     const before = node.gateway.authentications;
     node.gateway.disconnect();
     await eventually(() => node.gateway.authentications > before, "node reconnected");
@@ -166,6 +163,53 @@ describe("node visits (MODULE_TESTS 8)", () => {
         expect(textOf(result)).toBe(agentId);
       }
     }
+  });
+
+  it("prepares visits without initializing MEMORY.md and preserves user-created files", async () => {
+    const node = await connectedNode();
+    const agentId = "visitor";
+    const workspace = join(node.workspacesRoot, agentId);
+    expect((await node.gateway.prepareWorkspace(randomUUID(), agentId, "visit")).isError).toBe(
+      false,
+    );
+    expect(existsSync(workspace)).toBe(true);
+    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
+    writeFileSync(join(workspace, "MEMORY.md"), "user-created");
+    expect((await node.gateway.prepareWorkspace(randomUUID(), agentId, "visit")).isError).toBe(
+      false,
+    );
+    expect(readFileSync(join(workspace, "MEMORY.md"), "utf8")).toBe("user-created");
+    rmSync(join(workspace, "MEMORY.md"));
+    expect((await node.gateway.prepareWorkspace(randomUUID(), agentId, "visit")).isError).toBe(
+      false,
+    );
+    expect(
+      (await node.run(agentId, "bash", { command: "echo ready" }, undefined, "visit")).isError,
+    ).toBe(false);
+    expect(existsSync(workspace)).toBe(true);
+    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
+  });
+
+  it("refuses visits when the workspace path is a file and retries after its removal", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    rmSync(workspace, { recursive: true });
+    writeFileSync(workspace, "not a directory");
+    const outside = temporaryDirectory();
+    const marker = join(outside, "executed.txt");
+    const command = scriptCommand(
+      outside,
+      `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "executed");`,
+    );
+    const refused = await node.run(agentId, "bash", { command }, undefined, "visit");
+    expect(refused.isError).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+    expect(readFileSync(workspace, "utf8")).toBe("not a directory");
+    rmSync(workspace);
+    const retried = await node.run(agentId, "bash", { command }, undefined, "visit");
+    expect(retried.isError, textOf(retried)).toBe(false);
+    expect(readFileSync(marker, "utf8")).toBe("executed");
+    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
   });
 
   it.runIf(windows)(

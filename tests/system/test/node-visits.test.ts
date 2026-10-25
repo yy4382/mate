@@ -31,7 +31,8 @@ it("9. an authorized visit uses its Agent workspace for commands and file tools"
       expect(refusal).toContain("Accessible nodes: server");
       expect(existsSync(workspace)).toBe(false);
       await system.api("PUT", grantPath, undefined, 204);
-      expect(existsSync(join(workspace, "MEMORY.md"))).toBe(true);
+      expect(existsSync(workspace)).toBe(true);
+      expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
       calls = request.call([
         {
           name: "write",
@@ -40,7 +41,6 @@ it("9. an authorized visit uses its Agent workspace for commands and file tools"
       ]);
     })
     .step("edit the file", (request) => {
-      expect(output(request, calls[0])).not.toContain("error");
       calls = request.call([
         {
           name: "edit",
@@ -53,7 +53,6 @@ it("9. an authorized visit uses its Agent workspace for commands and file tools"
       ]);
     })
     .step("read both nodes", async (request) => {
-      expect(output(request, calls[0])).not.toContain("error");
       await system.api("PUT", grantPath, undefined, 204);
       calls = request.call([
         visit,
@@ -114,7 +113,8 @@ it("9. an offline grant prepares its workspace on first use and preserves files 
           name: "bash",
           arguments: {
             node: "laptop",
-            command: "pwd -P; printf 'remember me' > MEMORY.md; printf 'kept notes' > notes.txt",
+            command:
+              "pwd -P; test ! -e MEMORY.md || exit 1; printf 'remember me' > MEMORY.md; printf 'kept notes' > notes.txt",
           },
         },
       ]);

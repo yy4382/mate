@@ -288,6 +288,8 @@
 - 存储里的版本比模块的列表新时拒绝启动，不改动存储。
 - `Migrations` 本身：空列表、版本不严格递增的列表构造时报错；`after` 对新存储给出全部迁移，对已是最新的存储给出空，对更新的或不在列表里的版本给出"无法到达"。（`packages/migrations/test`）
 
+- 旧 node 未声明 `workspaceVisits: true` 时，访问准备和执行均被拒绝且不发消息，主 node 准备和执行仍可用。声明只属于当前认证连接，重连时不从历史系统信息继承；新连接降级为旧协议后再次拒绝访问。
+
 ## 8. Node
 
 **边界：** node 进程对网关说的 WebSocket 协议，以及它在文件系统和进程上的实际效果。测试在 Linux、macOS、Windows 上运行。`pnpm test:linux` 在 Linux 容器里以非 root 账号运行；CI 另外在 `macos-latest`、`windows-latest` 运行 node 套件，并汇入 `checks`。正常关闭通过 `startNode` 的 AbortSignal 验证。
@@ -299,7 +301,7 @@
 ### 8.1 命令
 
 - 命令交给所在平台的 shell：Linux/macOS 为 `/bin/sh -c`，Windows 为 PowerShell 5.1。`home` 调用的工作目录和 HOME 是该 Agent 的工作目录；Windows 也验证 `$HOME`、原生程序的退出码和后续成功命令不沿用旧失败码。
-- `visit` 和 `home` 均准备 Agent 工作区，并用作真实工作目录、PWD 和 HOME；Windows 在 node 没有 HOME 时也设置 PowerShell 的 `$HOME`。
+- `visit` 准备 Agent 的工作区，不初始化 MEMORY.md，`home` 使用已有主工作区；两者用同一目录作为真实工作目录、PWD 和 HOME。Windows 在 node 没有 HOME 时也设置 PowerShell 的 `$HOME`。
 - POSIX 上 Agent 自己写的 `sudo` 原样执行，成败由宿主决定；node 从不自己加提权命令。
 - 三个平台都验证正常退出与 shell 退出码、超时、停止、没能启动（例如命令含 NUL）。POSIX 另外验证被信号终止。
 - 输出超过上限时截断，并在结果里标明。
@@ -325,7 +327,7 @@
 - 通过真实网关：调用方中止调用后，node 上这次调用的进程组消失，调用方得到"已停止"；另一个 Agent 的并发调用不受影响，拿到自己的结果。
 - 三个平台都证明 node 正常关闭时清理仍在运行的命令。POSIX 还检查命令已经返回的后台进程组。
 - 修改或删除工作目录里的 `MEMORY.md`，不影响之后的命令执行。
-- 工作目录不存在时，包括主 node 在内的工具调用先创建目录和空 MEMORY.md。工作区路径是普通文件等准备失败情形，所有工具均返回错误且不执行。重复准备及重连后，已有 MEMORY.md 和普通文件内容保留；主动删除的 MEMORY.md 不会补写。
+- 主工作目录不存在时，所有工具报错且不重建。显式准备主工作区会创建缺失的空 MEMORY.md，已有文件不覆盖。访问工作区在显式准备和执行前准备时均不初始化 MEMORY.md。工作区路径是普通文件时访问工具失败，移除冲突后重试成功。重复准备及重连保留已有文件；远端用户自行创建再删除的 MEMORY.md 不会补写。
 - 运行中的 node 握手成功后，`mate node status`（假服务管理器报告这个真实子进程的身份）显示 `Link: connected since <时间>`；网关消失后显示 `Link: disconnected since <时间>`。网关连不上时从启动起就是 `disconnected`。
 - 身份被拒绝时，node 退出，退出码是用户服务不会重启的那个（§9），不会无限重试；网络失败或网关以协议错误（例如握手超时）结束连接时，按退避重连。
 
@@ -387,7 +389,7 @@
 - 暂停 Agent 时，node 上进行中的命令经真实网关被停止；恢复后模型得知这次调用没有完成，命令不重跑。
 - 列出 Agent 时，显示名和 handle 来自聊天账号，node、状态、设置和用量来自 Agent 文件；一个 Agent 的文件读不出来时，它以"读不出"和原因列出，可以删除，其他 Agent 照常列出。
 
-- 新 Agent 只有主 node 可用；未知和未授权名字同样拒绝并列可访问名字，不向 node 发调用。在线授权返回前准备工作区；所有目标均以 home 转发，避免旧 node 使用账号主目录；node_list 每次现读并保持主 node 标记。
+- 新 Agent 只有主 node 可用；未知和未授权名字同样拒绝并列可访问名字，不向 node 发调用。在线授权返回前以 visit 准备工作区；访问调用以 visit、主 node 以 home 转发；node_list 每次现读并保持主 node 标记。
 - 离线授权成功并持久化，重连后允许首次调用；在线准备失败报告错误但保留授权，重复授权重试准备。准备期间收回授权，迟到的准备完成不会恢复授权。
 - 授权、收回幂等；主 node invalid-input，未知 Agent/node 分别拒绝；暂停的 Agent 也能授权，agents 显示当前授权名字。收回后新调用拒绝，已发出的前台和后台调用仍完成；目标离线错误标出名字，主 node 离线不阻止其他 node。
 - 用已发布版本公开 API 创建并暂停的真实 Agent 夹具验证 admin 迁移：凭据不变，初始无额外授权，原 Agent 仍只用主 node。
@@ -470,7 +472,7 @@
 6. 管理员暂停一个正在运行的 Agent，再恢复：暂停期间模型没有被调用，恢复后 Agent 处理积压的通知。
 7. 两个 Agent 在私信里协作：A 派一个任务给 B，B 认领并完成，A 收到通知。
 8. Agent 派生一个工作助手执行命令，助手完成后汇报，Agent 把结果发到频道。
-9. Agent 访问第二个 node：管理员授权前被拒绝，授权后在自己的工作区内执行命令和读写编辑文件，实际 pwd 与工作区一致，主 node 文件独立，收回后再次被拒绝。离线授权在首次在线调用时准备工作区；重连和重复授权不改写已有文件。
+9. Agent 访问第二个 node：管理员授权前被拒绝，授权后准备工作区，不初始化 MEMORY.md，在自己的工作区内执行命令和读写编辑文件，实际 pwd 与工作区一致，主 node 文件独立，收回后再次被拒绝。离线授权在首次在线调用时准备工作区；重连和重复授权不改写已有文件。
 
 **实现。** 九个场景在 `tests/system/test/`（pnpm 包 `@mate/system-tests`，根 `vitest` 的 include 里有 `tests/*/test`）：场景 1 到 3 在 `chat.test.ts`，4 到 6 在 `recovery.test.ts`，7 和 8 在 `agents.test.ts`，9 在 `node-visits.test.ts`，进程夹具在 `support.ts` 的 `startSystem()`。测试名字以场景号开头，场景 9 另含离线授权和重连测试。
 

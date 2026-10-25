@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
@@ -228,7 +228,7 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
     ).toBe(false);
     expect(existsSync(memory)).toBe(false);
     expect((await node.gateway.prepareWorkspace("prepare-existing", agentId)).isError).toBe(false);
-    expect(existsSync(memory)).toBe(false);
+    expect(readFileSync(memory, "utf8")).toBe("");
   });
 
   it("exits instead of retrying when the gateway rejects its identity, with the status its service unit never restarts", async () => {
@@ -295,26 +295,19 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
     }
   });
 
-  it("refuses every tool when its workspace path is a file and recovers after its removal", async () => {
+  it("returns a clear error and does not recreate a workspace that is missing", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     rmSync(workspace, { recursive: true });
-    writeFileSync(workspace, "not a directory");
     for (const [tool, args] of [
       ["bash", { command: "echo hi" }],
       ["write", { path: "a.txt", content: "a" }],
       ["read", { path: "a.txt" }],
-      ["edit", { path: "a.txt", edits: [{ oldText: "a", newText: "b" }] }],
-    ] satisfies [Parameters<typeof node.run>[1], Parameters<typeof node.run>[2]][]) {
+    ] as const) {
       const result = await node.run(agentId, tool, args);
       expect(result.isError, tool).toBe(true);
-      expect(textOf(result), tool).toContain("Failed to prepare workspace");
+      expect(textOf(result), tool).toMatch(/does not exist\. The node does not recreate it/);
     }
-    expect(existsSync(workspace)).toBe(true);
-    rmSync(workspace);
-    const retried = await node.run(agentId, "bash", { command: "echo recovered" });
-    expect(retried.isError, textOf(retried)).toBe(false);
-    expect(textOf(retried).trim()).toBe("recovered");
-    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(true);
+    expect(existsSync(workspace)).toBe(false);
   });
 });

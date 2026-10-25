@@ -1,4 +1,4 @@
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Clock } from "@mate/clock";
 import {
@@ -6,6 +6,7 @@ import {
   type GatewayBrowse,
   type GatewayRunTool,
   type NodeBrowseOutcome,
+  type NodeAccess,
   type ToolResult,
 } from "@mate/node-protocol";
 import { browseWorkspace } from "./browse.ts";
@@ -28,9 +29,15 @@ export class Executor {
     onOutput: (chunk: string) => void,
     signal: AbortSignal,
   ): Promise<ToolResult> {
-    const prepared = this.prepareWorkspace(call.agentId);
-    if (prepared.isError) return prepared;
     const directory = join(this.#root, call.agentId);
+    if (call.access === "visit") {
+      const prepared = this.prepareWorkspace(call.agentId, "visit");
+      if (prepared.isError) return prepared;
+    } else if (!isDirectory(directory)) {
+      return failure(
+        `The workspace ${directory} does not exist. The node does not recreate it; prepare the workspace again.`,
+      );
+    }
     if (call.tool !== "bash") return runFileTool(call.tool, call.arguments, directory, signal);
     const args = parseBashArguments(call.arguments);
     if (!args.ok) return failure(args.error);
@@ -60,12 +67,15 @@ export class Executor {
     return browseWorkspace(workspace, call.path);
   }
 
-  /** Create the Agent's workspace with an empty MEMORY.md; repeating it changes nothing. */
-  prepareWorkspace(agentId: string): ToolResult {
+  /** Prepare a workspace, initializing MEMORY.md only for home access. Existing files are preserved. */
+  prepareWorkspace(agentId: string, access: NodeAccess = "home"): ToolResult {
     const workspace = join(this.#root, agentId);
     try {
-      const created = mkdirSync(workspace, { recursive: true });
-      if (created !== undefined) writeFileSync(join(workspace, "MEMORY.md"), "", { flag: "wx" });
+      mkdirSync(workspace, { recursive: true });
+      if (access === "home") {
+        const memory = join(workspace, "MEMORY.md");
+        if (!existsSync(memory)) writeFileSync(memory, "", { flag: "wx" });
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return failure(`Failed to prepare workspace: ${reason}`);

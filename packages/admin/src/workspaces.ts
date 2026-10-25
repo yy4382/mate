@@ -38,7 +38,7 @@ export function gatewayWorkspaces(
               isError: true,
             };
           }
-          const { node } = target;
+          const { node, access } = target;
           if (!node.online)
             return {
               content: [{ type: "text", text: `Node offline: ${node.name}` }],
@@ -47,7 +47,7 @@ export function gatewayWorkspaces(
           return gateway.runTool(
             node.nodeId,
             agentId,
-            { tool, arguments: args, access: "home" },
+            { tool, arguments: args, access },
             output,
             signal,
           );
