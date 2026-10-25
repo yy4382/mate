@@ -19,6 +19,42 @@ Mate 的控制面部署在 Linux VPS 上，执行命令的 node 可以在别的�
 
 Mate 不替你创建账号，也不提升权限。Agent 自己在命令里写了 `sudo` 的话，能不能成功由宿主机的 sudo 配置决定。
 
+## 设置一个 node
+
+先有一个运行中的控制面（[部署指南](docs/DEPLOYMENT.md) 第 3 节），并能用管理员账号登录网页。下面在要执行命令的机器上，用**要运行 node 的那个普通账号**操作，不需要 root。包自带 Node，不用另装 Node 或 pnpm。Windows 的步骤见[部署指南 3.2](docs/DEPLOYMENT.md)。
+
+1. **下载发布包。** 同一版本的 `.tar.gz` 和旁边的 `.sha256` 必须放在同一个目录。平台是 `linux` 或 `darwin`（macOS），架构是 `x64` 或 `arm64`（`uname -m` 为 `x86_64` 的是 `x64`，`arm64` 或 `aarch64` 的是 `arm64`）。装了 `gh` 并登录过、对仓库有权限的话：
+
+   ```sh
+   mkdir mate-node-install && cd mate-node-install
+   gh release download --repo yy4382/mate --pattern 'mate-node-*-linux-x64.tar.gz*'
+   ```
+
+   没有 `gh` 就在仓库的 Releases 页面手动下载这两个文件。node 的版本不能比控制面新，通常下载最新版即可。
+
+2. **校验、解包、安装。** macOS 把 `sha256sum -c` 换成 `shasum -a 256 -c`，并在当前账号的图形登录会话里操作。
+
+   ```sh
+   sha256sum -c mate-node-*.tar.gz.sha256
+   tar -xzf mate-node-*.tar.gz
+   ./mate-node/bin/mate node install mate-node-*.tar.gz
+   rm -r mate-node
+   ```
+
+   安装只放好程序、`~/.local/bin/mate` 命令和服务定义，不启动服务，也不改你的 PATH：把 `~/.local/bin` 加进 PATH，或直接用完整路径。
+
+3. **配对并启动。** 在网页的“节点管理”里生成一次性配对令牌：
+
+   ```sh
+   mate node configure --control-plane https://mate.example.com --pairing-token <令牌>
+   mate node start
+   mate node status
+   ```
+
+   网页上这个 node 显示在线、`status` 里出现 `Link: connected` 就好了。Agent 的工作区缺省在 `~/mate/workspaces`，用 `--workspaces <目录>` 可改。Linux 上想让 node 在注销或开机后也一直运行，需要自己执行 `sudo loginctl enable-linger <账号>`。
+
+之后：更新用 `mate node stop`、`mate node update <新包>`、`mate node start`（[5.3](docs/DEPLOYMENT.md)）；`mate node uninstall` 卸载程序、命令和服务定义，配置、身份和工作区保留（[5.4](docs/DEPLOYMENT.md)）。
+
 ## 文档
 
 - [架构](docs/ARCHITECTURE.md)：模块划分、接口，以及设计为什么这样做。
