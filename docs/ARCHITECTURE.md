@@ -371,8 +371,6 @@ interface AgentManager {
 **工具调用按"整个调用"转发。** runtime 把一次完整的工具调用（工具名、参数）交给网关，网关发给 node，node 在本地执行，边执行边把输出流回来，最后返回结果。这样每次工具调用只有一次往返，不需要在网络上逐个实现 Durable 执行环境接口的二十多个文件方法。网关为每次调用生成自己的请求 ID（随机 UUID），输出、结果和停止都按它对应；调用方的任何 ID 都不上线路，所以不同 Agent 的调用不可能撞号。node 工具调用不按 ID 去重：有副作用的工具崩溃后不重做（4.2 规则 2），可重做的 `read` 重做一次也无妨。
 
 - **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于该工作区的 `NodeExecutionEnv`（**工作区环境**）上：参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
-  `read` 通过文件大小和修改时间检测读取期间的变化，重读后仍在变化则拒绝。它不提供并发原地覆盖的原子快照；Windows 写句柄关闭前可能不更新时间，见 [Microsoft 文件时间说明](https://learn.microsoft.com/en-us/windows/win32/sysinfo/file-times)。
-
 - **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 是 `/bin/sh -c`，Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及 POSIX 后台进程仍在运行。PowerShell 在最后一条命令失败时保留原生程序的非零退出码；后续命令成功后不沿用之前的失败码。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
 
 **接口（网关对 runtime）：**
