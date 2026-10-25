@@ -14,9 +14,10 @@ import {
 } from "./support.ts";
 
 describe("node visits (MODULE_TESTS 8)", () => {
-  it("visits the node account's home without preparing an Agent workspace or MEMORY.md", async () => {
+  it("prepares an Agent workspace and uses its actual directory and HOME for visits", async () => {
     const node = await connectedNode();
     const agentId = `visitor-${randomUUID()}`;
+    const workspace = join(node.workspacesRoot, agentId);
     const chunks: string[] = [];
     const result = await node.run(
       agentId,
@@ -31,23 +32,25 @@ describe("node visits (MODULE_TESTS 8)", () => {
     );
     expect(result.isError, textOf(result)).toBe(false);
     const [cwd, home, shellHome] = textOf(result).split(/\r?\n/);
-    expect(realpathSync.native(cwd!)).toBe(realpathSync.native(node.home));
-    expect(home).toBe(node.home);
-    expect(realpathSync.native(shellHome!)).toBe(realpathSync.native(node.home));
-    expect(chunks.join("")).toContain(node.home);
-    expect(existsSync(node.workspacesRoot)).toBe(false);
+    expect(realpathSync.native(cwd!)).toBe(realpathSync.native(workspace));
+    expect(home).toBe(workspace);
+    expect(realpathSync.native(shellHome!)).toBe(realpathSync.native(workspace));
+    expect(chunks.join("")).toContain(workspace);
+    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(true);
     expect(existsSync(join(node.home, "MEMORY.md"))).toBe(false);
 
-    const homeCall = await node.run(agentId, "bash", { command: "echo not-prepared" });
-    expect(homeCall.isError).toBe(true);
-    expect(textOf(homeCall)).toContain("does not exist. The node does not recreate it");
-    expect(existsSync(node.workspacesRoot)).toBe(false);
+    const homeCall = await node.run(agentId, "bash", {
+      command: windows ? "(Get-Location).Path" : "pwd -P",
+    });
+    expect(homeCall.isError, textOf(homeCall)).toBe(false);
+    expect(realpathSync.native(textOf(homeCall).trim())).toBe(realpathSync.native(workspace));
   });
 
-  it("writes, edits and reads inside the visited home and refuses writing outside it", async () => {
+  it("uses the same workspace for bash, write, edit and read and refuses outside file paths", async () => {
     const node = await connectedNode();
     const agentId = `visitor-${randomUUID()}`;
-    const path = join(node.home, "notes", "today.md");
+    const workspace = join(node.workspacesRoot, agentId);
+    const path = join(workspace, "notes", "today.md");
     const written = await node.run(
       agentId,
       "write",
@@ -69,6 +72,15 @@ describe("node visits (MODULE_TESTS 8)", () => {
     const read = await node.run(agentId, "read", { path }, undefined, "visit");
     expect(read.isError, textOf(read)).toBe(false);
     expect(textOf(read)).toBe("first\nupdated\n");
+    const command = await node.run(
+      agentId,
+      "bash",
+      { command: windows ? "Get-Content -Raw notes/today.md" : "cat notes/today.md" },
+      undefined,
+      "visit",
+    );
+    expect(command.isError, textOf(command)).toBe(false);
+    expect(textOf(command).trim()).toBe("first\nupdated");
 
     const outside = temporaryDirectory();
     const secret = join(outside, "secret.txt");
@@ -83,7 +95,7 @@ describe("node visits (MODULE_TESTS 8)", () => {
     expect(refused.isError).toBe(true);
     expect(textOf(refused)).toContain("is outside the workspace");
     expect(readFileSync(secret, "utf8")).toBe("secret");
-    expect(existsSync(node.workspacesRoot)).toBe(false);
+    expect(existsSync(workspace)).toBe(true);
     expect(existsSync(join(node.home, "MEMORY.md"))).toBe(false);
   });
 
@@ -99,7 +111,7 @@ describe("node visits (MODULE_TESTS 8)", () => {
       "visit",
     );
     const home = node.run(agentId, "bash", { command: longCommand("home") });
-    const visitedPids = await pidsOf(node.home, "visit");
+    const visitedPids = await pidsOf(workspace, "visit");
     const homePids = await pidsOf(workspace, "home");
     expect([...visitedPids, ...homePids].every(running)).toBe(true);
 
@@ -114,10 +126,53 @@ describe("node visits (MODULE_TESTS 8)", () => {
     expect((await home).isError).toBe(false);
   });
 
+  it("keeps each Agent's files separate through repeated preparation and reconnection", async () => {
+    const node = await connectedNode();
+    const agents = ["visitor-one", "visitor-two"];
+    for (const agentId of agents) {
+      const result = await node.run(
+        agentId,
+        "write",
+        { path: "MEMORY.md", content: agentId },
+        undefined,
+        "visit",
+      );
+      expect(result.isError, textOf(result)).toBe(false);
+      expect(
+        (
+          await node.run(
+            agentId,
+            "write",
+            { path: "notes.txt", content: agentId },
+            undefined,
+            "visit",
+          )
+        ).isError,
+      ).toBe(false);
+    }
+    await Promise.all(
+      agents.flatMap((agentId) => [
+        node.gateway.prepareWorkspace(randomUUID(), agentId),
+        node.gateway.prepareWorkspace(randomUUID(), agentId),
+      ]),
+    );
+    const before = node.gateway.authentications;
+    node.gateway.disconnect();
+    await eventually(() => node.gateway.authentications > before, "node reconnected");
+    for (const agentId of agents) {
+      for (const path of ["MEMORY.md", "notes.txt"]) {
+        const result = await node.run(agentId, "read", { path }, undefined, "visit");
+        expect(result.isError, textOf(result)).toBe(false);
+        expect(textOf(result)).toBe(agentId);
+      }
+    }
+  });
+
   it.runIf(windows)(
-    "leaves a missing Windows HOME absent and keeps PowerShell's automatic HOME",
+    "sets Windows HOME and PowerShell HOME to the workspace when the node has no HOME",
     async () => {
       const node = await connectedNode({ env: { HOME: undefined } });
+      const workspace = join(node.workspacesRoot, "visitor");
       const result = await node.run(
         "visitor",
         "bash",
@@ -127,9 +182,9 @@ describe("node visits (MODULE_TESTS 8)", () => {
       );
       expect(result.isError, textOf(result)).toBe(false);
       const [cwd, ...environment] = textOf(result).split(/\r?\n/).slice(0, 3);
-      expect(realpathSync.native(cwd!)).toBe(realpathSync.native(node.home));
-      expect(environment).toEqual(["False", node.home]);
-      expect(existsSync(node.workspacesRoot)).toBe(false);
+      expect(realpathSync.native(cwd!)).toBe(realpathSync.native(workspace));
+      expect(environment).toEqual(["True", workspace]);
+      expect(existsSync(workspace)).toBe(true);
     },
   );
 });

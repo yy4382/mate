@@ -40,6 +40,7 @@ export type TestNode = {
   readonly node: FakeNode;
   /** The Agents whose workspace it was asked to prepare. */
   readonly prepared: string[];
+  answerPrepare: (agentId: string) => Promise<void>;
   readonly calls: GatewayRunTool[];
   /** Request IDs of the calls the gateway told it to stop. */
   readonly stopped: string[];
@@ -144,6 +145,7 @@ export async function environment(data = temporaryDirectory()) {
         ...(system === undefined ? {} : { system }),
         onPrepareWorkspace: async (agentId) => {
           prepared.push(agentId);
+          await test.answerPrepare(agentId);
         },
         onRunTool: (call) => {
           calls.push(call);
@@ -160,6 +162,7 @@ export async function environment(data = temporaryDirectory()) {
         nodeId: identity.nodeId,
         node,
         prepared,
+        answerPrepare: async () => {},
         calls,
         stopped,
         answer: async () => ({ outputs: [], result: ok("ok") }),

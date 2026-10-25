@@ -63,12 +63,14 @@ describe("workspace node access", () => {
         expect(laptop.calls).toEqual([
           expect.objectContaining({
             agentId,
-            access: "visit",
+            access: "home",
             arguments: expect.objectContaining({ command: "visit" }),
           }),
         ]);
         expect(laptop.calls[0]?.arguments).not.toHaveProperty("node");
-        expect(laptop.prepared, "visits do not prepare a workspace").toEqual([]);
+        expect(laptop.prepared, "the grant prepares a workspace before returning").toEqual([
+          agentId,
+        ]);
         request.text("visited the authorized node");
       });
 
@@ -208,6 +210,68 @@ describe("managing node grants", () => {
     await reopened.revokeNode(agentId, laptop.nodeId);
     expect((await reopened.agents())[0]).toMatchObject({ state: "paused", grantedNodes: [] });
     env.provider.assertComplete();
+  });
+
+  it("persists an offline grant and allows the first call after reconnection", async () => {
+    const { env, admin, laptop, agentId, account } = await setup();
+    laptop.node.terminate();
+    await vi.waitFor(() => expect(env.gateway.status(laptop.nodeId).online).toBe(false));
+    await admin.grantNode(agentId, laptop.nodeId);
+    expect(laptop.prepared).toEqual([]);
+    expect((await admin.agents())[0]).toMatchObject({
+      grantedNodes: [{ nodeId: laptop.nodeId, name: "laptop" }],
+    });
+    await laptop.node.connect();
+    env.provider
+      .step("visit after reconnect", (request) => {
+        request.call([{ name: "bash", arguments: { node: "laptop", command: "pwd" } }]);
+      })
+      .step("done", (request) => {
+        expect(request.toolOutput("visit after reconnect:0")).toContain("ok");
+        request.text("visited");
+      });
+    env.post("Visit the reconnected laptop, @richard.", [account]);
+    await env.provider.received(2);
+    expect(laptop.calls).toEqual([expect.objectContaining({ agentId, access: "home" })]);
+    expect(env.reports).toEqual([]);
+    env.provider.assertComplete();
+  });
+
+  it("keeps a grant when online preparation fails and retries preparation on repeated grants", async () => {
+    const { env, admin, laptop, agentId } = await setup();
+    laptop.answerPrepare = async () => {
+      throw new Error("disk full");
+    };
+    await admin.grantNode(agentId, laptop.nodeId);
+    expect((await admin.agents())[0]).toMatchObject({
+      grantedNodes: [{ nodeId: laptop.nodeId, name: "laptop" }],
+    });
+    expect(env.reports).toEqual([
+      {
+        agentId,
+        error: expect.objectContaining({ message: expect.stringContaining("disk full") }),
+      },
+    ]);
+    laptop.answerPrepare = async () => {};
+    await admin.grantNode(agentId, laptop.nodeId);
+    expect(laptop.prepared).toEqual([agentId, agentId]);
+    expect(env.reports).toHaveLength(1);
+  });
+
+  it("does not restore a grant revoked while its preparation is in flight", async () => {
+    const { admin, laptop, agentId } = await setup();
+    const started = Promise.withResolvers<void>();
+    const prepared = Promise.withResolvers<void>();
+    laptop.answerPrepare = () => {
+      started.resolve();
+      return prepared.promise;
+    };
+    const grant = admin.grantNode(agentId, laptop.nodeId);
+    await started.promise;
+    await admin.revokeNode(agentId, laptop.nodeId);
+    prepared.resolve();
+    await grant;
+    expect((await admin.agents())[0]).toMatchObject({ grantedNodes: [] });
   });
 
   it("refuses a home grant or revoke and validates both the Agent and paired node", async () => {

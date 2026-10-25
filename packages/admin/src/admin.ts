@@ -60,7 +60,7 @@ export type AdminOptions = {
   readonly chat: ChatApp;
   readonly gateway: AdminGateway;
   readonly clock?: Clock;
-  /** Told about an Agent that failed to open, a failed connector pass, or a runtime whose storage failed. */
+  /** Told about failed workspace preparation, Agent opening, connector passes, or runtime storage. */
   readonly report?: (error: unknown, agentId: string) => void;
 };
 
@@ -128,6 +128,7 @@ export class Admin {
   readonly #store: AdminStore;
   readonly #manager: AgentManager;
   readonly #clock: Clock;
+  readonly #report: NonNullable<AdminOptions["report"]>;
 
   constructor(options: AdminOptions, store: AdminStore, manager: AgentManager) {
     this.#chat = options.chat;
@@ -135,6 +136,8 @@ export class Admin {
     this.#store = store;
     this.#manager = manager;
     this.#clock = options.clock ?? systemClock;
+    this.#report =
+      options.report ?? ((error, agentId) => console.error(`Agent ${agentId}:`, error));
   }
 
   // ── Agents ──────────────────────────────────────────────────────────────────
@@ -220,11 +223,20 @@ export class Admin {
     this.#store.deleteNodeGrants(agentId);
   }
 
-  /** Permit later workspace calls to visit this paired node. The home node is always accessible. */
+  /** Persist access, then prepare on an online node. Offline or failed preparation is retried by the node on use. */
   async grantNode(agentId: string, nodeId: string): Promise<void> {
-    await this.#changeNodeGrant(agentId, nodeId, () =>
-      this.#store.grantNode(agentId, nodeId, this.#clock.now()),
-    );
+    await this.#changeNodeGrant(agentId, nodeId, async () => {
+      this.#store.grantNode(agentId, nodeId, this.#clock.now());
+      if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId && node.online)) return;
+      const result = await this.#gateway.prepareWorkspace(nodeId, agentId);
+      if (result.isError)
+        this.#report(
+          new Error(
+            `Preparing workspace on node ${nodeId}: ${result.content.map((part) => part.text).join("")}`,
+          ),
+          agentId,
+        );
+    });
   }
 
   /** Refuse later visits to this node without stopping calls that have already started. */
@@ -346,14 +358,18 @@ export class Admin {
     this.#store.close();
   }
 
-  async #changeNodeGrant(agentId: string, nodeId: string, change: () => void): Promise<void> {
+  async #changeNodeGrant(
+    agentId: string,
+    nodeId: string,
+    change: () => void | Promise<void>,
+  ): Promise<void> {
     await this.#existing(agentId, async (id) => {
       const { nodeId: homeNodeId } = await this.#manager.describe(id);
       if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId))
         throw new AdminError("unknown-node", `no paired node ${nodeId}`);
       if (nodeId === homeNodeId)
         throw new AdminError("invalid-input", "the home node is always accessible");
-      change();
+      await change();
     });
   }
 

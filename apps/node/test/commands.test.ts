@@ -164,14 +164,16 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     expect(textOf(next).split(/\r?\n/)[0], "the node keeps serving").toBe("still-serving");
   });
 
-  it("fails clearly, without starting anything, when the workspace is missing", async () => {
+  it("recreates a missing workspace before starting a command", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     rmSync(workspace, { recursive: true });
-    const result = await node.run(agentId, "bash", { command: "touch created-by-command" });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toMatch(/workspace .* does not exist/);
-    expect(existsSync(workspace), "the node never recreates a workspace").toBe(false);
+    const result = await node.run(agentId, "bash", {
+      command: "echo created > created-by-command",
+    });
+    expect(result.isError, textOf(result)).toBe(false);
+    expect(existsSync(join(workspace, "created-by-command"))).toBe(true);
+    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(true);
   });
 
   it("keeps the tail of output beyond the limit and says it truncated", async () => {

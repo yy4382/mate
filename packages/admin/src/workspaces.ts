@@ -2,10 +2,6 @@ import type { NodeGateway } from "@mate/gateway";
 import type { WorkspaceHost } from "@mate/manager";
 import type { AdminStore } from "./store.ts";
 
-/**
- * Workspace preparation stays on the home node. Each tool call resolves its target and current access before
- * forwarding to the gateway, with the caller's signal to stop it there.
- */
 export function gatewayWorkspaces(
   gateway: Pick<NodeGateway, "nodes" | "prepareWorkspace" | "runTool">,
   store: AdminStore,
@@ -42,7 +38,7 @@ export function gatewayWorkspaces(
               isError: true,
             };
           }
-          const { node, access } = target;
+          const { node } = target;
           if (!node.online)
             return {
               content: [{ type: "text", text: `Node offline: ${node.name}` }],
@@ -51,7 +47,7 @@ export function gatewayWorkspaces(
           return gateway.runTool(
             node.nodeId,
             agentId,
-            { tool, arguments: args, access },
+            { tool, arguments: args, access: "home" },
             output,
             signal,
           );

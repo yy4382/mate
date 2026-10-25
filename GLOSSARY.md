@@ -18,7 +18,7 @@ Web 外壳记在 `humans` 表里的人类权限：`admin` 或 `member`。`member
 避免：用户、成员（成员指会话的成员）。
 
 **Agent**（agent）
-一个长期存在的 AI 同事。它有稳定的 Agent ID、一个聊天账号、一个工作区和一个 runtime。一次模型调用、一次 run 或一个工作助手，都不是新的 Agent。
+一个长期存在的 AI 同事。它有稳定的 Agent ID、一个聊天账号、各 node 上独立的工作区和一个 runtime。一次模型调用、一次 run 或一个工作助手，都不是新的 Agent。
 
 **Agent ID**（agentId）
 创建 Agent 时生成的唯一标识，之后永不改变。它同时用作 Agent 存储文件的文件名，以及 Agent 聊天账号的 `externalId`。
@@ -249,22 +249,22 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 连接器提交给 runtime 的一条不含消息正文的提示，写明截至某个时间点至少有多少未读、分布在哪里、有没有 @ 你。同一时间最多只有一条还没交给模型的通知，新的会替换旧的。
 
 **node**
-以宿主机上一个普通账号（node 账号，不是控制面的账号，也不在 docker 组里）运行的执行进程，由 `mate node` CLI 管理：Linux 是 systemd 用户服务，macOS 是 LaunchAgent，Windows 是当前账号登录时启动的计划任务。它按访问方式在 Agent 工作区或 node 账号主目录里执行命令、读写文件，不接触模型凭据和对话记录。
+以宿主机上一个普通账号（node 账号，不是控制面的账号，也不在 docker 组里）运行的执行进程，由 `mate node` CLI 管理：Linux 是 systemd 用户服务，macOS 是 LaunchAgent，Windows 是当前账号登录时启动的计划任务。它在该 node 上的 Agent 工作区里执行命令、读写文件，不接触模型凭据和对话记录。
 
 **平台表**（platform table）
 node 根据当前系统选择能力的唯一入口。Linux、macOS、Windows 各有一条记录，提供 shell、命令进程组、服务、布局、启动命令、身份权限检查和工作区路径规则。共同的安装流程、超时和输出处理不随平台复制。
 
 **主 node**（home node）
-Agent 创建时选定的 node，ID 记在 Agent 文件里且不变。它的工作区和 MEMORY.md 只在这里；缺省工具调用也在这里执行。
+Agent 创建时选定的 node，ID 记在 Agent 文件里且不变。缺省工具调用和恢复时读取 MEMORY.md 在这里执行；经授权的其他 node 也各有独立工作区。
 
 **访问**（visit）
-Agent 把一次工具调用送到已授权的非主 node，在那个 node 账号的主目录里执行，不创建自己的工作区。
+Agent 把一次工具调用送到已授权的非主 node，在该 node 上自己的工作区里执行。
 
 **访问方式**（NodeAccess）
-网关工具调用的必填 `access`，由管理模块决定为 `home` 或 `visit`，node 据此选择执行环境。
+管理模块判断的授权关系，主 node 为 `home`，获准访问的非主 node 为 `visit`。网关工具调用保留同名 `access` 字段以兼容旧 node，但新控制面统一发送 `home`；新版 node 不用它选择目录。
 
 **node 授权**（node grant）
-管理员允许某个 Agent 访问一个非主 node 的记录，按两个 ID 存在控制库。主 node 不需要授权；授权和收回只影响之后开始的调用。
+管理员允许某个 Agent 访问一个非主 node 的记录，按两个 ID 存在控制库。主 node 不需要授权；授权先持久化，在线时准备工作区，离线时延后到首次在线调用。授权和收回只影响之后开始的调用，收回不删除工作区。
 
 **node 名字**（node name）
 网关保存的、管理员可改且唯一的机器名字；UUID 仍用于身份和调用（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
@@ -291,7 +291,7 @@ node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-n
 POSIX 上是 `~/.local/lib/mate-node`，Windows 上是 `%LOCALAPPDATA%\Mate\program`，保存解开的发布包。只会被整个放入（暂存目录改名）或整个挪走，从不原地修改，所以要么是完整的某个版本，要么不存在。配置、node 身份和工作区都在它之外。
 
 **工作区宿主**（WorkspaceHost）
-Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出以这个主 node 为缺省目标的工作区端口（`port(nodeId, agentId)`）。Agent 的主 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：准备工作区调 `prepareWorkspace`，端口按调用的可选 node 名字和最新授权选择目标及访问方式，再转给 `runTool` 并带上调用的 signal；`nodes()` 列出当前可访问的 node。Manager 的测试里用假的。
+Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出以这个主 node 为缺省目标的工作区端口（`port(nodeId, agentId)`）。Agent 的主 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：创建 Agent 和在线授权时调 `prepareWorkspace`，端口按调用的可选 node 名字和最新授权选择目标，再以兼容旧 node 的 `access: home` 转给 `runTool` 并带上调用的 signal；`nodes()` 列出当前可访问的 node。Manager 的测试里用假的。
 
 **node 网关**（node gateway）
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
@@ -300,7 +300,7 @@ Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准
 `@mate/gateway` 对 node 操作的拒绝异常，带 `reason`，与线路上的 `gateway.error` 消息不同（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
 
 **工作区**（workspace）
-Agent 在主 node 上的工作目录。Agent 在里面自由组织记忆、文件和脚本。
+Agent 在某个 node 上的工作目录，路径为该 node 的 `<工作区根>/<agentId>`。每个已授权 node 上各有独立工作区，文件不跨 node 同步。node 执行工具前幂等准备目录，只在首次创建目录时放入空的 MEMORY.md，已有目录和文件保持原样。
 
 **命令进程组**（command process group）
 node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Windows 活 shell 的进程树，追踪与停止的范围见 [ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)。
@@ -314,7 +314,7 @@ node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Window
 避免：结果未知（那是连接断开时的结果）。
 
 **工作区环境**（WorkspaceEnv）
-node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，浏览工作区也用它；home 的根是 Agent 工作区，visit 的根是 node 账号主目录。每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。Windows 同时处理盘符、反斜线和大小写，允许根目录自身的别名，拒绝经过根以下的符号链接或 junction；POSIX 保留指向该根目录内部的链接。
+node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，浏览工作区也用它；所有调用的根都是目标 node 上的 Agent 工作区。每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。Windows 同时处理盘符、反斜线和大小写，允许根目录自身的别名，拒绝经过根以下的符号链接或 junction；POSIX 保留指向该根目录内部的链接。
 
 **浏览工作区**（browse）
 管理员在管理界面里只读地看 Agent 工作区里的一个路径：管理模块的 `browseWorkspace` 调网关的 `browse`，网关发 `gateway.browse`，node 回 `node.browse.result`。回答是一个**浏览结果**（`WorkspaceListing`：目录的条目、文件开头的文字，或者不是文字的文件的大小，各有上限并标明截断），或者一个拒绝（`outside-workspace`、`not-found`、`unreadable`，网关再加上 `node-offline`）。不经过 runtime，暂停的 Agent 也能看。

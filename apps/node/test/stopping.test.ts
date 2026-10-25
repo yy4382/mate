@@ -226,6 +226,9 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
       (await node.run(agentId, "write", { path: "notes.txt", content: "x" })).isError,
       "file tools too",
     ).toBe(false);
+    expect(existsSync(memory)).toBe(false);
+    expect((await node.gateway.prepareWorkspace("prepare-existing", agentId)).isError).toBe(false);
+    expect(existsSync(memory)).toBe(false);
   });
 
   it("exits instead of retrying when the gateway rejects its identity, with the status its service unit never restarts", async () => {
@@ -292,19 +295,26 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
     }
   });
 
-  it("returns a clear error and does not recreate a workspace that is missing", async () => {
+  it("refuses every tool when its workspace path is a file and recovers after its removal", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     rmSync(workspace, { recursive: true });
+    writeFileSync(workspace, "not a directory");
     for (const [tool, args] of [
       ["bash", { command: "echo hi" }],
       ["write", { path: "a.txt", content: "a" }],
       ["read", { path: "a.txt" }],
-    ] as const) {
+      ["edit", { path: "a.txt", edits: [{ oldText: "a", newText: "b" }] }],
+    ] satisfies [Parameters<typeof node.run>[1], Parameters<typeof node.run>[2]][]) {
       const result = await node.run(agentId, tool, args);
       expect(result.isError, tool).toBe(true);
-      expect(textOf(result), tool).toMatch(/does not exist\. The node does not recreate it/);
+      expect(textOf(result), tool).toContain("Failed to prepare workspace");
     }
-    expect(existsSync(workspace)).toBe(false);
+    expect(existsSync(workspace)).toBe(true);
+    rmSync(workspace);
+    const retried = await node.run(agentId, "bash", { command: "echo recovered" });
+    expect(retried.isError, textOf(retried)).toBe(false);
+    expect(textOf(retried).trim()).toBe("recovered");
+    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(true);
   });
 });

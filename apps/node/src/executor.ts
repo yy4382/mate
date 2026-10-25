@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Clock } from "@mate/clock";
 import {
@@ -29,19 +28,13 @@ export class Executor {
     onOutput: (chunk: string) => void,
     signal: AbortSignal,
   ): Promise<ToolResult> {
-    const home = call.access === "home";
-    const directory = home ? join(this.#root, call.agentId) : homedir();
-    // The only check before executing (ARCHITECTURE 4.5 rule 4). The node never recreates a missing workspace: its
-    // path is the Agent's, made only by preparing it.
-    if (home && !isDirectory(directory)) {
-      return failure(
-        `The workspace ${directory} does not exist. The node does not recreate it; prepare the workspace again.`,
-      );
-    }
+    const prepared = this.prepareWorkspace(call.agentId);
+    if (prepared.isError) return prepared;
+    const directory = join(this.#root, call.agentId);
     if (call.tool !== "bash") return runFileTool(call.tool, call.arguments, directory, signal);
     const args = parseBashArguments(call.arguments);
     if (!args.ok) return failure(args.error);
-    const env = { ...process.env, PWD: directory, ...(home ? { HOME: directory } : {}) };
+    const env = { ...process.env, PWD: directory, HOME: directory };
     return this.#commands.run(
       {
         command: args.arguments.command,
@@ -71,9 +64,8 @@ export class Executor {
   prepareWorkspace(agentId: string): ToolResult {
     const workspace = join(this.#root, agentId);
     try {
-      mkdirSync(workspace, { recursive: true });
-      const memory = join(workspace, "MEMORY.md");
-      if (!existsSync(memory)) writeFileSync(memory, "", { flag: "wx" });
+      const created = mkdirSync(workspace, { recursive: true });
+      if (created !== undefined) writeFileSync(join(workspace, "MEMORY.md"), "", { flag: "wx" });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return failure(`Failed to prepare workspace: ${reason}`);
