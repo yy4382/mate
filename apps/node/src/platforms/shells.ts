@@ -30,11 +30,7 @@ export const windowsCommands = {
       "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)",
       "$OutputEncoding = [Console]::OutputEncoding",
     ];
-    if (
-      Object.entries(request.env).some(
-        ([key, value]) => key.toUpperCase() === "HOME" && value !== undefined,
-      )
-    ) {
+    if (request.env.HOME !== undefined) {
       prefix.push("Set-Variable -Name HOME -Value $env:HOME -Force");
     }
     const quotedCommand = request.command.replace(/['\u2018-\u201b]/g, "$&$&");

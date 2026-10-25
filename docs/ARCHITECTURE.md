@@ -420,7 +420,9 @@ type NodeStatusResult = {
 
 **访问方式只选择执行环境。** `home` 使用 `<工作区根>/<agentId>`，目录必须存在，`HOME` 和 `PWD` 设为该目录；`visit` 使用 `os.homedir()`，`PWD` 设为该目录，保留 node 进程原来的 `HOME`（包括未设置），不创建工作区或 `MEMORY.md`，也不碰工作区根。两者共用文件工具的路径限制、命令进程组、超时、停止、断线和截断逻辑。PowerShell 在 visit 缺少 HOME 时保留自己的主目录值。
 
-访问方式由管理模块决定，runtime 和 node 都不判断授权。旧 node 不认识 `access` 时仍按工作区执行，访问调用因工作区不存在而失败；访问其他 node 前，先把目标 node 升级到支持此功能的版本。
+访问方式由管理模块决定，runtime 和 node 都不判断授权。
+
+**升级顺序。** 控制面先于 node 升级，node 不得比控制面新。新版 node 可能要求旧控制面不会发送的字段，版本倒置会导致协议解析失败并断线。旧 node 不认识 `access` 时仍按工作区执行，访问调用因工作区不存在而失败；访问其他 node 前，先把目标 node 升级到支持此功能的版本。
 
 **持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。POSIX 目录和私有文件分别用 0700、0600；Windows 存在当前账号的 `%LOCALAPPDATA%\Mate` 下，依靠该目录对普通账号的默认 ACL 隔离，不用 `chmod` 模拟 Windows 权限。网关的 node 注册表和配对令牌存在**控制库** `data/control.sqlite`，这个文件和 Web 外壳的登录、管理模块的 API key 共用：
 - 网关结构第 2 版在 `nodes` 中加入唯一且非空的 `name`、完整系统报告的 `system_json` 和报告时间 `reported_at`。迁移给已有 node 起名 `node-<UUID 前 8 位>`；前缀相同的按 UUID 排序，第二个起加 `-2`、`-3`。公钥、配对时间和上次连接时间保留，系统报告和报告时间为空，等下次新格式握手补齐。
@@ -479,9 +481,9 @@ interface Admin {
 }
 ```
 
-拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`name-taken`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。对不存在的 Agent 操作是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
+拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`name-taken`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。每个拒绝都是 `AdminError`（或上面这种 `ChatError`）：对 Agent 的操作排在该 Agent 的队列里执行，排队期间 Agent 被删掉，同样是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
 
-**工作区宿主与授权。** `WorkspaceHost.port(homeNodeId, agentId)` 返回的端口接受 `{ tool, arguments, node? }`，runtime 统一将 `node` 从四个工具的参数中取出，node 收到的 `arguments` 不变。端口的 `nodes()` 返回 `{ name, online, platform, home }[]`。每次调用从网关取一次 node 快照，缺省目标为主 node，否则按名字解析。
+**工作区宿主与授权。** `WorkspaceHost.port(homeNodeId, agentId)` 返回的端口接受 `{ tool, arguments, node? }`，runtime 统一将 `node` 从四个工具的参数中取出，node 收到的 `arguments` 不变。端口的 `nodes()` 返回 `{ name, online, platform, home }[]`。缺省目标为主 node，否则按名字解析。
 
 **只有 `nodeAccess(agentId, homeNodeId, targetNodeId)` 决定访问方式。** 主 node 返回 `home`，现读授权表命中的其他 node 返回 `visit`，其余拒绝。工具调用和 `nodes()` 共用这个函数；以后增加权限规则只改它和它读的数据。未知名字和未授权名字返回相同错误，列出可访问的名字，不向任何 node 发请求，也不泄露其他 node 是否存在。授权按 ID 保存，改名后仍有效。
 

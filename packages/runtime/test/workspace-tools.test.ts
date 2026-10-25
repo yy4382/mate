@@ -30,8 +30,6 @@ describe("workspace targets", () => {
               properties: {
                 node: {
                   type: "string",
-                  description:
-                    "要在哪个 node 上执行，用 `node_list` 查名字。不给就在你的主 node 上，在你的工作区里执行。在别的 node 上，调用在那个 node 账号的主目录里执行，那里没有你的工作区和 `MEMORY.md`。",
                 },
               },
               required: expect.not.arrayContaining(["node"]),

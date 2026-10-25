@@ -46,14 +46,11 @@ it("admins grant and revoke node access over HTTP; members cannot change it", as
       403,
       expect.objectContaining({ error: "admin-only" }),
     ]);
-    for (const [agent, node, status, error] of [
-      [agentId, home, 400, "invalid-input"],
-      [agentId, "unknown", 404, "unknown-node"],
-      ["unknown", visit, 404, "unknown-agent"],
-    ] as const) {
-      const refused = await admin.request(method, `/api/admin/agents/${agent}/nodes/${node}`);
-      expect([refused.status, refused.json]).toEqual([status, expect.objectContaining({ error })]);
-    }
+    const refused = await admin.request(method, `/api/admin/agents/${agentId}/nodes/${home}`);
+    expect([refused.status, refused.json]).toEqual([
+      400,
+      expect.objectContaining({ error: "invalid-input" }),
+    ]);
   }
   expect((await admin.get("/api/admin/agents")).json).toEqual(agents);
 

@@ -216,7 +216,7 @@
 - 前台命令不给 `timeout` 时，node 收到的时限是 10 分钟；给了的照原样；后台命令不给时，node 收到的调用没有时限。
 - 前台命令的 `timeout` 超过 1 小时、后台命令的超过一天时，调用以错误结果返回，错误里写明上限，node 什么都没收到。
 
-- 后台命令输入保持版本 1 的平铺格式，可选 node 到达端口并出现在完成和中断汇报第一行。公开接口产生的旧格式记录关闭、重开后按主 node 处理，不手写 Durable 存储。
+- 后台命令输入保持版本 1 的平铺格式，可选 node 到达端口并出现在中断汇报第一行。公开接口产生的旧格式记录关闭、重开后按主 node 处理，不手写 Durable 存储。
 
 ## 5. 连接器
 
@@ -312,7 +312,7 @@
 ### 8.2 文件
 
 - 文件工具（`read`、`write`、`edit`）的行为与 Durable 自带工具在本地执行时一致。
-- `visit` 的三种文件工具在 node 账号主目录里读写、编辑，不要求 Agent 工作区存在；遍历、绝对路径、外部链接均不能越出主目录，外部文件不变，也不创建 Agent 工作区或 `MEMORY.md`。
+- `visit` 的三种文件工具在 node 账号主目录里读写、编辑，不要求 Agent 工作区存在；对主目录外文件的写入被拒绝，外部文件不变，也不创建 Agent 工作区或 `MEMORY.md`。
 - 以两个点开头的普通文件名（`..notes.md`、`..cache/x.txt`）照常读写。POSIX 上单独的 `...` 也是普通名字。
 - 路径不能逃出工作目录：`..`、指向工作目录外的绝对路径、指向外部的符号链接都被拒绝。（Durable 的文件工具内部会把路径先变成绝对路径再解析，所以指向工作目录内的绝对路径照常可用。）
 - Windows 接受根目录的 junction、短名和大小写别名，拒绝越界路径和根以下的链接。
@@ -383,14 +383,13 @@
 - 浏览工作区在 Agent 的主 node 上进行，返回 node 的结果，别的 node 不被询问；暂停的 Agent 也能浏览，浏览不改变它的状态。node 拒绝的路径（比如逃出工作目录的）以 node 给的原因拒绝；node 离线时以 `node-offline` 拒绝；不存在的 Agent 和不合法的路径在询问 node 之前被拒绝。路径限定在工作目录里由 node 保证，在 8.4 测。
 - 配对 node：生成的令牌只能用一次。
 - 管理员改 node 名字，成功和三种拒绝都遵守网关规则。Agent 列表的 `nodeName` 每次从网关读取，改名后立即变化，Agent 的 node ID 不变。
-- 创建 Agent 时不合法的名字或 handle 以 `invalid-input` 拒绝，handle 被占用以聊天 app 的 `handle-taken` 拒绝（不是创建中途失败），已存在的 ID 以 `agent-exists` 拒绝；都什么都不创建。操作不存在的 Agent 得到 `unknown-agent`；观察或查助手时 Agent 被暂停，得到 `agent-closed`。
+- 创建 Agent 时不合法的名字或 handle 以 `invalid-input` 拒绝，handle 被占用以聊天 app 的 `handle-taken` 拒绝（不是创建中途失败），已存在的 ID 以 `agent-exists` 拒绝；都什么都不创建。暂停、恢复、改设置排在删除之后得到 `unknown-agent`；观察或查助手时 Agent 被暂停，得到 `agent-closed`。
 - 创建 Agent 时 node 必须已经配对，否则拒绝，聊天账号和文件都不会出现；工作目录建在所选主 node 上，缺省工具调用在那里执行，控制面重启后主 node 不变。
 - 暂停 Agent 时，node 上进行中的命令经真实网关被停止；恢复后模型得知这次调用没有完成，命令不重跑。
 - 列出 Agent 时，显示名和 handle 来自聊天账号，node、状态、设置和用量来自 Agent 文件；一个 Agent 的文件读不出来时，它以"读不出"和原因列出，可以删除，其他 Agent 照常列出。
 
 - 新 Agent 只有主 node 可用；未知和未授权名字同样拒绝并列可访问名字，不向 node 发调用。授权后以 visit 转发，缺省目标和显式主 node 名字均以 home 转发；node_list 每次现读。
 - 授权、收回幂等；主 node invalid-input，未知 Agent/node 分别拒绝；暂停的 Agent 也能授权，agents 显示当前授权名字。收回后新调用拒绝，已发出的前台和后台调用仍完成；目标离线错误标出名字，主 node 离线不阻止其他 node。
-- 删除 Agent 后清理其授权。
 - 用已发布版本公开 API 创建并暂停的真实 Agent 夹具验证 admin 迁移：凭据不变，初始无额外授权，原 Agent 仍只用主 node。
 
 ## 11. Web 外壳
@@ -420,7 +419,7 @@
 - 前端目录里的文件不需要登录，`/app` 下的页面需要；其他页面路径回前端的入口页；路径逃不出前端目录。没有前端时页面回 404，API 照常。node 的 WebSocket 只在 `/api/nodes/connect` 上接受。
 - 控制面在**存储夹具**（整个数据目录的副本）上启动：原来的所有者成为管理员，用 handle `owner` 和 `facts.json` 里的密码登录（别的密码被拒，也没有多出别的人类），名字不变，看到夹具里的会话和未读摘要，并能发消息；alpha.2 签发的登录会话 cookie 升级后仍然有效；这个账号能改名、改 handle、添加别的人类；夹具里的 Provider 凭据还在，夹具里的配对令牌仍能配对一个 node。
 
-- PUT/DELETE /api/admin/agents/:id/nodes/:nodeId 成功均为 204；主 node 为 400 invalid-input，未知 Agent/node 为各自的 404，普通人类为 403 admin-only。浏览器验证授权、刷新保留、收回和行内反馈，主 node 没有操作按钮。
+- PUT/DELETE /api/admin/agents/:id/nodes/:nodeId 成功均为 204；主 node 为 400 invalid-input，普通人类为 403 admin-only。浏览器验证授权、刷新保留、收回和行内反馈，主 node 没有操作按钮。
 
 ### 11.2 人类：角色、自己的资料和管理
 

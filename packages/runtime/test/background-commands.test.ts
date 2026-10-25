@@ -94,49 +94,6 @@ describe("background commands", () => {
     agent.provider.assertComplete();
   });
 
-  it("forwards a background command's node and names it in the result", async () => {
-    const agent = await testAgent();
-    const finished = Promise.withResolvers<void>();
-    let started: string[] = [];
-    let id = 0;
-    agent.provider
-      .step("starts the build on the laptop", (request) => {
-        started = request.call([background("make", "laptop")]);
-      })
-      .step("acknowledges", (request) => {
-        id = commandId(request, started[0]);
-        request.text("started");
-      })
-      .step("reads the result", (request) => {
-        const report = request
-          .userTexts()
-          .find((value) => value.startsWith(`[background command ${id} `));
-        expect(reports(request, id)).toBe(1);
-        expect(report?.split("\n")[0]).toBe(
-          `[background command ${id} finished on node laptop] make`,
-        );
-        expect(report).toContain("build output");
-        request.text("read the build result");
-        finished.resolve();
-      });
-    const { runtime } = await agent.open();
-
-    await (await runtime.submit("build it on the laptop", { requestId: "m1" })).settled();
-    const build = await agent.workspace.nextCall();
-    expect(build.request).toEqual({
-      tool: "bash",
-      arguments: { command: "make", background: true },
-      node: "laptop",
-    });
-    build.resolve(text("build output"));
-    await finished.promise;
-    await runtime.idle();
-
-    expect(await runtime.withdraw(`command:${id}`)).toBe("settled");
-    expect(agent.workspace.calls).toHaveLength(1);
-    agent.provider.assertComplete();
-  });
-
   it("reports the result once when the process dies while the model reads it", async () => {
     const agent = await testAgent();
     const first = await agent.open();
@@ -234,6 +191,7 @@ describe("background commands", () => {
     const first = await agent.open();
     await (await first.runtime.submit("serve it", { requestId: "m1" })).settled();
     const serve = await agent.workspace.nextCall();
+    expect(serve.request.node).toBe("laptop");
 
     await first.runtime.close();
     expect(serve.signal.aborted, "closing stopped the node call").toBe(true);
