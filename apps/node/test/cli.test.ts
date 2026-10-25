@@ -438,7 +438,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     );
   });
 
-  it("node run without a config exits with a status the service unit does not restart", () => {
+  it("node run without a config reports the platform's service exit status", () => {
     const h = host();
     ok(h, "node", "install", writeBundle(h.inputs, { version: "1.0.0" }));
     const result = h.mate("node", "run");
@@ -449,7 +449,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
       const noRestart = /^RestartPreventExitStatus=(.+)$/m.exec(readFileSync(unit(h), "utf8"))?.[1];
       expect(noRestart?.split(" ")).toContain(String(serviceResult.status));
     } else {
-      expect(serviceResult.status).toBe(0);
+      expect(serviceResult.status).toBe(process.platform === "darwin" ? 0 : 78);
       if (process.platform === "win32")
         expect(readFileSync(join(h.paths.data, "node.log"), "utf8")).toContain("configure");
     }

@@ -33,13 +33,13 @@ export const windowsCommands = {
     if (request.env.HOME !== undefined) {
       prefix.push("Set-Variable -Name HOME -Value $env:HOME -Force");
     }
-    const quotedCommand = request.command.replace(/['\u2018-\u201b]/g, "$&$&");
-    const invocation = [
-      prefix.join("; "),
-      `. ([ScriptBlock]::Create('${quotedCommand}'))`,
+    const command = [
+      request.command,
       "$mateCommandSucceeded = $?",
       "if (-not $mateCommandSucceeded) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }",
     ].join("\n");
+    const quotedCommand = command.replace(/['\u2018-\u201b]/g, "$&$&");
+    const invocation = `${prefix.join("; ")}\n. ([ScriptBlock]::Create('${quotedCommand}'))`;
     const child = spawn(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-Command", invocation],
