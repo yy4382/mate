@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
 
@@ -30,13 +30,11 @@ export function readConfig(path: string): NodeConfig | undefined {
 export function writeConfig(path: string, input: unknown): NodeConfig {
   const config = nodeConfigSchema.parse(input);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  chmodSync(dirname(path), 0o700);
   const temporary = join(dirname(path), `.node-${randomBytes(8).toString("hex")}.tmp`);
   writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, {
     mode: 0o600,
     flag: "wx",
   });
-  chmodSync(temporary, 0o600);
   renameSync(temporary, path);
   return config;
 }

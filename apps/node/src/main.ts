@@ -2,19 +2,11 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { readConfig, writeConfig } from "./config.ts";
-import {
-  EXIT_DO_NOT_RESTART,
-  install,
-  logs,
-  start,
-  status,
-  stop,
-  uninstall,
-  update,
-} from "./installation.ts";
+import { install, logs, start, status, stop, uninstall, update } from "./installation.ts";
 import { writeLink } from "./link.ts";
 import { NodeRejectedError, startNode } from "./node.ts";
 import { currentPlatform } from "./platforms/index.ts";
+import { EXIT_DO_NOT_RESTART } from "./platforms/types.ts";
 
 const USAGE = `Usage:
   mate node install <bundle.tar.gz>     install the program, the \`mate\` command and the service

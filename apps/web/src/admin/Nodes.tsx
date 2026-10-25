@@ -23,7 +23,6 @@ const NODE_NAME_PATTERN = "[a-z0-9][a-z0-9\\-]{0,31}";
 function RenameNode({ node, onClose }: { node: NodeView; onClose: () => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState(node.name);
-  const [nameError, setNameError] = useState<string>();
   const rename = useMutation({
     mutationFn: (value: string) => put(`/api/admin/nodes/${node.nodeId}`, { name: value }),
     onSuccess: async () => {
@@ -32,12 +31,11 @@ function RenameNode({ node, onClose }: { node: NodeView; onClose: () => void }) 
         qc.invalidateQueries({ queryKey: adminKeys.agents }),
       ]);
     },
-    onError: (cause) => {
-      if (!(cause instanceof ApiError)) return;
-      if (cause.reason === "name-taken" || cause.reason === "invalid-input")
-        setNameError(refusalText(cause));
-    },
   });
+  const nameError =
+    rename.error instanceof ApiError && rename.error.reason === "name-taken"
+      ? refusalText(rename.error)
+      : undefined;
 
   return (
     <Dialog title="修改 Node 名字" description={`当前名字是 ${node.name}。`} onClose={onClose}>
@@ -46,7 +44,6 @@ function RenameNode({ node, onClose }: { node: NodeView; onClose: () => void }) 
         aria-label="修改 Node 名字"
         onSubmit={(event) => {
           event.preventDefault();
-          setNameError(undefined);
           rename.mutate(name, { onSuccess: onClose });
         }}
       >
@@ -55,7 +52,6 @@ function RenameNode({ node, onClose }: { node: NodeView; onClose: () => void }) 
             value={name}
             onChange={(event) => {
               setName(event.target.value);
-              setNameError(undefined);
               rename.reset();
             }}
             autoCapitalize="none"

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { unlinkSync } from "node:fs";
+import { existsSync, realpathSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { EXIT_DO_NOT_RESTART } from "../installation.ts";
+import { EXIT_DO_NOT_RESTART } from "./types.ts";
 import { markedFileOwnership, reportToStderr, writeServiceFile } from "./service-files.ts";
 import type { BundleLayout, Layout, ServiceManager, ServiceState } from "./types.ts";
 
@@ -59,7 +59,13 @@ WantedBy=default.target
     const enabled = values.get("UnitFileState") ?? "";
     const fragment = values.get("FragmentPath");
     let ownership = markedFileOwnership(paths.unit, `${HEADER}\n`);
-    if (loaded && fragment !== paths.unit) ownership = "foreign";
+    const sameUnit =
+      fragment === paths.unit ||
+      (ownership === "mate" &&
+        fragment !== undefined &&
+        existsSync(fragment) &&
+        realpathSync.native(fragment) === realpathSync.native(paths.unit));
+    if (loaded && !sameUnit) ownership = "foreign";
     const activities: Record<string, ServiceState["activity"]> = {
       inactive: "stopped",
       failed: "stopped",

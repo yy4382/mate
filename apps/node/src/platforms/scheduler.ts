@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join, win32 } from "node:path";
-import { EXIT_DO_NOT_RESTART } from "../installation.ts";
 import {
   lstatOrUndefined,
   markedFileOwnership,
@@ -35,15 +34,23 @@ if ($null -ne $task) {
     description = $definition.RegistrationInfo.Description
     instances = $instances
   }
-  if ($instances.Count -gt 0) {
-    $processes = @(Get-CimInstance Win32_Process | ForEach-Object {
-      @{
-        pid = [int]$_.ProcessId
-        parent = [int]$_.ParentProcessId
-        executable = $_.ExecutablePath
-        created = $(if ($null -ne $_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null })
+  $pending = $instances
+  $seen = @{}
+  while ($pending.Count -gt 0) {
+    $filter = ($pending | ForEach-Object { "ProcessId = $_ OR ParentProcessId = $_" }) -join ' OR '
+    $pending = @()
+    foreach ($process in Get-CimInstance Win32_Process -Filter $filter) {
+      $pidValue = [int]$process.ProcessId
+      if ($seen.ContainsKey($pidValue)) { continue }
+      $seen[$pidValue] = $true
+      $pending += $pidValue
+      $processes += @{
+        pid = $pidValue
+        parent = [int]$process.ParentProcessId
+        executable = $process.ExecutablePath
+        created = $(if ($null -ne $process.CreationDate) { $process.CreationDate.ToUniversalTime().ToString('o') } else { $null })
       }
-    })
+    }
   }
 }
 @{ name = $name; sid = $sid; task = $record; processes = $processes } | ConvertTo-Json -Depth 6 -Compress
@@ -299,7 +306,7 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
       const process = snapshot.processes.find((entry) => entry.pid === pid);
       return process !== undefined && processInstance(snapshot, process, since) !== undefined;
     },
-    exitCode: (code) => (code === EXIT_DO_NOT_RESTART ? 0 : code),
+    exitCode: (code) => code,
     report(message) {
       mkdirSync(paths.data, { recursive: true });
       appendFileSync(log, `${new Date().toISOString()} ${message}\n`);

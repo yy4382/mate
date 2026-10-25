@@ -50,8 +50,6 @@ if errorlevel 1 (
   goto failed
 )
 "%mate_temporary%\\mate-manage.cmd" %*
-if errorlevel 1 echo Could not transfer control to "%mate_temporary%\\mate-manage.cmd". 1>&2
-exit /b %errorlevel%
 
 :failed
 del /Q "%mate_temporary%\\node.exe" "%mate_temporary%\\mate.mjs" "%mate_temporary%\\mate-manage.cmd" 2>nul

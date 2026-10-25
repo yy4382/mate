@@ -38,7 +38,7 @@ export const windowsCommands = {
       prefix.join("; "),
       `. ([ScriptBlock]::Create('${quotedCommand}'))`,
       "$mateCommandSucceeded = $?",
-      "if ($LASTEXITCODE) { exit $LASTEXITCODE } elseif (-not $mateCommandSucceeded) { exit 1 }",
+      "if (-not $mateCommandSucceeded) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }",
     ].join("\n");
     const child = spawn(
       "powershell.exe",
@@ -69,6 +69,13 @@ export const windowsCommands = {
           windowsHide: true,
         });
         killed = result.status === 0;
+        if (!killed) {
+          try {
+            process.kill(child.pid, 0);
+          } catch (error) {
+            killed = (error as NodeJS.ErrnoException).code === "ESRCH";
+          }
+        }
         if (killed) return { ok: true };
         const reason = result.error?.message || result.stderr.trim() || result.stdout.trim();
         return {

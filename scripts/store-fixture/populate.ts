@@ -92,7 +92,8 @@ for (const nodeId of [HOME_NODE, "abcdef01-0000-4000-8000-000000000001"]) {
   });
   await node.connect();
   if (nodeId === HOME_NODE) await createPausedAgent();
-  await node.close();
+  node.close();
+  await node.closed();
   pairedNodes.push({
     nodeId,
     privateKey,

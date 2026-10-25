@@ -4,7 +4,7 @@ import { openControlTables, type ControlTables } from "@mate/control-store";
 import { Migrations } from "@mate/migrations";
 import { NodeSystemSchema, type NodeSystem } from "@mate/node-protocol";
 import { z } from "zod";
-import { GatewayError } from "./gateway-error.ts";
+import { NodeGatewayError } from "./node-gateway-error.ts";
 
 const NodeNameSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/);
 
@@ -146,16 +146,16 @@ export function recordNodeConnection(
 
 export function renameNode(db: DatabaseSync, nodeId: string, name: string): void {
   if (!NodeNameSchema.safeParse(name).success) {
-    throw new GatewayError(
+    throw new NodeGatewayError(
       "invalid-input",
       "a node name must be 1 to 32 lowercase letters, digits or hyphens, starting with a letter or digit",
     );
   }
   const owner = db.prepare("SELECT id FROM nodes WHERE name=?").get(name);
   if (owner !== undefined && owner.id !== nodeId)
-    throw new GatewayError("name-taken", `node name ${name} is already taken`);
+    throw new NodeGatewayError("name-taken", `node name ${name} is already taken`);
   const updated = db.prepare("UPDATE nodes SET name=? WHERE id=?").run(name, nodeId);
-  if (updated.changes === 0) throw new GatewayError("unknown-node", `no paired node ${nodeId}`);
+  if (updated.changes === 0) throw new NodeGatewayError("unknown-node", `no paired node ${nodeId}`);
 }
 
 function availableName(db: DatabaseSync, hostname: string, nodeId: string): string {

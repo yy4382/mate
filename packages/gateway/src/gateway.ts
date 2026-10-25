@@ -30,7 +30,7 @@ import {
   stoppedResult,
   type BrowseOutcome,
 } from "./pending-calls.ts";
-import { GatewayError } from "./gateway-error.ts";
+import { NodeGatewayError } from "./node-gateway-error.ts";
 import { createPairingToken, listNodes, openGatewayDatabase, renameNode } from "./storage.ts";
 
 const DEFAULT_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -82,7 +82,7 @@ export interface NodeGateway {
   /** Every paired node and whether it is online. */
   nodes(): NodeStatusResult[];
 
-  /** Change a paired node's name. Refuses invalid, taken names and unknown nodes with GatewayError. */
+  /** Change a paired node's name. Refuses invalid, taken names and unknown nodes with NodeGatewayError. */
   renameNode(nodeId: string, name: string): void;
 
   /** Create a single-use pairing token for a new node. */
@@ -194,7 +194,8 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
 
     status(nodeId) {
       const node = listNodes(ctx.db).find((n) => n.nodeId === nodeId);
-      if (node === undefined) throw new GatewayError("unknown-node", `no paired node ${nodeId}`);
+      if (node === undefined)
+        throw new NodeGatewayError("unknown-node", `no paired node ${nodeId}`);
       return { ...node, online: ctx.connected.has(nodeId) };
     },
 

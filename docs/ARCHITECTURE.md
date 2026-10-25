@@ -368,13 +368,13 @@ interface AgentManager {
 
 **node 的名字和系统信息。** UUID 只做身份，配对、签名认证、工具调用和 Agent 文件都继续使用它。**node 名字**是管理员可改的人读名字，在全部已配对 node 中唯一。名字有 1 到 32 个小写字母、数字或 `-`，以字母或数字开头。**系统信息**是 node 每次握手现取的一份完整报告，包含 `platform`、`arch`、`hostname`、`osRelease`、`version`，五项都是字符串。前四项来自 `process.platform`、`process.arch`、`os.hostname()`、`os.release()`；`version` 是构建发布包时写入程序的发布版本，源码运行时为 `dev`。
 
-新 node 的 `node.authenticate`、`node.pair` 都必须带 `system`。网关容忍旧 node 缺少这个字段；带了字段就必须是完整报告。新配对的名字取 hostname，转成小写、把非法字符逐个换成 `-`、去掉开头的 `-`、截到 32 位。结果为空或旧 node 没有报告时，用 `node-<UUID 前 8 位>`。名字冲突时依次加 `-2`、`-3`，先为后缀留出长度。配对时，令牌消耗、身份、名字、系统报告和连接时间在同一个事务提交。认证时一起更新系统报告、报告时间和连接时间，之后才登记在线连接；旧握手只更新连接时间，不清空已有报告。改名只改名字，之后的握手保留它；网关的拒绝用 `GatewayError` 表示，不改变已存事实。
+新 node 的 `node.authenticate`、`node.pair` 都必须带 `system`。网关容忍旧 node 缺少这个字段；带了字段就必须是完整报告。新配对的名字取规范化的 hostname，冲突加 `-2`、`-3`，空则 `node-<UUID 前 8 位>`。配对时，令牌消耗、身份、名字、系统报告和连接时间在同一个事务提交。认证时一起更新系统报告、报告时间和连接时间，之后才登记在线连接；旧握手只更新连接时间，不清空已有报告。改名只改名字，之后的握手保留它；网关的拒绝用 `NodeGatewayError` 表示，不改变已存事实。
 
 **工具调用按"整个调用"转发。** runtime 把一次完整的工具调用（工具名、参数、可选 node 名字）交给工作区端口，管理模块选择目标和访问方式后交给网关，网关发给 node，node 在本地执行，边执行边把输出流回来，最后返回结果。这样每次工具调用只有一次往返，不需要在网络上逐个实现 Durable 执行环境接口的二十多个文件方法。网关为每次调用生成自己的请求 ID（随机 UUID），输出、结果和停止都按它对应；调用方的任何 ID 都不上线路，所以不同 Agent 的调用不可能撞号。node 工具调用不按 ID 去重：有副作用的工具崩溃后不重做（4.2 规则 2），可重做的 `read` 重做一次也无妨。
 
 - **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于本次执行目录的 `NodeExecutionEnv`（**工作区环境**）上：`home` 的根是 Agent 工作区，`visit` 的根是 node 账号主目录。参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
 
-- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 是 `/bin/sh -c`，Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及 POSIX 后台进程仍在运行。PowerShell 保留原生程序的非零退出码。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
+- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 是 `/bin/sh -c`，Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及 POSIX 后台进程仍在运行。PowerShell 在最后一条命令失败时保留原生程序的非零退出码；后续命令成功后不沿用之前的失败码。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
 
 **接口（给管理模块）：**
 
@@ -386,7 +386,7 @@ interface NodeGateway {
   // 或 signal 中止时结束。中止 signal 时网关让 node 停掉这一次调用，并立即以"已停止"结束它
   runTool(nodeId, agentId, { access, tool, arguments }, onOutput, signal): ToolResult
   prepareWorkspace(nodeId, agentId): ToolResult // 建工作目录和空的 MEMORY.md，可重复；离线时返回"节点离线"
-  status(nodeId): NodeStatusResult // 不存在的 node 以 unknown-node 拒绝
+  status(nodeId): NodeStatusResult
   nodes(): NodeStatusResult[] // 所有已配对 node，给管理界面用
   renameNode(nodeId, name) // 名字不合法为 invalid-input，被其他 node 占用为 name-taken，不存在为 unknown-node；原名不变
   createPairingToken(): { pairingToken, expiresAt } // 一次性令牌，只能配对一个新 node
@@ -412,8 +412,8 @@ type NodeStatusResult = {
 3. **连接断开时，node 停掉那些已经没人等结果的命令进程组。** 各平台能追踪的范围见第 5 条；Agent 有意放到后台、脱离了这个范围的进程（比如 POSIX 上的 `setsid`），由 Agent 自己负责。
 4. **`home` 调用执行前只检查 Agent 工作目录是否存在。** 不检查 `MEMORY.md` 的权限，也不检查任何 Agent 能自己改动的文件：Agent 改动自己的文件，不应该让自己的命令全部失败。工作目录没有标记文件：路径由主 node 的工作区根和 Agent ID 确定，只由创建流程准备，执行调用不会重建它。
 5. 与架构无关的执行细节：进程组、僵尸进程判断、PID 复用防护、后台子进程占住输出管道时短暂等待后返回并标明、按序列化后的大小检查帧长度。 平台差异由一张表选择；Windows 用 `taskkill /T /F`，只能停止仍挂在活 shell 下的进程。macOS 用进程组存活检测，不区分僵尸或识别 PID 复用。
-6. **谁在等结果，谁决定停。** 调用方中止 signal，网关就通知 node 停掉该次调用；暂停 Agent、连接断开和 node 正常关闭同样清理仍可追踪的命令。终止失败要报告，并保留句柄供关闭时重试。
-7. **身份被拒绝时退出，网络失败时退避重连。** 网关拒绝 node 的身份或配对令牌时发 `gateway.refused`，直接运行的 node 进程以 78 退出，不重试（`unknown_identity` 而 node 手里有令牌时除外，见第 8 条）；网关因为用法出错结束连接（格式错误、顺序错误、握手超时、内部错误）时发 `gateway.error`，node 和连不上、连接中断时一样，从 250ms 起倍增、最多 10 秒重连。退出还是重连由消息类型决定，node 不维护错误码清单。systemd 用 `RestartPreventExitStatus=78` 停止重启；LaunchAgent 和计划任务直接执行 `node run --service`，服务入口将不可重试的 78 转为 0，保留错误日志。服务直接执行 node；Windows 计划任务在 node 崩溃后需手动 `mate node start`，不承诺自动重启。
+6. **谁在等结果，谁决定停。** 停止只有一种方式：调用方中止自己那次调用的 signal，网关就向 node 发这次调用的停止消息，node 杀掉它的命令进程组；命令已经返回、只剩后台进程占着输出时收到停止，也杀掉那些后台进程。暂停 Agent 就是关闭它的 runtime，runtime 中止所有进行中调用的 signal，所以不需要另一个"按 Agent 停止"的入口。node 按连接记录进行中的调用，连接断开停掉这条连接上的所有进行中调用；node 自己关闭时杀掉它启动的所有还有活进程的命令进程组。 各平台能停止的范围见第 5 条；终止失败要报告，并保留句柄供关闭时重试。
+7. **身份被拒绝时退出，网络失败时退避重连。** 网关拒绝 node 的身份或配对令牌时发 `gateway.refused`，直接运行的 node 进程以 78 退出，不重试（`unknown_identity` 而 node 手里有令牌时除外，见第 8 条）；网关因为用法出错结束连接（格式错误、顺序错误、握手超时、内部错误）时发 `gateway.error`，node 和连不上、连接中断时一样，从 250ms 起倍增、最多 10 秒重连。退出还是重连由消息类型决定，node 不维护错误码清单。systemd 用 `RestartPreventExitStatus=78` 停止重启；LaunchAgent 直接执行 `node run --service`，服务入口将不可重试的 78 转为 0，保留错误日志。服务直接执行 node；Windows 计划任务在 node 崩溃后需手动 `mate node start`，不承诺自动重启。
 8. **先签名，令牌只在"不认识"之后用。** node 每次连接都先用签名认证，只有网关对这次认证明确回答 `unknown_identity`，才改用配对令牌；连不上、连接中断、握手超时都只是重连，下一次仍先用签名。配对令牌只存 SHA-256 哈希，只能用一次，过期作废。配对只会新增 node：已经配对过的 node ID 不能再配对，它的公钥不变，这次用的令牌也不算用掉。
 9. **一个 node 一条连接，调用绑定在连接上。** 同一个 node 新认证的连接关闭旧连接。每个工具调用只接受发出它的那条连接送回的输出和结果；连接结束时，它带着的调用以"结果未知"结束并被忘掉，之后谁送来它的结果都不会交给调用方。
 10. **违规的连接立即结束。** 未认证的连接最多 32 条，超出的直接关闭；单条消息按收到的序列化帧计不超过 1 MiB，超出的由 WebSocket 层关闭；无法解析、不认识的消息、认证前发别的消息、重复认证，网关回一个 `gateway.error` 后关闭连接，并且从这一刻起不再读取这条连接送来的任何东西，node 立即离线。心跳超时（TCP 没断但收不到数据也算）同样结束连接。
@@ -425,12 +425,12 @@ type NodeStatusResult = {
 **升级顺序。** 控制面先于 node 升级，node 不得比控制面新。新版 node 可能要求旧控制面不会发送的字段，版本倒置会导致协议解析失败并断线。旧 node 不认识 `access` 时仍按工作区执行，访问调用因工作区不存在而失败；访问其他 node 前，先把目标 node 升级到支持此功能的版本。
 
 **持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。POSIX 目录和私有文件分别用 0700、0600；Windows 存在当前账号的 `%LOCALAPPDATA%\Mate` 下，依靠该目录对普通账号的默认 ACL 隔离，不用 `chmod` 模拟 Windows 权限。网关的 node 注册表和配对令牌存在**控制库** `data/control.sqlite`，这个文件和 Web 外壳的登录、管理模块的 API key 共用：
-- 网关结构第 2 版在 `nodes` 中加入唯一且非空的 `name`、完整系统报告的 `system_json` 和报告时间 `reported_at`。迁移给已有 node 起名 `node-<UUID 前 8 位>`；前缀相同的按 UUID 排序，第二个起加 `-2`、`-3`。公钥、配对时间和上次连接时间保留，系统报告和报告时间为空，等下次新格式握手补齐。
 - 每个模块用 `@mate/control-store` 的 `openControlTables(dataDirectory, { module, migrations })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
 - 每个模块只建、只检查自己的表。结构版本记在 `schema_versions` 表里，每个模块一行（网关是 `gateway`）。模块的结构是一份 `Migrations`（`@mate/migrations`）：按版本递增的迁移列表。一个模块的版本比代码新、或不是列表里的版本，只有这个模块拒绝启动，抛出带文件路径的 `ControlStoreIncompatible`；别的模块照常打开。
 - 打开时在同一个事务里把模块带到最新版本：没有记录就跑完整个列表并插入一行；记录在列表里的某个版本，就只跑它之后的迁移并更新这一行。迁移中途失败，事务回滚，存储留在原来的版本，拒绝启动。第一条迁移的建表用不带 `IF NOT EXISTS` 的 `CREATE TABLE`，表名和别的模块撞了同样拒绝启动，不会两个模块悄悄共用一张表。
 - 文件由 `openControlTables` 以 0600 新建（SQLite 的 `-wal`、`-shm` 随主文件的权限），里面有密码哈希、登录会话和 API key；已有的文件不改权限。
 - 每条连接都用 WAL、`synchronous=FULL`、5 秒 busy timeout。WAL 让一个模块开着读事务时别的模块照常提交。`node:sqlite` 是同步的，一个不 await 的事务在进程里别的连接开始事务之前就已结束，所以同一进程里的几条连接从不互相等待。规则是**控制库的事务里不 await**；busy timeout 只给进程外的读写者（备份、`sqlite3` 命令行）留余地。
+- 网关结构第 2 版在 `nodes` 中加入唯一且非空的 `name`、完整系统报告的 `system_json` 和报告时间 `reported_at`。迁移给已有 node 起名 `node-<UUID 前 8 位>`；前缀相同的按 UUID 排序，第二个起加 `-2`、`-3`。公钥、配对时间和上次连接时间保留，系统报告和报告时间为空，等下次新格式握手补齐。
 
 **后台命令。** `bash` 带 `background: true` 时，runtime 在发起它的对话（主对话或工作助手）里建一个 Durable 后台任务，把这个任务的 ID 作为命令 ID 立即返回给模型。后台任务不让对话保持忙碌，也不随对话的 run 结束或被中止，所以 Agent 照常工作、照常空闲。这个任务把调用交给网关、等结果，步骤和 Durable 自己的工具任务一样：
 
@@ -476,7 +476,7 @@ interface Admin {
   setCredentials(provider, { apiKey, baseUrl? }) / deleteCredentials(provider)
   models() // 已存了 key 的提供商的模型目录，每个模型带它接受的 thinking 级别
   nodes() / createPairingToken() // 转给网关
-  renameNode(nodeId, name) // 转给网关；GatewayError 转成相同 reason 的 AdminError
+  renameNode(nodeId, name) // 转给网关；NodeGatewayError 转成相同 reason 的 AdminError
   close() // 关闭 Manager（所有 runtime），再关自己的控制库连接；网关和聊天 app 由 Web 外壳关闭
 }
 ```

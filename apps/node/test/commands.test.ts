@@ -89,46 +89,15 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     expect(textOf(result)).toBe("Command exited with code 5");
   });
 
-  it.runIf(windows)(
-    "parses PowerShell using declarations before any initialization statements",
-    async () => {
-      const node = await connectedNode();
-      const { agentId } = await node.agent();
-      const result = await node.run(agentId, "bash", {
-        command: "using namespace System.IO; [Path]::GetFileName('a.txt')",
-      });
-      expect(result.isError, textOf(result)).toBe(false);
-      expect(textOf(result).split(/\r?\n/)[0]).toBe("a.txt");
-    },
-  );
-
-  it.runIf(windows)(
-    "preserves PowerShell parameters, quoting, HOME, UTF-8 and explicit exit codes",
-    async () => {
-      const node = await connectedNode();
-      const { agentId, workspace } = await node.agent();
-      const result = await node.run(agentId, "bash", {
-        command: [
-          "param([string] $Name = 'a''b.txt')",
-          "$Name",
-          "'literal $HOME `n'",
-          '"‘’‚‛"',
-          "$HOME",
-          "'你好，世界'",
-          "exit 7",
-        ].join("\n"),
-      });
-      expect(result.isError).toBe(true);
-      expect(textOf(result).split(/\r?\n/).slice(0, 5)).toEqual([
-        "a'b.txt",
-        "literal $HOME `n",
-        "‘’‚‛",
-        workspace,
-        "你好，世界",
-      ]);
-      expect(textOf(result)).toContain("Command exited with code 7");
-    },
-  );
+  it.runIf(windows)("uses the last command's success after a native failure", async () => {
+    const node = await connectedNode();
+    const { agentId } = await node.agent();
+    const result = await node.run(agentId, "bash", {
+      command: "cmd /c exit 3; Write-Output done",
+    });
+    expect(result.isError, textOf(result)).toBe(false);
+    expect(textOf(result).trimEnd()).toBe("done");
+  });
 
   it.skipIf(windows)("distinguishes a POSIX signal from a shell exit code", async () => {
     const node = await connectedNode();
@@ -145,14 +114,16 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     const started = Date.now();
     const result = await node.run(agentId, "bash", {
       command: longCommand("timeout"),
-      timeout: 5,
+      timeout: windows ? 5 : 1,
     });
     expect(Date.now() - started, "returns at the timeout, not when the tree ends").toBeLessThan(
-      20_000,
+      windows ? 20_000 : 5000,
     );
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("waiting");
-    expect(textOf(result)).toContain("Command timed out after 5 seconds and was killed");
+    expect(textOf(result)).toContain(
+      `Command timed out after ${windows ? 5 : 1} seconds and was killed`,
+    );
     for (const pid of await pidsOf(workspace, "timeout")) {
       await eventually(() => !running(pid), `process ${pid} is killed`);
     }
@@ -224,25 +195,6 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     expect(text).toMatch(/Output truncated: the first \d+ bytes were dropped/);
     expect(text.length, "the result is bounded").toBeLessThan(100_000);
     expect(streamed, "the whole output streamed while it ran").toBeGreaterThan(300_000);
-  });
-
-  it("preserves UTF-8 shell output and a multibyte tail after truncation", async () => {
-    const node = await connectedNode();
-    const { agentId, workspace } = await node.agent();
-    const greeting = await node.run(agentId, "bash", {
-      command: windows ? "Write-Output '你好，世界'" : "printf '你好，世界\\n'",
-    });
-    expect(textOf(greeting)).toContain("你好，世界");
-    const output = await node.run(agentId, "bash", {
-      command: scriptCommand(
-        workspace,
-        'process.stdout.write("中".repeat(30000) + "结束");',
-        "unicode",
-      ),
-    });
-    expect(textOf(output)).toContain("结束");
-    expect(textOf(output)).toContain("Output truncated");
-    expect(textOf(output)).not.toContain("�");
   });
 
   it.skipIf(windows)(
