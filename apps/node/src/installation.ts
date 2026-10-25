@@ -8,7 +8,6 @@ import { currentPlatform } from "./platforms/index.ts";
 import { lstatOrUndefined } from "./platforms/service-files.ts";
 import type { Layout, Ownership } from "./platforms/types.ts";
 
-export const EXIT_DO_NOT_RESTART = 78;
 export type { Layout } from "./platforms/types.ts";
 
 const SCRATCH = /^\.mate-node-(staging|old)-/;

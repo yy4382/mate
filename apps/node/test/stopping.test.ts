@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
@@ -58,6 +58,47 @@ describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
     node.gateway.disconnect();
     await Promise.allSettled([sameAgent, otherAgent]);
   });
+
+  it.runIf(windows)(
+    "accepts failed Windows termination when the process has already exited",
+    async () => {
+      const bin = temporaryDirectory();
+      copyFileSync(process.execPath, join(bin, "taskkill.exe"));
+      const preload = join(bin, "taskkill.cjs");
+      writeFileSync(
+        preload,
+        `
+if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.exe') {
+  require('node:child_process').spawnSync(
+    require('node:path').join(process.env.SystemRoot, 'System32', 'taskkill.exe'),
+    process.argv.slice(1),
+  );
+  process.exit(1);
+}
+`,
+      );
+      const hostPath =
+        Object.entries(process.env).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "";
+      const node = await connectedNode({
+        env: {
+          PATH: `${bin};${hostPath}`,
+          NODE_OPTIONS: `--require ${JSON.stringify(preload)}`,
+        },
+      });
+      const { agentId, workspace } = await node.agent();
+      const call = node.gateway.runTool("exit-during-stop", agentId, "bash", {
+        command: longCommand("exit-during-stop"),
+      });
+      const pids = await pidsOf(workspace, "exit-during-stop");
+      node.gateway.stopTool("exit-during-stop");
+      const result = await call;
+      expect(textOf(result)).toContain("Command was stopped");
+      expect(textOf(result)).not.toContain("processes may still be running");
+      for (const pid of pids) await eventually(() => !running(pid), `process ${pid} is stopped`);
+      await node.shutdown();
+      expect(await node.exited).toEqual({ code: 0, signal: null });
+    },
+  );
 
   it.runIf(windows)(
     "reports failed Windows tree termination and retries it on shutdown",

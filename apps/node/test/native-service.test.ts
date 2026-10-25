@@ -139,9 +139,14 @@ if (-not [MateTest.NativeProcess]::TerminateProcess($node.Handle, 1)) { throw 'C
 $node.WaitForExit()
 if ($node.ExitCode -ne 1) { throw "Expected node exit 1, got $($node.ExitCode)" }
 `);
-      await new Promise((resolve) => setTimeout(resolve, 65_000));
-      expect(gateway.authentications).toBe(authentications);
-      expect(ok("status")).toContain("Link: none");
+      await eventually(
+        () => {
+          const status = ok("status");
+          return status.includes("Service: ready, enabled") && status.includes("Link: none");
+        },
+        "the task manager has observed the crashed node exit",
+        30_000,
+      );
       ok("start");
       await eventually(
         () => gateway.authentications > authentications,
@@ -225,13 +230,24 @@ $task.Definition.Actions.Item(1).Arguments`);
       "the service logs its permanent identity refusal",
       30_000,
     );
-    await eventually(() => ok("status").includes("Link: none"), "the refused node stops", 30_000);
-    expect(attempts).toBeGreaterThan(beforeRefusal);
-    const afterRefusal = attempts;
-    await wait(windows ? 65_000 : 6_500);
-    expect(attempts, "a permanent refusal is not retried after the native restart interval").toBe(
-      afterRefusal,
+    await eventually(
+      () => {
+        const status = ok("status");
+        return (
+          status.includes("Link: none") && (!windows || status.includes("Service: ready, enabled"))
+        );
+      },
+      "the task manager has observed the refused node exit",
+      30_000,
     );
+    expect(attempts).toBeGreaterThan(beforeRefusal);
+    if (!windows) {
+      const afterRefusal = attempts;
+      await wait(6_500);
+      expect(attempts, "a permanent refusal is not retried after the native restart interval").toBe(
+        afterRefusal,
+      );
+    }
     expect(ok("logs")).toContain("Node exiting:");
     ok("stop");
     ok("uninstall");

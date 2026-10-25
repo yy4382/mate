@@ -26,7 +26,10 @@ if (tool === "systemctl") {
     print("ActiveState=" + state.active);
     print("UnitFileState=" + (hasUnit ? state.enabled : ""));
     print("MainPID=" + state.mainPid);
-    print("FragmentPath=" + (state.foreignDefinition ? "/other.service" : paths.unit));
+    print(
+      "FragmentPath=" +
+        (state.foreignDefinition ? "/other.service" : hasUnit ? fs.realpathSync(paths.unit) : ""),
+    );
   } else if (verb === "enable" && hasUnit) {
     state.enabled = "enabled";
     if (rest.includes("--now")) state.active = "active";
