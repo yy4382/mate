@@ -2,11 +2,15 @@ import type { ScriptedRequest } from "@mate/testkit";
 import { describe, expect, it } from "vitest";
 import { testAgent, text } from "./support.ts";
 
-const bash = (command: string, options: { background?: boolean; timeout?: number } = {}) => ({
+const bash = (
+  command: string,
+  options: { background?: boolean; timeout?: number; node?: string } = {},
+) => ({
   name: "bash",
   arguments: { command, ...options },
 });
-const background = (command: string) => bash(command, { background: true });
+const background = (command: string, node?: string) =>
+  bash(command, { background: true, ...(node === undefined ? {} : { node }) });
 const bashStop = (id: number) => ({ name: "bash_stop", arguments: { id } });
 
 /** The command ID in the output of the `bash` call `callId`, which started a background command. */
@@ -172,13 +176,13 @@ describe("background commands", () => {
     agent.provider.assertComplete();
   });
 
-  it("stops a running command on close, and the reopened runtime reports it interrupted once without rerunning it", async () => {
+  it("stops a command on a named node on close and reports it interrupted once after reopening without rerunning it", async () => {
     const agent = await testAgent();
     let started: string[] = [];
     let id = 0;
     agent.provider
       .step("starts the server", (request) => {
-        started = request.call([background("serve")]);
+        started = request.call([background("serve", "laptop")]);
       })
       .step("acknowledges", (request) => {
         id = commandId(request, started[0]);
@@ -187,6 +191,7 @@ describe("background commands", () => {
     const first = await agent.open();
     await (await first.runtime.submit("serve it", { requestId: "m1" })).settled();
     const serve = await agent.workspace.nextCall();
+    expect(serve.request.node).toBe("laptop");
 
     await first.runtime.close();
     expect(serve.signal.aborted, "closing stopped the node call").toBe(true);
@@ -194,7 +199,9 @@ describe("background commands", () => {
     const finished = Promise.withResolvers<void>();
     agent.provider.step("reads the interruption", (request) => {
       expect(reports(request, id), "one report").toBe(1);
-      expect(request.userTexts().join("\n")).toContain(`[background command ${id} interrupted]`);
+      expect(request.userTexts().join("\n")).toContain(
+        `[background command ${id} interrupted on node laptop]`,
+      );
       request.text("the server stopped");
       finished.resolve();
     });

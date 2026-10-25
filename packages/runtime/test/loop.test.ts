@@ -62,7 +62,7 @@ describe("agent loop", () => {
     agent.provider.assertComplete();
   });
 
-  it("offers the model the node's own bash tool, as the node protocol defines it", async () => {
+  it("offers the node's bash definition with an optional execution target", async () => {
     const agent = await testAgent();
     let offered: Record<string, unknown> | undefined;
     agent.provider.step("look", (request) => {
@@ -75,9 +75,13 @@ describe("agent loop", () => {
     expect(offered?.["description"], "what bash promises is what the node does").toBe(
       bashTool.description,
     );
-    expect(offered?.["parameters"], "the node validates calls with the same schema").toEqual(
-      bashTool.parameters,
-    );
+    expect(offered?.["parameters"], "the node still receives its original arguments").toEqual({
+      ...bashTool.parameters,
+      properties: {
+        ...bashTool.parameters.properties,
+        node: expect.objectContaining({ type: "string" }),
+      },
+    });
     agent.provider.assertComplete();
   });
 

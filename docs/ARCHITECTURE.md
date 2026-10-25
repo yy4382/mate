@@ -222,13 +222,15 @@ interface ChatApp {
 | 扩展 | 内容 | 谁能用 |
 |---|---|---|
 | 聊天 | 读未读、回看历史、搜索、发送、加入或离开频道、打开私信、任务操作（还不能发布附件） | 只有主对话 |
-| 工作区 | `bash`、`bash_stop`、`read`、`write`、`edit`，在 node 上执行（见 4.5）。后台命令结束时，结果经投递作为一条输入提交给发起它的对话 | 主对话和助手 |
+| 工作区 | `bash`、`read`、`write`、`edit` 统一接受可选的 node 名字，缺省在主 node 的工作区执行；`node_list` 每次现读可访问的 node（名字、在线状态、平台、主 node 标记），只读且可安全重做。`bash_stop` 按 ID 停止后台命令，结束汇报经投递回到发起它的对话（见 4.5） | 主对话和助手 |
 | 提醒 | 设定、列出、取消提醒 | 主对话 |
 | 助手 | 派生助手、给助手发消息、等待、中断、列出（参照 Durable 的 `23-subagent-background` 示例） | 主对话 |
 | 历史 | `history_search`、`history_read`：搜索、阅读这个对话自己的历史记录，包括被压缩掉的（见下面的"压缩与历史"） | 主对话和助手 |
 | 身份 | 系统提示：你是谁、工作区在哪、`MEMORY.md` 是恢复入口；普通输出不会发到任何地方，发言必须调用发送工具；通知只是提示 | 全部 |
 
 **助手投递：** 进入工作助手对话的输入只有一条路：**投递**，也就是主对话里的一个 Durable 后台任务。它把输入（带 `requestId`）提交给目标对话；目标是助手时，再等助手的回答，把它作为 `[assistant <名字> answered] <回答>` 以 `followUp` 方式提交给主对话（`requestId = assistant-report:<投递任务 ID>`）。每一步都有检查点，所以重启后助手只收到一次输入，主对话只收到一次汇报；一次回答同时答了几条输入时，只汇报一次。主对话的 `send`、`spawn` 和助手自己的后台命令结束都走投递，所以助手的每个回答都会回到主对话，不管输入从哪来。`send`、`spawn` 以 `steer` 提交（`send` 带 `followUp: true` 时以 `followUp`），后台命令的汇报以 `steer` 提交。
+
+**后台命令输入**仍是版本 1 的平铺参数，只新增可选的 `node`；旧记录没有该字段时按主 node 处理。显式指定 node 的命令在结束或中断汇报的第一行标出目标。
 
 所有工具都直接暴露给模型，不经过"先列出工具、再调用"的元工具。
 
@@ -344,12 +346,12 @@ interface AgentManager {
 3. **暂停就是立刻关闭。** 进行中的模型请求被中止，node 上的工具调用被停止。恢复时 Durable 从停下的地方接着跑。不存在"还在跑但已经没资格跑"的状态。
    Manager 对每个 Agent 只记一个状态：打开（runtime 加连接器，以及打开时从文件读出的 node ID）或关闭。Agent 文件里的东西（"已暂停"、node ID、设置、用量）只能从关闭状态直接读写：那样做会在文件上另开一个 Durable 会话，和打开的 runtime 并存就会弄坏 runtime 的存储。打开的 Agent 一律经它的 runtime 读写。所以对打开的 Agent 调 `resume` 什么都不做，对关闭的 Agent 调 `pause` 只写记录。
 4. **创建的顺序：**
-   1. 生成 Agent ID；
+   1. 使用调用方传入的 Agent ID，或生成一个；
    2. 调用 `chat.ensureAccount({ externalId: agentId })`，这个调用可以安全重复。聊天 app 的拒绝（`handle-taken`、`invalid-input`，已删除 Agent 的 ID 为 `inactive-account`）原样 reject，不包成 `AgentCreationFailed`：这一步被拒绝时什么都还没创建，没有可重做的东西；
    3. 让所选的 node 创建工作目录；
    4. 在临时文件里初始化 Durable 存储（带上 node ID），再改名为正式文件。
 
-   node ID 记在 Agent 文件里，之后不变；打开 Agent 时 Manager 从文件里读出它，把工作区工具接到这个 node。
+   node ID 记在 Agent 文件里，之后不变；打开 Agent 时 Manager 从文件里读出它，把工作区端口接到这个主 node；端口自己解析每次调用的可选目标。
 
    **已存在的 ID 不能再创建。** `create` 带着文件已存在（或已打开）的 Agent 的 ID，以 `AgentIdInUse` 拒绝，什么都不改（名字、暂停状态都不动）；已删除的 Agent 的账号已停用，`ensureAccount` 拒绝。改名之后 Agent 已经存在：随后 runtime 打不开时，Manager 报告错误、`create` 照常返回，Agent 处于关闭状态（和启动时打不开一样），`resume` 再打开它，所以重做只对改名之前的失败有意义。
 
@@ -360,7 +362,7 @@ interface AgentManager {
 
 ### 4.5 Node 网关与 Node
 
-**Node** 是一台 Linux、macOS 或 Windows 机器上，以宿主现有账号运行的进程，由 `mate node` CLI 管理。Linux 用 systemd 用户服务，macOS 用 LaunchAgent，Windows 用当前账号登录时启动的计划任务。它只负责执行：在 Agent 的工作目录里跑命令、读写文件。node 从不接触模型凭据和对话记录。
+**Node** 是一台 Linux、macOS 或 Windows 机器上，以宿主现有账号运行的进程，由 `mate node` CLI 管理。Linux 用 systemd 用户服务，macOS 用 LaunchAgent，Windows 用当前账号登录时启动的计划任务。它只负责执行：按调用的访问方式，在 Agent 的工作区或 node 账号的主目录里跑命令、读写文件。node 从不接触模型凭据和对话记录。
 
 **Node 网关** 在控制面里，负责 node 的配对、认证、心跳，并把工具调用转发过去。
 
@@ -368,18 +370,21 @@ interface AgentManager {
 
 新 node 的 `node.authenticate`、`node.pair` 都必须带 `system`。网关容忍旧 node 缺少这个字段；带了字段就必须是完整报告。新配对的名字取规范化的 hostname，冲突加 `-2`、`-3`，空则 `node-<UUID 前 8 位>`。配对时，令牌消耗、身份、名字、系统报告和连接时间在同一个事务提交。认证时一起更新系统报告、报告时间和连接时间，之后才登记在线连接；旧握手只更新连接时间，不清空已有报告。改名只改名字，之后的握手保留它；网关的拒绝用 `NodeGatewayError` 表示，不改变已存事实。
 
-**工具调用按"整个调用"转发。** runtime 把一次完整的工具调用（工具名、参数）交给网关，网关发给 node，node 在本地执行，边执行边把输出流回来，最后返回结果。这样每次工具调用只有一次往返，不需要在网络上逐个实现 Durable 执行环境接口的二十多个文件方法。网关为每次调用生成自己的请求 ID（随机 UUID），输出、结果和停止都按它对应；调用方的任何 ID 都不上线路，所以不同 Agent 的调用不可能撞号。node 工具调用不按 ID 去重：有副作用的工具崩溃后不重做（4.2 规则 2），可重做的 `read` 重做一次也无妨。
+**工具调用按"整个调用"转发。** runtime 把一次完整的工具调用（工具名、参数、可选 node 名字）交给工作区端口，管理模块选择目标和访问方式后交给网关，网关发给 node，node 在本地执行，边执行边把输出流回来，最后返回结果。这样每次工具调用只有一次往返，不需要在网络上逐个实现 Durable 执行环境接口的二十多个文件方法。网关为每次调用生成自己的请求 ID（随机 UUID），输出、结果和停止都按它对应；调用方的任何 ID 都不上线路，所以不同 Agent 的调用不可能撞号。node 工具调用不按 ID 去重：有副作用的工具崩溃后不重做（4.2 规则 2），可重做的 `read` 重做一次也无妨。
 
-- **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于该工作区的 `NodeExecutionEnv`（**工作区环境**）上：参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
+- **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于本次执行目录的 `NodeExecutionEnv`（**工作区环境**）上：`home` 的根是 Agent 工作区，`visit` 的根是 node 账号主目录。参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
+
 - **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 是 `/bin/sh -c`，Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及 POSIX 后台进程仍在运行。PowerShell 在最后一条命令失败时保留原生程序的非零退出码；后续命令成功后不沿用之前的失败码。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
 
-**接口（网关对 runtime）：**
+**接口（给管理模块）：**
 
 ```ts
+type NodeAccess = "home" | "visit" // gateway.run.tool 的必填 access 字段
+
 interface NodeGateway {
   // 转发一次工具调用，把输出流式交给 onOutput，最后返回结果。从不重发，也没有自己的期限：调用在 node 回答、连接断开
   // 或 signal 中止时结束。中止 signal 时网关让 node 停掉这一次调用，并立即以"已停止"结束它
-  runTool(nodeId, agentId, { tool, arguments }, onOutput, signal): ToolResult
+  runTool(nodeId, agentId, { access, tool, arguments }, onOutput, signal): ToolResult
   prepareWorkspace(nodeId, agentId): ToolResult // 建工作目录和空的 MEMORY.md，可重复；离线时返回"节点离线"
   status(nodeId): NodeStatusResult
   nodes(): NodeStatusResult[] // 所有已配对 node，给管理界面用
@@ -403,15 +408,21 @@ type NodeStatusResult = {
 **关键规则：**
 
 1. **控制面从不重发工具调用，也不给调用设期限。** 连接是否还活着由心跳判断，命令跑多久由 `bash` 自己的 `timeout` 决定；网关不会因为一次调用跑得久，就把健康连接上的调用说成"结果未知"。 连接断了，进行中的调用立即以"结果未知：节点连接中断，命令可能执行了也可能没有，不会重试"返回给模型，之后迟到的结果直接丢弃。模型自己决定要不要检查。所以**没有回执对账**：node 不需要操作账本，控制面也不需要定期核对。
-2. **node 离线时 Agent 照常运行**，需要 node 的工具直接返回"节点离线"错误。
+2. **node 离线时 Agent 照常运行**，需要该 node 的工具直接返回"节点离线"错误，管理模块在错误结果中标出目标名字。主 node 离线不影响访问其他在线 node，反之亦然。
 3. **连接断开时，node 停掉那些已经没人等结果的命令进程组。** 各平台能追踪的范围见第 5 条；Agent 有意放到后台、脱离了这个范围的进程（比如 POSIX 上的 `setsid`），由 Agent 自己负责。
-4. **执行前只检查工作目录是否存在。** 不检查 `MEMORY.md` 的权限，也不检查任何 Agent 能自己改动的文件：Agent 改动自己的文件，不应该让自己的命令全部失败。工作目录没有标记文件：它的路径记在 Agent 自己的文件里，只由创建流程生成。
+4. **`home` 调用执行前只检查 Agent 工作目录是否存在。** 不检查 `MEMORY.md` 的权限，也不检查任何 Agent 能自己改动的文件：Agent 改动自己的文件，不应该让自己的命令全部失败。工作目录没有标记文件：路径由主 node 的工作区根和 Agent ID 确定，只由创建流程准备，执行调用不会重建它。
 5. 与架构无关的执行细节：进程组、僵尸进程判断、PID 复用防护、后台子进程占住输出管道时短暂等待后返回并标明、按序列化后的大小检查帧长度。 平台差异由一张表选择；Windows 用 `taskkill /T /F`，只能停止仍挂在活 shell 下的进程。macOS 用进程组存活检测，不区分僵尸或识别 PID 复用。
 6. **谁在等结果，谁决定停。** 停止只有一种方式：调用方中止自己那次调用的 signal，网关就向 node 发这次调用的停止消息，node 杀掉它的命令进程组；命令已经返回、只剩后台进程占着输出时收到停止，也杀掉那些后台进程。暂停 Agent 就是关闭它的 runtime，runtime 中止所有进行中调用的 signal，所以不需要另一个"按 Agent 停止"的入口。node 按连接记录进行中的调用，连接断开停掉这条连接上的所有进行中调用；node 自己关闭时杀掉它启动的所有还有活进程的命令进程组。 各平台能停止的范围见第 5 条；终止失败要报告，并保留句柄供关闭时重试。
 7. **身份被拒绝时退出，网络失败时退避重连。** 网关拒绝 node 的身份或配对令牌时发 `gateway.refused`，直接运行的 node 进程以 78 退出，不重试（`unknown_identity` 而 node 手里有令牌时除外，见第 8 条）；网关因为用法出错结束连接（格式错误、顺序错误、握手超时、内部错误）时发 `gateway.error`，node 和连不上、连接中断时一样，从 250ms 起倍增、最多 10 秒重连。退出还是重连由消息类型决定，node 不维护错误码清单。systemd 用 `RestartPreventExitStatus=78` 停止重启；LaunchAgent 直接执行 `node run --service`，服务入口将不可重试的 78 转为 0，保留错误日志。服务直接执行 node；Windows 计划任务在 node 崩溃后需手动 `mate node start`，不承诺自动重启。
 8. **先签名，令牌只在"不认识"之后用。** node 每次连接都先用签名认证，只有网关对这次认证明确回答 `unknown_identity`，才改用配对令牌；连不上、连接中断、握手超时都只是重连，下一次仍先用签名。配对令牌只存 SHA-256 哈希，只能用一次，过期作废。配对只会新增 node：已经配对过的 node ID 不能再配对，它的公钥不变，这次用的令牌也不算用掉。
 9. **一个 node 一条连接，调用绑定在连接上。** 同一个 node 新认证的连接关闭旧连接。每个工具调用只接受发出它的那条连接送回的输出和结果；连接结束时，它带着的调用以"结果未知"结束并被忘掉，之后谁送来它的结果都不会交给调用方。
 10. **违规的连接立即结束。** 未认证的连接最多 32 条，超出的直接关闭；单条消息按收到的序列化帧计不超过 1 MiB，超出的由 WebSocket 层关闭；无法解析、不认识的消息、认证前发别的消息、重复认证，网关回一个 `gateway.error` 后关闭连接，并且从这一刻起不再读取这条连接送来的任何东西，node 立即离线。心跳超时（TCP 没断但收不到数据也算）同样结束连接。
+
+**访问方式只选择执行环境。** `home` 使用 `<工作区根>/<agentId>`，目录必须存在，`HOME` 和 `PWD` 设为该目录；`visit` 使用 `os.homedir()`，`PWD` 设为该目录，保留 node 进程原来的 `HOME`（包括未设置），不创建工作区或 `MEMORY.md`，也不碰工作区根。两者共用文件工具的路径限制、命令进程组、超时、停止、断线和截断逻辑。PowerShell 在 visit 缺少 HOME 时保留自己的主目录值。
+
+访问方式由管理模块决定，runtime 和 node 都不判断授权。
+
+**升级顺序。** 控制面先于 node 升级，node 不得比控制面新。新版 node 可能要求旧控制面不会发送的字段，版本倒置会导致协议解析失败并断线。旧 node 不认识 `access` 时仍按工作区执行，访问调用因工作区不存在而失败；访问其他 node 前，先把目标 node 升级到支持此功能的版本。
 
 **持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。POSIX 目录和私有文件分别用 0700、0600；Windows 存在当前账号的 `%LOCALAPPDATA%\Mate` 下，依靠该目录对普通账号的默认 ACL 隔离，不用 `chmod` 模拟 Windows 权限。网关的 node 注册表和配对令牌存在**控制库** `data/control.sqlite`，这个文件和 Web 外壳的登录、管理模块的 API key 共用：
 - 每个模块用 `@mate/control-store` 的 `openControlTables(dataDirectory, { module, migrations })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
@@ -424,7 +435,7 @@ type NodeStatusResult = {
 **后台命令。** `bash` 带 `background: true` 时，runtime 在发起它的对话（主对话或工作助手）里建一个 Durable 后台任务，把这个任务的 ID 作为命令 ID 立即返回给模型。后台任务不让对话保持忙碌，也不随对话的 run 结束或被中止，所以 Agent 照常工作、照常空闲。这个任务把调用交给网关、等结果，步骤和 Durable 自己的工具任务一样：
 
 1. 交给网关之前，先记下"已交给 node"。重新打开的 runtime 发现任务停在这里，就知道命令可能跑过：它可能被关闭停在半路，也可能已经跑完而结果没来得及记下。汇报"已中断"，如实写明这两种可能，不重跑。
-2. 命令结束后，在同一次提交里结束任务、并为发起它的对话建一个投递（见 4.2 的"助手投递"），内容是结果的全部文本，开头一行写明命令 ID、成功还是出错、命令本身（`requestId = command:<ID>`，`whenBusy = "steer"`）。两件事一起提交，所以结果恰好汇报一次；发起它的是工作助手时，助手对汇报的回答也照常汇报给主对话。
+2. 命令结束后，在同一次提交里结束任务、并为发起它的对话建一个投递（见 4.2 的"助手投递"），内容是结果的全部文本，开头一行写明命令 ID、成功还是出错、命令本身；显式指定了 node 时也写明目标名字（`requestId = command:<ID>`，`whenBusy = "steer"`）。两件事一起提交，所以结果恰好汇报一次；发起它的是工作助手时，助手对汇报的回答也照常汇报给主对话。
 
 后台命令的输出不流式显示，只在汇报里出现，截断规则和前台一样由 node 定。`bash_stop(ID)` 中止那个任务（Durable 的 `abortTask`），任务的 signal 随之中止，网关停掉 node 上的这次调用，和前台调用的停止走同一条路（规则 6）；被停止的命令不再汇报，`bash_stop` 的结果就是"已停止"。只能停自己这个对话的后台命令：不认识的 ID 返回错误结果；已经结束的命令返回普通结果，说明它已结束、结果会作为输入到达。命令结束和交出汇报是同一次提交，所以停止要么在它之前（不汇报），要么在它之后（命令已经结束）。`bash_stop` 可以重做：再停一次什么都不变，回答从任务的结局读出。runtime 关闭（暂停、控制面重启）时后台命令和前台命令一样被停掉，重新打开后那个任务以"已中断"汇报一次，不重跑命令。没有列出后台命令的工具：命令 ID 就在 `bash` 的结果里，压缩之后也能用历史工具查到。前台命令不给 `timeout` 时默认 10 分钟，最多 1 小时；后台命令不给时没有时限，最多一天。
 
@@ -434,14 +445,14 @@ type NodeStatusResult = {
 - 创建、删除、暂停、恢复 Agent（调用 Agent Manager）；
 - 设置模型、thinking 级别、说明文字（调用 `manager.configure`）；
 - 管理各提供商的 API key；
-- 配对 node，改 node 名字，查看在线状态和系统信息；
+- 配对 node，改 node 名字，查看在线状态和系统信息，为 Agent 授权或收回其他 node 的访问；
 - 查看某个 Agent 的实时对话记录和工具调用（`watchEvents`）；
 - 查看 token 用量；
 - 浏览 Agent 的工作区。
 
 **不负责：** 聊天。Agent 的显示名和 handle 归聊天账号，管理模块从聊天 app 读（`listAccounts()`），自己不另存；创建 Agent 时由 Manager 调 `ensureAccount` 开账号。
 
-**它拥有 Agent Manager。** `openAdmin` 先打开自己在控制库里的凭据表，再打开 `data/agents/` 上的 Manager：Manager 的工作区宿主是网关（准备工作区调 `prepareWorkspace`，工作区端口的每次调用转给 `runTool`，带上调用的 signal），凭据查找读凭据表。所以 Web 外壳只组装聊天 app、网关和管理模块，不直接碰 Manager。
+**它拥有 Agent Manager。** `openAdmin` 先打开自己在控制库里的凭据和授权表，再打开 `data/agents/` 上的 Manager：管理模块把网关适配成 Manager 的工作区宿主（在主 node 准备工作区时调 `prepareWorkspace`，工作区端口为每次调用选择目标和访问方式后转给 `runTool`，带上调用的 signal），凭据查找读凭据表。所以 Web 外壳只组装聊天 app、网关和管理模块，不直接碰 Manager。
 
 **对外接口（给 Web 外壳的 `/api/admin/*` 用）：**
 
@@ -450,11 +461,13 @@ type NodeStatusResult = {
 openAdmin({ dataDirectory, chat, gateway, clock?, report? }): Admin
 interface Admin {
   // 每个 Agent：聊天账号 ID、显示名和 handle（聊天账号的）、nodeId、nodeName、state（open | paused | closed）、settings、usage。
-  // nodeName 每次从网关读，不写进 Agent 文件。
+  // nodeName 和 grantedNodes 的名字每次从网关读，不写进 Agent 文件。
+  // grantedNodes: { nodeId, name }[] 只含已授权的非主 node。
   // 文件读不出来的 Agent 以 state: "unreadable" 和 problem 列出，管理员可以删掉它
   agents(): AgentView[]
   createAgent({ agentId?, nodeId, displayName, handle, settings }): AgentId // node 必须已配对；名字、handle 和 agentId（必须是小写 UUID）在边界检查；中途失败时 reject AgentCreationFailed
   pauseAgent(id) / resumeAgent(id) / deleteAgent(id)
+  grantNode(agentId, nodeId) / revokeNode(agentId, nodeId) // 幂等，打开或关闭的 Agent 都可以
   configureAgent(id, settings) // 打开或关闭的都可以；打开的从下一次请求起生效
   assistants(id) // 打开的 Agent 的工作助手名字
   watchAgent(id, listener, { assistant? }): { stop(), ended } // 只能看打开的 Agent；暂停、删除或控制面关闭时 ended
@@ -470,6 +483,14 @@ interface Admin {
 
 拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`name-taken`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。每个拒绝都是 `AdminError`（或上面这种 `ChatError`）：对 Agent 的操作排在该 Agent 的队列里执行，排队期间 Agent 被删掉，同样是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
 
+**工作区宿主与授权。** `WorkspaceHost.port(homeNodeId, agentId)` 返回的端口接受 `{ tool, arguments, node? }`，runtime 统一将 `node` 从四个工具的参数中取出，node 收到的 `arguments` 不变。端口的 `nodes()` 返回 `{ name, online, platform, home }[]`。缺省目标为主 node，否则按名字解析。
+
+**只有 `nodeAccess(agentId, homeNodeId, targetNodeId)` 决定访问方式。** 主 node 返回 `home`，现读授权表命中的其他 node 返回 `visit`，其余拒绝。工具调用和 `nodes()` 共用这个函数；以后增加权限规则只改它和它读的数据。未知名字和未授权名字返回相同错误，列出可访问的名字，不向任何 node 发请求，也不泄露其他 node 是否存在。授权按 ID 保存，改名后仍有效。
+
+授权和收回只影响之后开始的调用，已发出的前台调用、后台命令继续运行。操作要求 Agent 存在（否则 `unknown-agent`）、node 已配对（否则 `unknown-node`），主 node 不能授权或收回（`invalid-input`）。
+
+删除 Agent 后清理其授权；中途失败或并发操作留下的授权行无害，因为已删除的 Agent ID 不能复用。
+
 **模型和 API key：** 模型来自 pi-ai 自带的目录（runtime 的 `catalogModels`，Agent 的请求也在这个目录里解析）。管理界面提供 OpenAI（Responses API）和 DeepSeek 两家；凭据按提供商存 `{ apiKey, baseUrl? }`，`baseUrl` 替换目录里这个提供商所有模型的地址。设置模型时先检查（创建 Agent 时也一样，在任何东西被创建之前）：提供商是这两家之一、已经存了 key、目录里有这个模型、thinking 级别在这个模型接受的级别里。不接受的级别直接拒绝，不降级。runtime 每次模型请求都现读凭据，所以改了 key 从下一次请求起生效，再存一次同样的值不影响任何正在运行的 Agent；删了 key，这个提供商的请求不发出就失败。
 
 **观察：** `watchAgent` 就是 runtime 的 `watchEvents`：Durable 的 agent 事件原样交出去，第一批是快照，之后是流式文字、工具调用和它们的输出、输入、用量。观察只读，不改变 Agent 的任何状态。关闭的 Agent 没有可看的，拒绝为 `agent-closed`。
@@ -480,7 +501,7 @@ interface Admin {
 - **上限：** 文件最多返回开头 128 KiB（`BROWSE_FILE_BYTES`），截在完整字符处并标明 `truncated`；目录最多 500 条（`BROWSE_DIRECTORY_ENTRIES`），超出时标明 `truncated`，列出哪些由文件系统决定。这两个数让任何回答按 JSON 转义后的最坏情况仍在网关 1 MiB 的帧上限以内。
 - **离线：** node 不在线、或者回答之前连接断开，网关立即回答 `node-offline`，不排队等待；之后迟到的回答被丢弃。和工具调用一样，回答只认发出请求的那条连接。
 
-**持久化：** API key 存在 `data/control.sqlite` 里管理模块自己的 `provider_credentials` 表（模块名 `admin`），是唯一一份，runtime 每次请求现读。Agent 自己的配置存在该 Agent 的文件里。
+**持久化：** API key 存在 `data/control.sqlite` 里管理模块自己的 `provider_credentials` 表（模块名 `admin`），是唯一一份，runtime 每次请求现读。同一个 `AdminStore` 连接也管理 `node_grants(agent_id, node_id, granted_at)`，以 Agent 和 node ID 联合为主键。admin 结构第 2 版只新增这张空表，重复授权不更新时间，主 node 不入表。Agent 文件结构和已有凭据不变，Agent 自己的配置仍在自己的文件里。
 
 ### 4.7 Web 外壳
 
@@ -493,7 +514,7 @@ interface Admin {
   - `/api/chat/*` 一个路由对应聊天 app 的一个操作，账号固定为发出请求的人类自己的账号：每个人类读到全部会话，有自己的实时视图、未读摘要和推送订阅。读：`GET snapshot`（可带 `conversation=` 或 `thread=`）、`conversations`、`unread`、`history`（`conversation=`/`thread=`、`before`、`limit`）、`search?q=`。写都带浏览器生成的 `requestId`：`POST read`（读未读，推进这个人类的已读位置）、`messages`、`channels`、`dms`、`conversations/:id/join|leave|archive|invite`、`tasks`、`tasks/:id/change`。发送和任务操作总是关闭新鲜度检查（4.1 规则 2），请求里不接受这一项。推送：`GET push/key`（VAPID 公钥）、`POST push/subscribe`、`POST push/unsubscribe`。
   - `/api/me`：`GET` 回 `{ accountId, handle, displayName, role }`；`PATCH { displayName, handle }` 改自己的名字（经聊天 app 的 `ensureAccount`，handle 被占用回 409 `handle-taken`）；`POST password { current, next }` 改自己的密码（`current` 不对回 403 `wrong-password`，`next` 至少 12 字节），自己其他的登录会话随之结束，当前这个保留。
   - `/api/humans`（只有管理员）：`GET` 回每个人类的 `{ accountId, handle, displayName, role, active }`；`POST { requestId, handle, displayName, password, role }` 添加；`POST :accountId/role { role }`（结束那个人类所有的登录会话）、`POST :accountId/password { password }`（结束那个人类所有的登录会话）、`POST :accountId/deactivate`。
-  - `/api/admin/*`（只有管理员）一个路由对应管理模块的一个操作：`GET|POST agents`、`POST agents/:id/pause|resume`、`DELETE agents/:id`、`PUT agents/:id/settings`、`GET agents/:id/assistants`、`GET agents/:id/events`（事件流，可带 `assistant=`）、`GET agents/:id/workspace?path=`、`GET providers`、`PUT|DELETE providers/:provider/credentials`、`GET models`、`GET nodes`、`PUT nodes/:id`（`{ name }`，改名字）、`POST pairing-tokens`。
+  - `/api/admin/*`（只有管理员）一个路由对应管理模块的一个操作：`GET|POST agents`、`POST agents/:id/pause|resume`、`DELETE agents/:id`、`PUT agents/:id/settings`、`PUT|DELETE agents/:id/nodes/:nodeId`（授权或收回，成功均为 204）、`GET agents/:id/assistants`、`GET agents/:id/events`（事件流，可带 `assistant=`）、`GET agents/:id/workspace?path=`、`GET providers`、`PUT|DELETE providers/:provider/credentials`、`GET models`、`GET nodes`、`PUT nodes/:id`（`{ name }`，改名字）、`POST pairing-tokens`。
   - **跨站防护。** 请求体必须声明 `content-type: application/json`（可带 charset），否则回 415 `unsupported-media-type`：别的站点的表单或不预检的 `fetch` 只能发 `text/plain` 之类，所以带着人类的 cookie 也伪造不出请求。带 `Origin` 头的非 GET 请求，`Origin` 的 host 必须等于请求的 `Host`，否则回 403 `cross-origin`（登录、退出也一样）；没有 `Origin`（脚本、curl）不是浏览器页面发的，放行。路径参数里不合法的百分号编码回 400 `invalid-input`。
   - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`human-only`、`outside-workspace` 为 403；`archived`、`request-conflict`、`handle-taken`、`name-taken`、`no-credentials`、`agent-closed`、`agent-exists` 为 409；`unreadable` 为 422；`node-offline` 为 503。外壳自己的拒绝：`admin-only`（普通人类调用管理员的路由，在读请求体之前）403，`wrong-password` 在登录时 401、在改密码时 403，`last-admin` 409，`too-many-attempts` 429，`unknown-account`（`:accountId` 不是人类）404。创建 Agent 在文件改名之前中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做；没有创建任何东西的拒绝（不合法的名字、handle 被占用、ID 已存在）回上面各自的状态，不带 `agentId`。成功的操作回 200 加结果，没有结果的回 204。
 - **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, cursor, unread }`），SSE 的 id 是这批读到的游标 `cursor`，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前、读聊天 app 之前都查一次登录会话；会话已过期、已退出登录或这个人类已被停用，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
@@ -501,7 +522,8 @@ interface Admin {
 
 **前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。样式用 Tailwind CSS v4，对话框、菜单、标签页等交互组件用 Base UI，界面原语集中在 `src/shell/ui.tsx`；外观和交互规则见 [界面规范](DESIGN.md)。页面在 `/login` 和 `/app` 下：聊天（`/app`、`/app/c/…`）、搜索、个人资料（`/app/profile`：改显示名和 handle、改密码、退出）、管理（`/app/admin/agents|providers|nodes|humans`，人类页让管理员添加人类、改角色、重置密码、停用）。当前人类来自 `GET /api/me`，导航据此显示名字和头像，普通人类不显示管理入口，直接打开管理地址显示"需要管理员权限"；当前人类自己的账号在实时流里变化时这份数据重新获取。`apps/web` 用 Vite 构建，`MATE_WEB_DIRECTORY` 指向构建产物（`apps/web/dist`）。
 
-- **node 名字只用于显示。** Node 页显示名字、在线状态和最近一次系统信息；没有报告时显示尚未收到。改名失败贴在名字字段下面，保存成功后同时刷新 node 和 Agent 查询。创建 Agent 的选择项显示名字，提交仍用 node ID；Agent 列表显示从网关读取的 `nodeName`。
+- **管理操作按 node ID 提交，模型调用按名字选目标。** Node 页显示名字、在线状态和最近一次系统信息；没有报告时显示尚未收到。改名失败贴在名字字段下面，保存成功后同时刷新 node 和 Agent 查询。创建 Agent 的选择项显示名字，提交仍用 node ID；Agent 列表显示从网关读取的 `nodeName`。
+- **Agent 设置页列出全部已配对 node。** 主 node 固定可访问，其他 node 可逐个授权或收回；每行显示操作进度、成功或错误，成功后刷新 Agent 查询。授权操作独立于模型设置表单。
 - **每条时间线一个查询，条目按序号存放。** 重复或重放的实时事件落在同一个序号上，既不会多出一条消息，也不会让讨论串的回复数虚增（回复数是已见回复序号的集合）。实时事件只更新已经存在的时间线查询；一条时间线的第一页还在加载时到达的条目先暂存，页面到达后并进去。
 - **打开页面时的会话在事件流之前确定。** 先按地址里的会话拉快照（`GET snapshot?conversation=`），用快照填缓存，再从快照的游标起开事件流。`resnapshot` 清掉聊天缓存、重新拉快照后重连；`login` 跳到 `/login?next=`；任何 API 的 401 也一样。
 - **发送带浏览器生成的 `requestId`，失败后重试沿用同一个。** 草稿和未完成的发送放在页面之外的模块里，切换会话或重新加载状态都不丢；发送成功只从输入框里去掉已发送的那部分，发送期间又输入的文字保留。拒绝（4xx）说明什么都没发生，下一次发送是新请求。
@@ -544,11 +566,19 @@ Manager 扫描 `data/agents/`，打开所有没有暂停的 Agent：
 
 进行中的 node 调用立即以"结果未知"返回，新的 node 调用返回"节点离线"。Agent 照常读消息、发消息，并自己决定要不要等 node 恢复。
 
+### 5.7 访问别的 node
+
+1. 管理员在 Agent 页给笔记本授权，授权按 Agent ID 和笔记本 node ID 写入控制库。
+2. Agent 用 `node_list` 查到笔记本名字，调用 `read({ node: "laptop", path: "notes.txt" })`。
+3. runtime 分离目标和文件参数，管理模块现读授权，网关把带 `access: "visit"` 的调用交给笔记本。
+4. node 在账号主目录内读取文件并返回结果，不创建 Agent 的工作区或 MEMORY.md。
+5. 管理员收回授权后，下一次访问被拒绝；此前已经发出的调用仍然完成。
+
 ## 6. 数据布局
 
 ```
 data/
-  control.sqlite              人类的角色和密码哈希、登录会话、VAPID 密钥、API key、node 注册表（名字、系统信息和身份，0600）
+  control.sqlite              人类的角色和密码哈希、登录会话、VAPID 密钥、API key、Agent 的 node 授权、node 注册表（名字、系统信息和身份，0600）
   chat.sqlite                 聊天 app 的全部数据（含附件元数据和推送队列）
   attachments/                附件文件（还没有实现）
   agents/<agentId>.sqlite     每个 Agent 的 Durable 存储（含配置、提醒、连接器位置）
@@ -556,7 +586,7 @@ data/
 
 搬到另一台 VPS：停掉容器，复制 `data/`，启动。
 
-**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@mate/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5；外壳的第 2 版用 `humans` 和 `sessions` 取代 `owner_password` 和 `owner_sessions`：原来的所有者成为 externalId 为 `owner` 的管理员，密码哈希和登录会话原样保留（已登录的 cookie 继续有效），这个账号的聊天账号本来就是 externalId `owner` 的人类账号，名字和 handle 不变，之后可以自己改。网关的第 2 版为已有 node 加名字和空的系统报告，身份与公钥不变，详见 4.5。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
+**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@mate/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5；外壳的第 2 版用 `humans` 和 `sessions` 取代 `owner_password` 和 `owner_sessions`：原来的所有者成为 externalId 为 `owner` 的管理员，密码哈希和登录会话原样保留（已登录的 cookie 继续有效），这个账号的聊天账号本来就是 externalId `owner` 的人类账号，名字和 handle 不变，之后可以自己改。网关的第 2 版为已有 node 加名字和空的系统报告，身份与公钥不变，详见 4.5。admin 的第 2 版新增空的 node 授权表，已有 Agent 仍只访问主 node。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
 
 ## 7. 部署
 
@@ -619,10 +649,11 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 | 3 | 上下文压缩用哪个模型？Agent 知不知道被压缩？ | 用 Durable 自带的压缩（`settings.compaction`），摘要由这个对话自己的模型写，失败或被截断的摘要不生效，Durable 保证。被压缩掉的记录仍在存储里，历史工具读它们；历史扩展的系统提示告诉 Agent "更早的记录可以用历史工具查" | 4.2 |
 | 4 | bash 没有时限时会一直占着 Agent，要不要默认上限？ | 参照 Claude Code 的后台命令：`bash` 加 `background` 参数。前台命令默认 10 分钟、最多 1 小时，跑命令期间 Agent 不处理别的；后台命令立即返回一个命令 ID，Agent 继续工作，命令结束时结果作为一条输入（`command:<ID>`）提交给发起它的对话（主对话或工作助手），可以用 `bash_stop` 停掉。后台命令最多跑一天 | 4.2、4.5 |
 | 5 | node 注册表放 `nodes.sqlite` 还是 `control.sqlite`？ | 统一放 `control.sqlite`，尽量少分文件。控制面里的网关、登录和管理模块共用这一个文件，各自建自己的表 | 4.5、4.6、第 6 节 |
-| 6 | 一个 Agent 用哪个 node？ | 创建 Agent 时从已配对的 node 列表里选一个，只有一个就只能选它。node ID 记在 Agent 自己的文件里，之后不变 | 4.4 |
+| 6 | 一个 Agent 的工作区在哪个 node？ | 创建时选定主 node，ID 记在 Agent 文件里，之后不变。工作区和 MEMORY.md 只在主 node；经授权访问其他 node 时使用那个 node 账号的主目录 | 4.4、4.5 |
 | 7 | 要不要 Web Push 和附件？ | 要推送；聊天接口接受附件元数据，但附件文件的上传和存储还没有实现 | 4.1 |
 | 8 | 数据库结构变了怎么升级？ | 原地向前迁移：每个存储的结构是一串按版本递增的迁移；比代码新、或版本不在列表里的存储拒绝启动；已发布版本的存储夹具证明升级可行 | 第 6 节、4.5 |
 | 9 | 要不要 CI？ | 要。GitHub Actions 对每个 PR 和 main 各检查一次：`pnpm check` 和 `pnpm test:linux` 的内容拆成几个并行任务（格式与类型、node 和系统场景以外的测试、两片 `test:linux`、`mate-deploy` 的测试），node 套件另在 macOS 和 Windows 原生 runner 上运行，并用本机实际发布包验证服务，汇总成一个 `checks` 结果；`v*` 标签不重跑，等这个提交在 main 上的 `checks` 通过后发布镜像和 node 发布包，设了部署主机时再自动部署（失败回退到原版本和部署前的数据备份） | `.github/workflows/ci.yml` |
 | 10 | 几个人怎么共用？ | 每个人是一个人类账号，各有登录（handle 加密码）、名字、已读位置和推送。角色只有管理员和普通人类两种：角色和登录归外壳的 `humans` 表，名字和账号种类归聊天 app，两边靠 externalId 对上。任何时候至少有一个有效的管理员；第一个人类（管理员）由初始密码文件和初始 handle 在第一次启动时创建；原来的所有者升级后成为 handle 为 `owner` 的管理员 | 4.7、第 6 节 |
 | 11 | 怎样区分配对的机器，又不让改名影响身份？ | UUID 继续用于配对、认证、工具调用和 Agent 文件；网关保存唯一的 node 名字及 node 握手报告的系统信息，管理员只改名字。Agent 列表从网关现查名字 | 4.5、4.6、4.7、第 6 节 |
 | 12 | node 支持哪些平台，Windows 用什么 shell？ | Linux、macOS、Windows，分别支持 x64 和 arm64。平台表选择 shell、进程管理、服务、布局、权限和路径规则，公共安装与命令流程不复制。Windows 用自带的 PowerShell 5.1，进程树追踪范围见 4.5；macOS 和 Windows 由管理员手动安装，不加入 Linux 的自动部署 | 4.5、第 7 节、DEPLOYMENT §3.2 |
+| 13 | Agent 能访问哪些 node？ | 主 node 始终可用，其他 node 由管理员逐个授权。管理模块唯一的 nodeAccess 函数在每次调用开始时现读授权；收回不停止已发出的调用。runtime 只转发目标，node 只按访问方式执行 | 4.2、4.5、4.6 |

@@ -18,6 +18,14 @@ export type WorkspaceToolName = ToolName;
 export type WorkspaceToolRequest = {
   readonly tool: WorkspaceToolName;
   readonly arguments: JsonObject;
+  readonly node?: string;
+};
+
+export type WorkspaceNode = {
+  readonly name: string;
+  readonly online: boolean;
+  readonly platform: string | null;
+  readonly home: boolean;
 };
 
 export type WorkspaceToolResult = {
@@ -37,6 +45,7 @@ export interface WorkspacePort {
     output: (chunk: string) => void,
     signal: AbortSignal,
   ): Promise<WorkspaceToolResult>;
+  nodes(): Promise<WorkspaceNode[]>;
 }
 
 /** The file tools run as Durable's own on the node, so the model is told Durable's definitions of them. */
@@ -49,7 +58,26 @@ const fileTools = [
   tool: Pick<ToolRegistration, "name" | "description" | "parameters">;
 }[];
 
-const toolArguments = z.record(z.string(), z.json());
+const toolArguments = z.object({ node: z.string().optional() }).catchall(z.json());
+
+function withNode(parameters: { readonly properties?: object }): ToolRegistration["parameters"] {
+  return Type.Unsafe({
+    ...parameters,
+    properties: {
+      ...parameters.properties,
+      node: {
+        type: "string",
+        description:
+          "要在哪个 node 上执行，用 `node_list` 查名字。不给就在你的主 node 上，在你的工作区里执行。在别的 node 上，调用在那个 node 账号的主目录里执行，那里没有你的工作区和 `MEMORY.md`。",
+      },
+    },
+  });
+}
+
+function splitArguments(value: unknown): Omit<WorkspaceToolRequest, "tool"> {
+  const { node, ...args } = toolArguments.parse(value);
+  return { arguments: args, ...(node === undefined ? {} : { node }) };
+}
 
 /**
  * Forward each workspace call to the port. When the runtime closes, the call returns at once with a stopped result
@@ -62,6 +90,7 @@ export function workspaceExtension(
 ) {
   const node: WorkspacePort = {
     run: (request, output, signal) => untilAborted(port.run(request, output, signal), signal),
+    nodes: () => port.nodes(),
   };
   const commands = backgroundCommands(node, closing, abortTask);
 
@@ -87,13 +116,15 @@ export function workspaceExtension(
    */
   const bash: ToolRegistration = {
     ...bashTool,
-    parameters: Type.Unsafe(bashTool.parameters),
+    parameters: withNode(bashTool.parameters),
     replay: "unsafe",
     async execute(args, api, context) {
-      const call = parseBashArguments(args);
+      const { arguments: argsWithoutNode, ...target } = splitArguments(args);
+      const call = parseBashArguments(argsWithoutNode);
       if (!call.ok) return { content: [{ type: "text", text: call.error }], isError: true };
-      if (call.arguments.background) return commands.start(call.arguments, api, context);
-      return forward({ tool: "bash", arguments: call.arguments }, api, context);
+      if (call.arguments.background)
+        return commands.start({ ...call.arguments, ...target }, api, context);
+      return forward({ tool: "bash", arguments: call.arguments, ...target }, api, context);
     },
   };
 
@@ -102,14 +133,24 @@ export function workspaceExtension(
     tools: [
       bash,
       commands.stop,
+      {
+        name: "node_list",
+        description: "列出你现在能访问的 node，包含名字、在线状态、平台，以及哪个是你的主 node。",
+        parameters: Type.Object({}),
+        replay: "safe",
+        execute: async () => ({
+          content: [{ type: "text", text: JSON.stringify(await node.nodes()) }],
+          isError: false,
+        }),
+      },
       ...fileTools.map(({ name, tool }): ToolRegistration => ({
         name: tool.name,
         description: tool.description,
-        parameters: tool.parameters,
+        parameters: withNode(tool.parameters),
         // Only reading is safe to repeat after a crash; writing and editing report themselves interrupted instead.
         replay: name === "read" ? "safe" : "unsafe",
         execute: (args, api, context) =>
-          forward({ tool: name, arguments: toolArguments.parse(args) }, api, context),
+          forward({ tool: name, ...splitArguments(args) }, api, context),
       })),
     ],
     tasks: [commands.task],

@@ -26,6 +26,7 @@ const OWNER_PASSWORD = "fixture owner password";
 const API_KEY = "sk-fixture-not-a-real-key";
 const AGENT_ONE = "11111111-1111-4111-8111-111111111111";
 const AGENT_TWO = "22222222-2222-4222-8222-222222222222";
+const HOME_NODE = "abcdef01-0000-4000-8000-000000000002";
 const PUSH_ENDPOINT = "https://push.example.test/fixture-owner-device";
 
 let requests = 0;
@@ -57,15 +58,25 @@ const gateway = createNodeGateway({
   pairingTokenTtlMs: 100 * 365 * 24 * 60 * 60 * 1000,
 });
 const admin = await openAdmin({ dataDirectory, chat, owner, gateway, clock: systemClock });
+admin.setCredentials("openai", { apiKey: API_KEY });
+
+async function createPausedAgent() {
+  await admin.createAgent({
+    agentId: AGENT_ONE,
+    nodeId: HOME_NODE,
+    displayName: "Ada",
+    handle: "ada",
+    settings: { model: { provider: "openai", modelId: "gpt-4.1" } },
+  });
+  await admin.pauseAgent(AGENT_ONE);
+}
+
 const server = createServer();
 server.on("upgrade", (request, socket, head) => gateway.handleUpgrade(request, socket, head));
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const gatewayUrl = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/nodes/connect`;
 const pairedNodes = [];
-for (const nodeId of [
-  "abcdef01-0000-4000-8000-000000000002",
-  "abcdef01-0000-4000-8000-000000000001",
-]) {
+for (const nodeId of [HOME_NODE, "abcdef01-0000-4000-8000-000000000001"]) {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519", {
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
@@ -80,6 +91,7 @@ for (const nodeId of [
       sign(null, Buffer.from(nonce), createPrivateKey(privateKey)).toString("base64url"),
   });
   await node.connect();
+  if (nodeId === HOME_NODE) await createPausedAgent();
   node.close();
   await node.closed();
   pairedNodes.push({
@@ -145,7 +157,6 @@ post(ada, { conversation: dm.conversationId }, "Hi owner, Ada here");
 const agents = chat.openDm(ada, { requestId: rid(), other: bo });
 post(ada, { conversation: agents.conversationId }, "Bo, can you review?");
 
-admin.setCredentials("openai", { apiKey: API_KEY });
 const { pairingToken } = gateway.createPairingToken();
 
 const summary = chat.unreadSummary(owner);
@@ -158,6 +169,7 @@ writeFileSync(
       openaiApiKey: API_KEY,
       pairingToken,
       pairedNodes,
+      releasedAgent: { agentId: AGENT_ONE, nodeId: HOME_NODE },
       agentExternalIds: [AGENT_ONE, AGENT_TWO],
       pushEndpoint: PUSH_ENDPOINT,
       ownerUnread: {

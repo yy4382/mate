@@ -1,22 +1,26 @@
 {
   "ownerPassword": "fixture owner password",
-  "ownerSessionToken": "ffxXysM5kbzQnJyllHeFV_fE6wMHg5qjXv6sU7nn0o4",
+  "ownerSessionToken": "wAQxbJBF9du5sCVz1hvQ3ouxyeVO7x8q-ijdB5TuQVs",
   "openaiApiKey": "sk-fixture-not-a-real-key",
-  "pairingToken": "kJpm6bIy6c0yQr5uNLVxkiT2taVxSwfk7Cz9TTRtzU0",
+  "pairingToken": "OPWJVasxxJ7l6P8RJ1ZlD4gSXG9LC2blStMVzOxJJHk",
   "pairedNodes": [
     {
       "nodeId": "abcdef01-0000-4000-8000-000000000002",
-      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIDczKJXy1DcS/q/m/RFNxTIrjs64rXWJIIvcVCYev1TR\n-----END PRIVATE KEY-----\n",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA9MSO0Db0d8ZlGXqFI+jaxV1dfGkvsC4uqUg0cN4oYtQ=\n-----END PUBLIC KEY-----\n",
-      "lastConnectedAt": "2026-10-24T02:26:42.716Z"
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIHtWP+9+St58DdVTIfutUASciz22k8/FphRTmR+0bXrT\n-----END PRIVATE KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAFgjCy1xL583yJtgFIMyILJgTmcBK/cpTcFsehWyU8RE=\n-----END PUBLIC KEY-----\n",
+      "lastConnectedAt": "2026-10-24T02:48:02.181Z"
     },
     {
       "nodeId": "abcdef01-0000-4000-8000-000000000001",
-      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIG4f+Mevhjv/fnmpEezt5V47hooHTzcz6dN7WFG6qr0R\n-----END PRIVATE KEY-----\n",
-      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA9ewWENTXeXfXWNIWwX3T3OzR+xHFxtts7zMSd2yP9tQ=\n-----END PUBLIC KEY-----\n",
-      "lastConnectedAt": "2026-10-24T02:26:42.720Z"
+      "privateKey": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINHUTleseCpa6jUFrr6sIJ/hg6JY2W8i36htxYUmJBjS\n-----END PRIVATE KEY-----\n",
+      "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAXfFk+0GzN8qQRSRkChZBDJnsJfzHc1pLyxUZl6tOYRk=\n-----END PUBLIC KEY-----\n",
+      "lastConnectedAt": "2026-10-24T02:48:02.203Z"
     }
   ],
+  "releasedAgent": {
+    "agentId": "11111111-1111-4111-8111-111111111111",
+    "nodeId": "abcdef01-0000-4000-8000-000000000002"
+  },
   "agentExternalIds": [
     "11111111-1111-4111-8111-111111111111",
     "22222222-2222-4222-8222-222222222222"

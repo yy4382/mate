@@ -184,7 +184,7 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 运行在 Docker 容器里的单个进程，包含 Web 外壳、聊天 app、管理模块、Agent Manager、所有 runtime 和 node 网关。
 
 **控制库**（control store）
-`data/control.sqlite`：网关的 node 注册表、Web 外壳的登录、管理模块的 API key 共用的一个 SQLite 文件。每个模块用 `@mate/control-store` 的 `openControlTables` 打开自己的一条连接，只建、只检查自己的表；`schema_versions` 表里每个模块一行结构版本，一个模块版本不对只让这个模块拒绝启动。
+`data/control.sqlite`：网关的 node 注册表、Web 外壳的登录、管理模块的 API key 和 node 授权共用的一个 SQLite 文件。每个模块用 `@mate/control-store` 的 `openControlTables` 打开自己的一条连接，只建、只检查自己的表；`schema_versions` 表里每个模块一行结构版本，一个模块版本不对只让这个模块拒绝启动。
 避免：说某个模块"拥有" `control.sqlite`；用 `PRAGMA user_version` 记控制库的版本（一个文件只有一个）。
 
 **Web 外壳**（shell）
@@ -249,10 +249,22 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 连接器提交给 runtime 的一条不含消息正文的提示，写明截至某个时间点至少有多少未读、分布在哪里、有没有 @ 你。同一时间最多只有一条还没交给模型的通知，新的会替换旧的。
 
 **node**
-以宿主机上一个普通账号（node 账号，不是控制面的账号，也不在 docker 组里）运行的执行进程，由 `mate node` CLI 管理：Linux 是 systemd 用户服务，macOS 是 LaunchAgent，Windows 是当前账号登录时启动的计划任务。它在 Agent 的工作区里执行命令、读写文件，不接触模型凭据和对话记录。
+以宿主机上一个普通账号（node 账号，不是控制面的账号，也不在 docker 组里）运行的执行进程，由 `mate node` CLI 管理：Linux 是 systemd 用户服务，macOS 是 LaunchAgent，Windows 是当前账号登录时启动的计划任务。它按访问方式在 Agent 工作区或 node 账号主目录里执行命令、读写文件，不接触模型凭据和对话记录。
 
 **平台表**（platform table）
 node 根据当前系统选择能力的唯一入口。Linux、macOS、Windows 各有一条记录，提供 shell、命令进程组、服务、布局、启动命令、身份权限检查和工作区路径规则。共同的安装流程、超时和输出处理不随平台复制。
+
+**主 node**（home node）
+Agent 创建时选定的 node，ID 记在 Agent 文件里且不变。它的工作区和 MEMORY.md 只在这里；缺省工具调用也在这里执行。
+
+**访问**（visit）
+Agent 把一次工具调用送到已授权的非主 node，在那个 node 账号的主目录里执行，不创建自己的工作区。
+
+**访问方式**（NodeAccess）
+网关工具调用的必填 `access`，由管理模块决定为 `home` 或 `visit`，node 据此选择执行环境。
+
+**node 授权**（node grant）
+管理员允许某个 Agent 访问一个非主 node 的记录，按两个 ID 存在控制库。主 node 不需要授权；授权和收回只影响之后开始的调用。
 
 **node 名字**（node name）
 网关保存的、管理员可改且唯一的机器名字；UUID 仍用于身份和调用（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
@@ -279,7 +291,7 @@ node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-n
 POSIX 上是 `~/.local/lib/mate-node`，Windows 上是 `%LOCALAPPDATA%\Mate\program`，保存解开的发布包。只会被整个放入（暂存目录改名）或整个挪走，从不原地修改，所以要么是完整的某个版本，要么不存在。配置、node 身份和工作区都在它之外。
 
 **工作区宿主**（WorkspaceHost）
-Agent Manager 看到的"工作区在哪里"：在一个 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出这个 Agent 在那个 node 上的工作区端口（`port(nodeId, agentId)`）。Agent 的 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：准备工作区调 `prepareWorkspace`，端口的每次调用转给 `runTool` 并带上调用的 signal。Manager 的测试里用假的。
+Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出以这个主 node 为缺省目标的工作区端口（`port(nodeId, agentId)`）。Agent 的主 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：准备工作区调 `prepareWorkspace`，端口按调用的可选 node 名字和最新授权选择目标及访问方式，再转给 `runTool` 并带上调用的 signal；`nodes()` 列出当前可访问的 node。Manager 的测试里用假的。
 
 **node 网关**（node gateway）
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
@@ -288,7 +300,7 @@ Agent Manager 看到的"工作区在哪里"：在一个 node 上为一个 Agent 
 `@mate/gateway` 对 node 操作的拒绝异常，带 `reason`，与线路上的 `gateway.error` 消息不同（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
 
 **工作区**（workspace）
-Agent 在 node 上的工作目录。Agent 在里面自由组织记忆、文件和脚本。
+Agent 在主 node 上的工作目录。Agent 在里面自由组织记忆、文件和脚本。
 
 **命令进程组**（command process group）
 node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Windows 活 shell 的进程树，追踪与停止的范围见 [ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)。
@@ -302,7 +314,7 @@ node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Window
 避免：结果未知（那是连接断开时的结果）。
 
 **工作区环境**（WorkspaceEnv）
-node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，浏览工作区也用它；每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。Windows 同时处理盘符、反斜线和大小写，允许工作区根自身的别名，拒绝经过根以下的符号链接或 junction；POSIX 保留指向工作区内部的链接。
+node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 `read`、`write`、`edit` 在它上面执行，浏览工作区也用它；home 的根是 Agent 工作区，visit 的根是 node 账号主目录。每个路径先经过它解析，`..`、指向外部的绝对路径和符号链接都在这里被拒绝。Windows 同时处理盘符、反斜线和大小写，允许根目录自身的别名，拒绝经过根以下的符号链接或 junction；POSIX 保留指向该根目录内部的链接。
 
 **浏览工作区**（browse）
 管理员在管理界面里只读地看 Agent 工作区里的一个路径：管理模块的 `browseWorkspace` 调网关的 `browse`，网关发 `gateway.browse`，node 回 `node.browse.result`。回答是一个**浏览结果**（`WorkspaceListing`：目录的条目、文件开头的文字，或者不是文字的文件的大小，各有上限并标明截断），或者一个拒绝（`outside-workspace`、`not-found`、`unreadable`，网关再加上 `node-offline`）。不经过 runtime，暂停的 Agent 也能看。
@@ -350,8 +362,8 @@ node 上限定在一个工作区里的 Durable `NodeExecutionEnv`：Durable 的 
 避免：集成测试（那个词留给用真实提供商或真实 VPS 的检查）。
 
 **存储夹具**（store fixture）
-`tests/fixtures/stores/<版本>/` 下由 `scripts/make-store-fixture.ts` 从某个已发布的版本生成的真实数据目录（`control.sqlite`、`chat.sqlite`），测试在它的副本上用新代码启动，证明升级后数据还在。夹具只用旧版本模块的公开接口写出，不手写旧表。
+`tests/fixtures/stores/<版本>/` 下由 `scripts/make-store-fixture.ts` 从某个已发布的版本生成的真实数据目录（`control.sqlite`、`chat.sqlite`、真实 Agent 文件），测试在它的副本上用新代码启动，证明升级后数据还在。夹具只用旧版本模块的公开接口写出，不手写旧表。
 避免：手工拼出来的旧结构 SQL（那证明不了真实的旧存储能升级）。
 
 **进程夹具**
-`tests/system/test/support.ts` 的 `startSystem()`：在临时目录里启动控制面（`main.ts`）、用配对令牌配对的 node（`mate node run`，HOME 是临时目录）和脚本化提供商；控制面能被 SIGKILL，并在同一个数据目录和同一个端口上重启，node 可以经网络代理连到控制面。
+`tests/system/test/support.ts` 的 `startSystem()`：在临时目录里启动控制面（`main.ts`）、用配对令牌配对的 node（`mate node run`，HOME 是临时目录）和脚本化提供商；控制面能被 SIGKILL，并在同一个数据目录和同一个端口上重启，node 可以经网络代理连到控制面。`addNode()` 可再配对一个有独立主目录和身份的 node，通过新出现的在线 ID 确认连接。

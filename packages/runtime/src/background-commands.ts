@@ -17,7 +17,9 @@ type CommandState =
   /** The command was handed to the node. Finding the task here means its process stopped before the command ended. */
   | { phase: "interrupted" };
 
-type CommandRuntime = TaskRuntime<BashArguments, CommandState, null, object>;
+type CommandInput = BashArguments & { readonly node?: string };
+
+type CommandRuntime = TaskRuntime<CommandInput, CommandState, null, object>;
 
 const reply = (text: string, isError = false) => ({
   content: [{ type: "text" as const, text }],
@@ -36,7 +38,7 @@ export function backgroundCommands(
   closing: AbortSignal,
   abortTask: Harness["abortTask"],
 ) {
-  const BackgroundCommand = defineTask<BashArguments, CommandState, null>({
+  const BackgroundCommand = defineTask<CommandInput, CommandState, null>({
     name: "mate.background-command",
     version: 1,
     initial: () => ({ phase: "start" }),
@@ -47,8 +49,9 @@ export function backgroundCommands(
           context,
         );
         const signal = AbortSignal.any([closing, runtime.signal]);
+        const { node: target, ...args } = command.input;
         const result = await node.run(
-          { tool: "bash", arguments: command.input },
+          { tool: "bash", arguments: args, ...(target === undefined ? {} : { node: target }) },
           () => undefined,
           signal,
         );
@@ -57,7 +60,7 @@ export function backgroundCommands(
         // abort handler ends it, or the reopened runtime finds it interrupted.
         await report(
           command.id,
-          `[background command ${command.id} ${outcome}] ${command.input.command}\n${textOf(result)}`,
+          `${commandSummary(command.id, command.input, outcome)}\n${textOf(result)}`,
           runtime,
           context,
         );
@@ -65,7 +68,7 @@ export function backgroundCommands(
       interrupted: (command, runtime, context) =>
         report(
           command.id,
-          `[background command ${command.id} interrupted] ${command.input.command}\n` +
+          `${commandSummary(command.id, command.input, "interrupted")}\n` +
             "The Agent was paused or restarted before this command's result was recorded. The command may have been " +
             "stopped midway or may have finished unseen. It was not rerun; how far it got is unknown.",
           runtime,
@@ -77,7 +80,7 @@ export function backgroundCommands(
   });
 
   /** Start `call` as a background command of the calling conversation and say how its result will arrive. */
-  async function start(call: BashArguments, api: ToolExecutionApi, context: Context) {
+  async function start(call: CommandInput, api: ToolExecutionApi, context: Context) {
     const id = await api.createTask(
       BackgroundCommand,
       call,
@@ -120,6 +123,15 @@ export function backgroundCommands(
   });
 
   return { start, stop, task: BackgroundCommand };
+}
+
+function commandSummary(
+  id: TaskId,
+  input: CommandInput,
+  outcome: "finished" | "failed" | "interrupted",
+): string {
+  const location = input.node === undefined ? "" : ` on node ${input.node}`;
+  return `[background command ${id} ${outcome}${location}] ${input.command}`;
 }
 
 /** End the command and hand its report to its conversation, in one commit. */
