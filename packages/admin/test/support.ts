@@ -8,6 +8,7 @@ import type {
   GatewayBrowse,
   GatewayRunTool,
   NodeBrowseOutcome,
+  NodeSystem,
   ToolResult,
 } from "@mate/node-protocol";
 import { FakeClock, FakeNode, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
@@ -65,8 +66,7 @@ export type Environment = Awaited<ReturnType<typeof environment>>;
  * provider, the real node gateway on a local HTTP server, and a fake clock. Admins opened here are closed after the
  * test, before the rest.
  */
-export async function environment() {
-  const data = temporaryDirectory();
+export async function environment(data = temporaryDirectory()) {
   const clock = new FakeClock(Date.UTC(2026, 0, 1, 9, 30, 5));
   const chat = new ChatApp(join(data, "chat.sqlite"));
   const provider = await ScriptedProvider.start();
@@ -94,11 +94,14 @@ export async function environment() {
     handle: "owner",
     kind: "human",
   });
-  const general = chat.createChannel(owner, {
-    requestId: "setup:general",
-    name: "general",
-    visibility: "public",
-  }).conversationId;
+  const general =
+    chat.listConversations(owner).find((conversation) => conversation.name === "general")
+      ?.conversationId ??
+    chat.createChannel(owner, {
+      requestId: "setup:general",
+      name: "general",
+      visibility: "public",
+    }).conversationId;
   let posts = 0;
 
   return {
@@ -128,7 +131,7 @@ export async function environment() {
       admin.setCredentials("openai", { apiKey, baseUrl: provider.baseUrl });
     },
     /** Pair a new fake node with a token from `admin`, and wait until it is connected. */
-    async pairNode(admin: Admin): Promise<TestNode> {
+    async pairNode(admin: Admin, system?: NodeSystem): Promise<TestNode> {
       const identity = newIdentity();
       const prepared: string[] = [];
       const calls: GatewayRunTool[] = [];
@@ -138,6 +141,7 @@ export async function environment() {
         gatewayUrl,
         ...identity,
         pairingToken: admin.createPairingToken().pairingToken,
+        ...(system === undefined ? {} : { system }),
         onPrepareWorkspace: async (agentId) => {
           prepared.push(agentId);
         },

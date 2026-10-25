@@ -78,6 +78,7 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
       nodeId,
       agentId,
       {
+        access: "home",
         tool: "bash",
         arguments: {
           command: scriptCommand(
@@ -99,7 +100,7 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     const readResult = await gateway.runTool(
       nodeId,
       agentId,
-      { tool: "read", arguments: { path: "marker.txt" } },
+      { access: "home", tool: "read", arguments: { path: "marker.txt" } },
       () => {},
       never,
     );
@@ -117,14 +118,14 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     const callA = gateway.runTool(
       nodeId,
       "agent-a",
-      { tool: "bash", arguments: { command } },
+      { access: "home", tool: "bash", arguments: { command } },
       (chunk) => outputs["agent-a"].push(chunk),
       abortA.signal,
     );
     const callB = gateway.runTool(
       nodeId,
       "agent-b",
-      { tool: "bash", arguments: { command } },
+      { access: "home", tool: "bash", arguments: { command } },
       (chunk) => outputs["agent-b"].push(chunk),
       never,
     );
@@ -199,7 +200,7 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     const result = await gateway.runTool(
       nodeId,
       "agent-e2e",
-      { tool: "bash", arguments: { command: "echo hi" } },
+      { access: "home", tool: "bash", arguments: { command: "echo hi" } },
       () => {},
       never,
     );

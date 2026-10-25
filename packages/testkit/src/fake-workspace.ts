@@ -1,15 +1,23 @@
 import type { ToolName, ToolResult } from "@mate/node-protocol";
 
 /**
- * A whole workspace tool call as the runtime forwards it. Declared here, in the node's wire terms, rather than imported
- * from @mate/runtime, so the test kit does not depend on the package whose tests use it. A FakeWorkspace still has to
- * type-check as the runtime's `WorkspacePort` wherever a test passes one in.
+ * A whole workspace tool call as the runtime forwards it. Declared here rather than imported from @mate/runtime, so
+ * the test kit does not depend on the package whose tests use it. A FakeWorkspace still has to type-check as the
+ * runtime's `WorkspacePort` wherever a test passes one in.
  */
 export type WorkspaceToolRequest = {
   readonly tool: ToolName;
   readonly arguments: Readonly<Record<string, unknown>>;
+  readonly node?: string;
 };
 type WorkspaceToolResult = ToolResult;
+
+type WorkspaceNode = {
+  readonly name: string;
+  readonly online: boolean;
+  readonly platform: string | null;
+  readonly home: boolean;
+};
 
 export type PendingWorkspaceCall = {
   readonly request: WorkspaceToolRequest;
@@ -22,7 +30,16 @@ export class FakeWorkspace {
   readonly calls: WorkspaceToolRequest[] = [];
   readonly #pending: PendingWorkspaceCall[] = [];
   readonly #arrivals: (() => void)[] = [];
+  #nodes: WorkspaceNode[] = [];
   #autoAnswer: ((request: WorkspaceToolRequest) => WorkspaceToolResult) | undefined;
+
+  setNodes(nodes: readonly WorkspaceNode[]): void {
+    this.#nodes = [...nodes];
+  }
+
+  async nodes(): Promise<WorkspaceNode[]> {
+    return [...this.#nodes];
+  }
 
   /** Answer every call from now on at once, instead of leaving it for `nextCall`. */
   answerAll(answer: (request: WorkspaceToolRequest) => WorkspaceToolResult): void {

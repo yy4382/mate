@@ -35,6 +35,7 @@ export {
   type ProviderCredentials,
 } from "./models.ts";
 export type {
+  WorkspaceNode,
   WorkspacePort,
   WorkspaceToolName,
   WorkspaceToolRequest,

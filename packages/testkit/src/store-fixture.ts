@@ -19,6 +19,10 @@ export type StoreFacts = {
   }[];
   /** The Agents' chat accounts' external IDs. */
   readonly agentExternalIds: readonly string[];
+  readonly releasedAgent: {
+    readonly agentId: string;
+    readonly nodeId: string;
+  };
   /** The endpoint of the owner's Web Push subscription. */
   readonly pushEndpoint: string;
   /** What the owner's unread summary reported when the fixture was built. */

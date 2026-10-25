@@ -159,6 +159,42 @@ describe("Agents", () => {
     await page.getByText("还没有 Agent。").waitFor();
   });
 
+  it("the owner grants and revokes access on the Agent page while its home node stays fixed", async () => {
+    const site = await startSite();
+    const agent = await site.agent("sam");
+    await site.owner.put(`/api/admin/nodes/${agent.nodeId}`, { name: "home-server" });
+    const laptop = await site.pairNode({
+      system: {
+        platform: "darwin",
+        arch: "arm64",
+        hostname: "laptop",
+        osRelease: "25.0.0",
+        version: "dev",
+      },
+    });
+    const { page } = await openApp(site, `/app/admin/agents/${agent.agentId}`);
+    const access = page.getByRole("region", { name: "Node 访问" });
+    const homeRow = access.locator(`[data-node="${agent.nodeId}"]`);
+    await homeRow.getByText("主 node", { exact: true }).waitFor();
+    expect(await homeRow.getByRole("button").count()).toBe(0);
+    const laptopRow = access.locator(`[data-node="${laptop}"]`);
+    await laptopRow.getByRole("button", { name: "授权访问" }).click();
+    await laptopRow.getByRole("button", { name: "收回授权" }).waitFor();
+    await laptopRow.getByRole("status").getByText("已授权", { exact: false }).waitFor();
+    const agents =
+      await site.owner.get<{ grantedNodes: { nodeId: string; name: string }[] }[]>(
+        "/api/admin/agents",
+      );
+    expect(agents[0]?.grantedNodes).toEqual([{ nodeId: laptop, name: "laptop" }]);
+
+    await page.reload();
+    await laptopRow.getByRole("button", { name: "收回授权" }).click();
+    await laptopRow.getByRole("button", { name: "授权访问" }).waitFor();
+    await laptopRow.getByRole("status").getByText("已收回授权", { exact: false }).waitFor();
+    const revoked = await site.owner.get<{ grantedNodes: unknown[] }[]>("/api/admin/agents");
+    expect(revoked[0]?.grantedNodes).toEqual([]);
+  });
+
   it("an Agent's avatar is generated from its chat account on the list and the detail page", async () => {
     const site = await startSite();
     const agent = await site.agent("sam");

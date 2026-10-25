@@ -18,6 +18,7 @@ import {
 } from "../shell/ui.tsx";
 import { AgentActions } from "./AgentActions.tsx";
 import { AgentStateBadge, SettingsFields, settingsBody } from "./Agents.tsx";
+import { NodeAccess } from "./NodeAccess.tsx";
 import { Watch } from "./Watch.tsx";
 import { Workspace } from "./Workspace.tsx";
 import { adminKeys, useAgents, useModels } from "./data.ts";
@@ -132,6 +133,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
       <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} items={TABS}>
         <TabPanel value="settings">
           <form
+            className="mb-6"
             aria-label="Agent 设置"
             onSubmit={async (event) => {
               event.preventDefault();
@@ -174,6 +176,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
               </CardFooter>
             </Card>
           </form>
+          <NodeAccess agent={agent} />
         </TabPanel>
         <TabPanel value="watch">
           <Watch agentId={agentId} open={agent.state === "open"} />

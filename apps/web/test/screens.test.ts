@@ -22,6 +22,26 @@ it.runIf(out !== undefined)(
     const general = await site.owner.channel("general");
     await site.owner.channel("random");
     const ada = await site.agent("ada");
+    await site.owner.put(`/api/admin/nodes/${ada.nodeId}`, { name: "legacy-server" });
+    const nodeId = await site.pairNode({
+      system: {
+        platform: "linux",
+        arch: "arm64",
+        hostname: "build-server.local",
+        osRelease: "6.8.0-64-generic",
+        version: "v0.1.0-alpha.3",
+      },
+    });
+    await site.owner.put(`/api/admin/agents/${ada.agentId}/nodes/${nodeId}`);
+    await site.pairNode({
+      system: {
+        platform: "darwin",
+        arch: "arm64",
+        hostname: "laptop",
+        osRelease: "25.0.0",
+        version: "v0.1.0-alpha.3",
+      },
+    });
     await site.owner.post(`/api/chat/conversations/${general}/invite`, {
       requestId: randomUUID(),
       invitee: ada.accountId,
@@ -70,6 +90,11 @@ it.runIf(out !== undefined)(
         await page.goto(site.origin + path);
         await page.waitForTimeout(600);
         await page.screenshot({ path: join(dir, `${view.name}-${name}.png`) });
+        if (name === "agent") {
+          const access = page.getByRole("region", { name: "Node 访问" });
+          await access.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: join(dir, `${view.name}-node-access.png`) });
+        }
       }
       await page.goto(`${site.origin}/app/c/${general}`);
       await page.waitForTimeout(600);

@@ -142,7 +142,7 @@ describe("node gateway limits (MODULE_TESTS 7)", () => {
     const call = under.gateway.runTool(
       paired.nodeId,
       "agent-1",
-      { tool: "bash", arguments: { command: "sleep 60" } },
+      { access: "home", tool: "bash", arguments: { command: "sleep 60" } },
       () => {},
       never,
     );

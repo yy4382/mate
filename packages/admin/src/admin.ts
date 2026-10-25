@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { AccountNames, type ChatApp } from "@mate/chat";
-import type { Clock } from "@mate/clock";
+import { systemClock, type Clock } from "@mate/clock";
 import { NodeGatewayError, type NodeGateway, type NodeStatusResult } from "@mate/gateway";
 import {
   AgentIdInUse,
@@ -21,7 +21,7 @@ import {
 import { WorkspacePathSchema, type WorkspaceListing } from "@mate/node-protocol";
 import { z } from "zod";
 import { AdminError, parseInput } from "./admin-error.ts";
-import { CredentialStore } from "./credentials.ts";
+import { AdminStore } from "./store.ts";
 import { gatewayWorkspaces } from "./workspaces.ts";
 
 /** The providers Mate offers. Their models come from pi-ai's catalog. */
@@ -76,7 +76,11 @@ type AgentNames = {
  * is unreadable, or it has no chat account) is listed with the problem, so an admin can delete it.
  */
 export type AgentView =
-  | (AgentNames & AgentDescription & { readonly nodeName: string })
+  | (AgentNames &
+      AgentDescription & {
+        readonly nodeName: string;
+        readonly grantedNodes: { nodeId: string; name: string }[];
+      })
   | ({
       readonly agentId: string;
       readonly state: "unreadable";
@@ -96,19 +100,19 @@ export type ProviderView = {
  * credentials.
  */
 export async function openAdmin(options: AdminOptions): Promise<Admin> {
-  const credentials = new CredentialStore(options.dataDirectory);
+  const store = new AdminStore(options.dataDirectory);
   try {
     const manager = await openAgentManager({
       directory: join(options.dataDirectory, "agents"),
       chat: options.chat,
-      workspaces: gatewayWorkspaces(options.gateway),
-      credentials: (provider) => credentials.get(provider),
+      workspaces: gatewayWorkspaces(options.gateway, store),
+      credentials: (provider) => store.credentials(provider),
       ...(options.clock === undefined ? {} : { clock: options.clock }),
       ...(options.report === undefined ? {} : { report: options.report }),
     });
-    return new Admin(options, credentials, manager);
+    return new Admin(options, store, manager);
   } catch (error) {
-    credentials.close();
+    store.close();
     throw error;
   }
 }
@@ -121,14 +125,16 @@ export async function openAdmin(options: AdminOptions): Promise<Admin> {
 export class Admin {
   readonly #chat: ChatApp;
   readonly #gateway: AdminGateway;
-  readonly #credentials: CredentialStore;
+  readonly #store: AdminStore;
   readonly #manager: AgentManager;
+  readonly #clock: Clock;
 
-  constructor(options: AdminOptions, credentials: CredentialStore, manager: AgentManager) {
+  constructor(options: AdminOptions, store: AdminStore, manager: AgentManager) {
     this.#chat = options.chat;
     this.#gateway = options.gateway;
-    this.#credentials = credentials;
+    this.#store = store;
     this.#manager = manager;
+    this.#clock = options.clock ?? systemClock;
   }
 
   // ── Agents ──────────────────────────────────────────────────────────────────
@@ -138,7 +144,8 @@ export class Admin {
     const accounts = new Map(
       this.#chat.listAccounts().map((account) => [account.accountId, account]),
     );
-    const nodeNames = new Map(this.#gateway.nodes().map((node) => [node.nodeId, node.name]));
+    const nodes = this.#gateway.nodes();
+    const nodeNames = new Map(nodes.map((node) => [node.nodeId, node.name]));
     const views = await Promise.all(
       this.#manager.list().map(async ({ agentId }): Promise<AgentView | undefined> => {
         const account = this.#chat.findAccount(agentId);
@@ -151,10 +158,17 @@ export class Admin {
         try {
           if (names === undefined) throw new Error(`Agent ${agentId} has no chat account`);
           const description = await this.#manager.describe(agentId);
+          const grantedNodes = nodes
+            .filter(
+              (node) =>
+                this.#store.nodeAccess(agentId, description.nodeId, node.nodeId) === "visit",
+            )
+            .map(({ nodeId, name }) => ({ nodeId, name }));
           return {
             ...names,
             ...description,
             nodeName: nodeNames.get(description.nodeId) ?? description.nodeId,
+            grantedNodes,
           };
         } catch (error) {
           // Deleted since it was listed.
@@ -200,9 +214,22 @@ export class Admin {
     await this.#existing(agentId, (id) => this.#manager.resume(id));
   }
 
-  /** Close the Agent, deactivate its chat account, delete its file. Its messages stay readable. */
+  /** Close the Agent, deactivate its chat account, delete its file and grants. Its messages stay readable. */
   async deleteAgent(agentId: string): Promise<void> {
     await this.#existing(agentId, (id) => this.#manager.delete(id));
+    this.#store.deleteNodeGrants(agentId);
+  }
+
+  /** Permit later workspace calls to visit this paired node. The home node is always accessible. */
+  async grantNode(agentId: string, nodeId: string): Promise<void> {
+    await this.#changeNodeGrant(agentId, nodeId, () =>
+      this.#store.grantNode(agentId, nodeId, this.#clock.now()),
+    );
+  }
+
+  /** Refuse later visits to this node without stopping calls that have already started. */
+  async revokeNode(agentId: string, nodeId: string): Promise<void> {
+    await this.#changeNodeGrant(agentId, nodeId, () => this.#store.revokeNode(agentId, nodeId));
   }
 
   /**
@@ -257,7 +284,7 @@ export class Admin {
   /** Every provider Mate offers, and its stored credentials, masked. */
   providers(): ProviderView[] {
     return Provider.options.map((provider) => {
-      const stored = this.#credentials.get(provider);
+      const stored = this.#store.credentials(provider);
       return {
         provider,
         name: PROVIDER_NAMES[provider],
@@ -276,18 +303,18 @@ export class Admin {
   setCredentials(provider: string, input: z.input<typeof CredentialsInput>): void {
     const id = this.#provider(provider);
     const { apiKey, baseUrl } = parseInput(CredentialsInput, input);
-    this.#credentials.set(id, { apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) });
+    this.#store.setCredentials(id, { apiKey, ...(baseUrl === undefined ? {} : { baseUrl }) });
   }
 
   /** Forget a provider's credentials. Agents on its models fail their requests until a key is stored again. */
   deleteCredentials(provider: string): void {
-    this.#credentials.delete(this.#provider(provider));
+    this.#store.deleteCredentials(this.#provider(provider));
   }
 
   /** The models an Agent can be given: those of every provider with credentials. */
   models(): CatalogModel[] {
     return Provider.options
-      .filter((provider) => this.#credentials.get(provider) !== undefined)
+      .filter((provider) => this.#store.credentials(provider) !== undefined)
       .flatMap((provider) => catalogModels(provider));
   }
 
@@ -316,7 +343,18 @@ export class Admin {
   /** Close every Agent, then the admin module's own connection to the control store. */
   async close(): Promise<void> {
     await this.#manager.close();
-    this.#credentials.close();
+    this.#store.close();
+  }
+
+  async #changeNodeGrant(agentId: string, nodeId: string, change: () => void): Promise<void> {
+    await this.#existing(agentId, async (id) => {
+      const { nodeId: homeNodeId } = await this.#manager.describe(id);
+      if (!this.#gateway.nodes().some((node) => node.nodeId === nodeId))
+        throw new AdminError("unknown-node", `no paired node ${nodeId}`);
+      if (nodeId === homeNodeId)
+        throw new AdminError("invalid-input", "the home node is always accessible");
+      change();
+    });
   }
 
   /**
@@ -359,7 +397,7 @@ export class Admin {
   #settings(input: z.output<typeof SettingsInput>): AgentSettings {
     const { model, thinkingLevel, instructions } = input;
     const provider = this.#provider(model.provider);
-    if (this.#credentials.get(provider) === undefined)
+    if (this.#store.credentials(provider) === undefined)
       throw new AdminError("no-credentials", `${PROVIDER_NAMES[provider]} has no API key`);
     const found = catalogModels(provider).find((each) => each.modelId === model.modelId);
     if (found === undefined)

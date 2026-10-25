@@ -10,11 +10,10 @@ const EXIT_GRACE_MS = 1000;
 const POLL_MS = 20;
 
 export type CommandRequest = {
-  agentId: string;
   /** Passed to the node's system shell. */
   command: string;
-  /** The Agent's workspace: the working directory and HOME. */
-  workspace: string;
+  directory: string;
+  env: NodeJS.ProcessEnv;
   timeoutSeconds: number | undefined;
 };
 
@@ -75,8 +74,8 @@ export class Commands {
     try {
       group = currentPlatform().commands.start({
         command: request.command,
-        cwd: request.workspace,
-        env: { ...process.env, HOME: request.workspace, PWD: request.workspace },
+        cwd: request.directory,
+        env: request.env,
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
