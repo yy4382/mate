@@ -10,8 +10,9 @@ import {
   requireActor,
   requireHuman,
   EnsureAccountInput,
-  type AccountView,
+  AccountView,
 } from "./accounts.ts";
+import { accountAvatar, setAccountAvatar, AvatarPng, type AccountAvatar } from "./avatars.ts";
 import { ChatError, parseInput } from "./chat-error.ts";
 import {
   archiveChannel,
@@ -75,6 +76,7 @@ import { resolveTimeline, TimelineRef } from "./timelines.ts";
 export { ChatError, type ChatErrorReason } from "./chat-error.ts";
 export { ChatStoreIncompatible } from "./database.ts";
 export { AccountKind, AccountNames, type AccountView } from "./accounts.ts";
+export type { AccountAvatar } from "./avatars.ts";
 export type { ConversationView } from "./conversations.ts";
 export type { Entry, MessageEntry, TaskEntry } from "./entries.ts";
 export type { ReadPage } from "./forward-reading.ts";
@@ -100,6 +102,7 @@ const InviteRequest = z.object({ ...WithRequest, conversationId: Id, invitee: Id
 const ReadRequest = z.object({ ...WithRequest, budget: Budget.default(DEFAULT_BUDGET) });
 const SnapshotRequest = z.object({ timeline: TimelineRef.optional() });
 const LiveCursor = z.string();
+const AvatarRequest = z.object({ ...WithRequest, png: AvatarPng });
 
 const Nothing = z.null();
 
@@ -242,6 +245,20 @@ export class ChatApp {
   /** Every account, deactivated ones included, since their messages stay readable. */
   listAccounts(): AccountView[] {
     return this.#db.transaction("read", () => listAccounts(this.#db));
+  }
+
+  /** The shell authorizes this account-management operation; null restores the default avatar. */
+  setAccountAvatar(account: number, request: z.input<typeof AvatarRequest>): AccountView {
+    const id = parseInput(Id, account);
+    const { requestId, png } = parseInput(AvatarRequest, request);
+    return this.#once(id, requestId, { avatar: png }, AccountView, () =>
+      setAccountAvatar(this.#db, id, png),
+    );
+  }
+
+  accountAvatar(account: number): AccountAvatar | undefined {
+    const id = parseInput(Id, account);
+    return this.#db.transaction("read", () => accountAvatar(this.#db, id));
   }
 
   /** Deactivation is permanent. The account's messages stay readable. */

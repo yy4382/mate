@@ -145,7 +145,11 @@ interface ChatApp {
   // kind：human | agent，必填，在账号创建时定下；对已有账号换一个 kind 为 invalid-input。名字和 handle 不合法为 invalid-input；
   // handle 被别的账号占着为 handle-taken；已停用的账号（Agent 被删除）为 inactive-account，停用是永久的，它的 externalId 不能再用
   ensureAccount({ externalId, displayName, handle, kind }): AccountId
-  listAccounts(): AccountView[] // 只读；每个账号（停用的也列出）的 accountId、handle、displayName、kind、active
+  listAccounts(): AccountView[] // 只读；每个账号（停用的也列出）的 accountId、handle、displayName、kind、active、avatarVersion
+  // 外壳鉴权后的账号管理操作。png 是 base64 PNG，null 恢复默认；按账号和 requestId 幂等
+  setAccountAvatar(account, { requestId, png }): AccountView
+  // 读取当前图片，停用账号的图片仍可读取；没有头像时为 undefined
+  accountAvatar(account): { version, png: Uint8Array } | undefined
   findAccount(externalId): AccountId | undefined // 只读；停用的账号也能找到。Manager 打开 Agent 时用它找账号，不另存账号 ID
   findHuman(handle): { accountId, externalId, active } | undefined // 只读；handle 不分大小写，只找人类账号（Agent 的 handle 找不到），停用的也找到。Web 外壳的登录用它从 handle 找到人类
   deactivateAccount(account, { requestId })
@@ -207,7 +211,11 @@ interface ChatApp {
    - 游标是一个不透明字符串，由**纪元**和事件 ID 组成，可以直接用作 SSE 的事件 ID。纪元在新建 `chat.sqlite` 时随机生成，之后不变：数据重置（换了新文件）后纪元不同，旧游标随之作废。
    - 事件保留一天，过期的在之后的写操作里删掉。游标的纪元不对、早于保留的事件、超前于库里最新的事件（例如恢复了旧备份）或者根本不是游标，`liveEvents` 都回答 `resnapshot`，客户端重新拉快照。恢复旧备份只在库里的事件追上客户端的游标之前能被发现；追上之后同一个纪元下的事件 ID 已经指向别的变化，所以恢复备份后应当让浏览器重新加载。
 
-**持久化：** `data/chat.sqlite`，包括推送订阅（带订阅它的账号）、推送队列和实时事件（带受众）。
+**头像：** `account_avatars` 按账号 ID 保存一份 PNG 和它的 SHA-256 头像版本，账号视图只带 `avatarVersion`，没有图片时为 `null`。新增、替换、移除图片的触发器在同一事务中追加账号实时事件；重复上传相同内容不产生新事件。头像不随改名或停用丢失。写入要求目标账号存在且有效，角色权限由外壳检查。
+
+聊天接口只接受最多 320 KiB、每边 1 至 256px 的 8-bit 非交错 RGB 或 RGBA PNG。解码前检查块边界、CRC、唯一 IHDR、尺寸、编码方式和 IEND，限制解压后的扫描线字节数；随后用 pngjs 解码并重新编码。颜色和文字元数据在解码前移除；SVG、动图块、截断、伪造尺寸和超量解压输入被拒绝，旧头像不变。HTTP 仍使用现有的 1 MiB JSON 请求体限制。
+
+**持久化：** `data/chat.sqlite`，包括头像图片、推送订阅（带订阅它的账号）、推送队列和实时事件（带受众）。
 
 ### 4.2 Agent runtime
 
@@ -515,6 +523,7 @@ interface Admin {
 - **路由。** 除了 `POST /api/login`（`{ handle, password, next? }`，回 `{ next }`：`next` 是站内 `/app` 下的路径时原样返回，否则是 `/app`）和 `POST /api/logout`，`/api/*` 都要登录，未登录回 401。页面请求：前端目录里存在的文件（脚本、样式、图标）不需要登录；`/` 跳到 `/app`；`/app` 及其下的页面未登录时跳到 `/login?next=<原地址>`；其余页面路径都回前端的 `index.html`，由前端路由。没有前端目录时页面回 404，API 照常工作。
   - `/api/chat/*` 一个路由对应聊天 app 的一个操作，账号固定为发出请求的人类自己的账号：每个人类读到全部会话，有自己的实时视图、未读摘要和推送订阅。读：`GET snapshot`（可带 `conversation=` 或 `thread=`）、`conversations`、`unread`、`history`（`conversation=`/`thread=`、`before`、`limit`）、`search?q=`。写都带浏览器生成的 `requestId`：`POST read`（读未读，推进这个人类的已读位置）、`messages`、`channels`、`dms`、`conversations/:id/join|leave|archive|invite`、`tasks`、`tasks/:id/change`。发送和任务操作总是关闭新鲜度检查（4.1 规则 2），请求里不接受这一项。推送：`GET push/key`（VAPID 公钥）、`POST push/subscribe`、`POST push/unsubscribe`。
   - `/api/me`：`GET` 回 `{ accountId, handle, displayName, role }`；`PATCH { displayName, handle }` 改自己的名字（经聊天 app 的 `ensureAccount`，handle 被占用回 409 `handle-taken`）；`POST password { current, next }` 改自己的密码（`current` 不对回 403 `wrong-password`，`next` 至少 12 字节），自己其他的登录会话随之结束，当前这个保留。
+  - 头像：`PUT /api/me/avatar { requestId, png }` 改自己的头像；`PUT /api/accounts/:accountId/avatar { requestId, png }` 只允许管理员，目标可以是人类或 Agent。`png: null` 恢复默认。成功返回账号视图。`GET /api/accounts/:accountId/avatar?v=<avatarVersion>` 需登录，返回 `image/png`、`nosniff` 和 `private, no-store`；无头像或版本已过时回 404。更换头像的权限仍在读取请求体之前检查，修改请求沿用同源和 JSON Content-Type 防护。
   - `/api/humans`（只有管理员）：`GET` 回每个人类的 `{ accountId, handle, displayName, role, active }`；`POST { requestId, handle, displayName, password, role }` 添加；`POST :accountId/role { role }`（结束那个人类所有的登录会话）、`POST :accountId/password { password }`（结束那个人类所有的登录会话）、`POST :accountId/deactivate`。
   - `/api/admin/*`（只有管理员）一个路由对应管理模块的一个操作：`GET|POST agents`、`POST agents/:id/pause|resume`、`DELETE agents/:id`、`PUT agents/:id/settings`、`PUT|DELETE agents/:id/nodes/:nodeId`（授权或收回，成功均为 204）、`GET agents/:id/assistants`、`GET agents/:id/events`（事件流，可带 `assistant=`）、`GET agents/:id/workspace?path=`、`GET providers`、`PUT|DELETE providers/:provider/credentials`、`GET models`、`GET nodes`、`PUT nodes/:id`（`{ name }`，改名字）、`POST pairing-tokens`。
   - **跨站防护。** 请求体必须声明 `content-type: application/json`（可带 charset），否则回 415 `unsupported-media-type`：别的站点的表单或不预检的 `fetch` 只能发 `text/plain` 之类，所以带着人类的 cookie 也伪造不出请求。带 `Origin` 头的非 GET 请求，`Origin` 的 host 必须等于请求的 `Host`，否则回 403 `cross-origin`（登录、退出也一样）；没有 `Origin`（脚本、curl）不是浏览器页面发的，放行。路径参数里不合法的百分号编码回 400 `invalid-input`。
@@ -522,8 +531,9 @@ interface Admin {
 - **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, cursor, unread }`），SSE 的 id 是这批读到的游标 `cursor`，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前、读聊天 app 之前都查一次登录会话；会话已过期、已退出登录或这个人类已被停用，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
 - **推送发送器。** VAPID 密钥对在第一次启动时生成，存在外壳的表里，之后不变：浏览器用公钥订阅，换了密钥所有订阅都会失效。`PushSender` 用 `web-push` 发出（加密、VAPID 签名、TTL 一天、请求超时 10 秒），推送服务的回答原样作为状态码交回聊天 app，连不上时抛错。VAPID 的联系地址来自 `MATE_VAPID_SUBJECT`，缺省为 `mailto:owner@mate.invalid`。
 
-**前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。样式用 Tailwind CSS v4，对话框、菜单、标签页等交互组件用 Base UI，界面原语集中在 `src/shell/ui.tsx`；外观和交互规则见 [界面规范](DESIGN.md)。页面在 `/login` 和 `/app` 下：聊天（`/app`、`/app/c/…`）、搜索、个人资料（`/app/profile`：改显示名和 handle、改密码、退出）、管理（`/app/admin/agents|providers|nodes|humans`，人类页让管理员添加人类、改角色、重置密码、停用）。当前人类来自 `GET /api/me`，导航据此显示名字和头像，普通人类不显示管理入口，直接打开管理地址显示"需要管理员权限"；当前人类自己的账号在实时流里变化时这份数据重新获取。`apps/web` 用 Vite 构建，`MATE_WEB_DIRECTORY` 指向构建产物（`apps/web/dist`）。
+**前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、账号视图、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。样式用 Tailwind CSS v4，对话框、菜单、标签页等交互组件用 Base UI，界面原语集中在 `src/shell/ui.tsx`；外观和交互规则见 [界面规范](DESIGN.md)。页面在 `/login` 和 `/app` 下：聊天（`/app`、`/app/c/…`）、搜索、个人资料（`/app/profile`：改头像、显示名和 handle、改密码、退出）、管理（`/app/admin/agents|providers|nodes|humans`，人类页让管理员添加人类、改角色、重置密码、停用）。当前人类来自 `GET /api/me`，导航据此显示名字和头像，普通人类不显示管理入口，直接打开管理地址显示"需要管理员权限"；当前人类自己的账号在实时流里变化时这份数据重新获取。`apps/web` 用 Vite 构建，`MATE_WEB_DIRECTORY` 指向构建产物（`apps/web/dist`）。
 
+- **账号视图只有一个缓存。** 外壳的 `accounts.ts` 持有共享账号查询，聊天快照和实时账号事件写入它；聊天、管理和个人资料都用 `AccountAvatar` 读取这份缓存。头像上传用 TanStack Query mutation，成功后的显示由实时事件推进，不另拉没有游标顺序的账号快照覆盖较新的事件。浏览器把最多 5 MiB 的 PNG、JPEG 或 WebP 居中裁剪并缩为最多 256px 的 PNG，再发送 base64 JSON。服务器仍独立验证全部图片字节。
 - **管理操作按 node ID 提交，模型调用按名字选目标。** Node 页显示名字、在线状态和最近一次系统信息；没有报告时显示尚未收到。改名失败贴在名字字段下面，保存成功后同时刷新 node 和 Agent 查询。创建 Agent 的选择项显示名字，提交仍用 node ID；Agent 列表显示从网关读取的 `nodeName`。
 - **Agent 设置页列出全部已配对 node。** 主 node 固定可访问，其他 node 可逐个授权或收回；每行显示操作进度、成功或错误，成功后刷新 Agent 查询。授权操作独立于模型设置表单。
 - **每条时间线一个查询，条目按序号存放。** 重复或重放的实时事件落在同一个序号上，既不会多出一条消息，也不会让讨论串的回复数虚增（回复数是已见回复序号的集合）。实时事件只更新已经存在的时间线查询；一条时间线的第一页还在加载时到达的条目先暂存，页面到达后并进去。
@@ -581,14 +591,14 @@ Manager 扫描 `data/agents/`，打开所有没有暂停的 Agent：
 ```
 data/
   control.sqlite              人类的角色和密码哈希、登录会话、VAPID 密钥、API key、Agent 的 node 授权、node 注册表（名字、系统信息和身份，0600）
-  chat.sqlite                 聊天 app 的全部数据（含附件元数据和推送队列）
+  chat.sqlite                 聊天 app 的全部数据（含头像图片、附件元数据和推送队列）
   attachments/                附件文件（还没有实现）
   agents/<agentId>.sqlite     每个 Agent 的 Durable 存储（含配置、提醒、连接器位置）
 ```
 
 搬到另一台 VPS：停掉容器，复制 `data/`，启动。
 
-**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@mate/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5；外壳的第 2 版用 `humans` 和 `sessions` 取代 `owner_password` 和 `owner_sessions`：原来的所有者成为 externalId 为 `owner` 的管理员，密码哈希和登录会话原样保留（已登录的 cookie 继续有效），这个账号的聊天账号本来就是 externalId `owner` 的人类账号，名字和 handle 不变，之后可以自己改。网关的第 2 版为已有 node 加名字和空的系统报告，身份与公钥不变，详见 4.5。admin 的第 2 版新增空的 node 授权表，已有 Agent 仍只访问主 node。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
+**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@mate/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号；第 5 版新增空的账号头像表与实时事件触发器，原有账号默认无上传头像）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5；外壳的第 2 版用 `humans` 和 `sessions` 取代 `owner_password` 和 `owner_sessions`：原来的所有者成为 externalId 为 `owner` 的管理员，密码哈希和登录会话原样保留（已登录的 cookie 继续有效），这个账号的聊天账号本来就是 externalId `owner` 的人类账号，名字和 handle 不变，之后可以自己改。网关的第 2 版为已有 node 加名字和空的系统报告，身份与公钥不变，详见 4.5。admin 的第 2 版新增空的 node 授权表，已有 Agent 仍只访问主 node。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
 
 ## 7. 部署
 

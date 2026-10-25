@@ -91,8 +91,22 @@ describe("3.9 live event stream", () => {
       expect.objectContaining({ name: "general", members: [owner, ada] }),
     ]);
     expect(snapshot.accounts).toEqual([
-      { accountId: owner, handle: "owner", displayName: "Owner", kind: "human", active: true },
-      { accountId: ada, handle: "ada", displayName: "Ada", kind: "agent", active: true },
+      {
+        accountId: owner,
+        handle: "owner",
+        displayName: "Owner",
+        kind: "human",
+        active: true,
+        avatarVersion: null,
+      },
+      {
+        accountId: ada,
+        handle: "ada",
+        displayName: "Ada",
+        kind: "agent",
+        active: true,
+        avatarVersion: null,
+      },
     ]);
 
     const after = post(app, ada, general, "after");
@@ -195,6 +209,7 @@ describe("3.9 live event stream", () => {
           displayName: "Ada Lovelace",
           kind: "agent",
           active: true,
+          avatarVersion: null,
         },
       }),
     ]);

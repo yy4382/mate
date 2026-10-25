@@ -1,3 +1,4 @@
+import { AccountAvatar } from "./AccountAvatar.tsx";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Bell, BellOff, CircleUser, LogOut, MessageSquare, Settings2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -13,7 +14,7 @@ import { Login } from "./Login.tsx";
 import { usePush } from "./Push.tsx";
 import { ProfilePage, logOut } from "./Profile.tsx";
 import { Link, navigate, useRoute, type Route } from "./router.tsx";
-import { Avatar, Badge, Menu, MenuItem, buttonClass, cx } from "./ui.tsx";
+import { Badge, Menu, MenuItem, buttonClass, cx } from "./ui.tsx";
 
 /** The brand mark, shared by the sidebar and the login page. */
 export function Mark({ className }: { className?: string }) {
@@ -108,7 +109,11 @@ function AccountMenu() {
         triggerClassName={cx(navItem, "cursor-pointer data-popup-open:text-foreground")}
         trigger={
           <>
-            {me === undefined ? <CircleUser aria-hidden /> : <Avatar name={name} size="sm" />}
+            {me === undefined ? (
+              <CircleUser aria-hidden />
+            ) : (
+              <AccountAvatar accountId={me.accountId} name={name} size="sm" />
+            )}
             <span className="max-w-full truncate">{name}</span>
             {push.problem === null ? null : (
               <span

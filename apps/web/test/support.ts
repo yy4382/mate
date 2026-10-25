@@ -40,7 +40,8 @@ export function webDirectory(): Promise<string> {
 let launched: Promise<ChromiumBrowser> | undefined;
 
 function chromiumBrowser(): Promise<ChromiumBrowser> {
-  launched ??= chromium.launch().then((browser) => {
+  const channel = process.env.MATE_BROWSER_CHANNEL;
+  launched ??= chromium.launch(channel === undefined ? {} : { channel }).then((browser) => {
     process.once("exit", () => void browser.close());
     return browser;
   });

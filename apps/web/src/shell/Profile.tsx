@@ -1,3 +1,5 @@
+import { AccountAvatar } from "./AccountAvatar.tsx";
+import { AvatarEditor } from "./AvatarEditor.tsx";
 import { useQueryClient } from "@tanstack/react-query";
 import { LogOut } from "lucide-react";
 import { useState } from "react";
@@ -12,17 +14,7 @@ import {
   useCurrentHuman,
   type HumanView,
 } from "./humans.ts";
-import {
-  Avatar,
-  Badge,
-  Button,
-  Card,
-  CardBody,
-  CardFooter,
-  Field,
-  Input,
-  PageHeader,
-} from "./ui.tsx";
+import { Badge, Button, Card, CardBody, CardFooter, Field, Input, PageHeader } from "./ui.tsx";
 
 /** The saved note or error that sits in a form card's footer, next to its button. */
 function Outcome({ saved, error }: { saved: boolean; error: string | null }) {
@@ -201,11 +193,11 @@ export function ProfilePage() {
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-6 md:px-8 md:py-8">
       <PageHeader
         title="个人资料"
-        description="你在 Mate 里的名字和登录方式。"
+        description="你在 Mate 里的头像、名字和登录方式。"
         {...(me === undefined
           ? {}
           : {
-              leading: <Avatar name={me.displayName} size="lg" />,
+              leading: <AccountAvatar accountId={me.accountId} name={me.displayName} size="lg" />,
               badge: (
                 <Badge tone={me.role === "admin" ? "accent" : "neutral"}>
                   {ROLE_LABEL[me.role]}
@@ -215,6 +207,14 @@ export function ProfilePage() {
       />
       {me === undefined ? null : (
         <>
+          <section className="grid gap-4" aria-label="头像">
+            <h2 className="text-base font-semibold">头像</h2>
+            <AvatarEditor
+              accountId={me.accountId}
+              name={me.displayName}
+              endpoint="/api/me/avatar"
+            />
+          </section>
           <section className="grid gap-4">
             <h2 className="text-base font-semibold">基本信息</h2>
             <Names me={me} />

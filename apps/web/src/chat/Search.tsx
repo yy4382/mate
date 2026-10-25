@@ -1,9 +1,10 @@
+import { AccountAvatar } from "../shell/AccountAvatar.tsx";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, SearchX } from "lucide-react";
 import { get } from "../shell/api.ts";
 import { Link, navigate, useRoute } from "../shell/router.tsx";
-import { Avatar, EmptyState, ErrorLine, Input, PageHeader, timeLabel } from "../shell/ui.tsx";
-import { accountName, avatarOf, useAccounts } from "./data.ts";
+import { EmptyState, ErrorLine, Input, PageHeader, timeLabel } from "../shell/ui.tsx";
+import { accountName, useAccounts } from "./data.ts";
 import type { Entry } from "./types.ts";
 
 /** The body with every occurrence of the query marked, ignoring case. */
@@ -80,7 +81,11 @@ export function SearchPage() {
             hit.kind === "message" ? (
               <li key={hit.messageId} className="grid gap-1.5 p-4">
                 <div className="flex items-center gap-2 text-sm">
-                  <Avatar {...avatarOf(accounts, hit.author)} size="sm" />
+                  <AccountAvatar
+                    accountId={hit.author}
+                    name={accountName(accounts, hit.author)}
+                    size="sm"
+                  />
                   <strong className="font-medium">{accountName(accounts, hit.author)}</strong>
                   <time className="text-xs text-muted">{timeLabel(hit.at)}</time>
                 </div>

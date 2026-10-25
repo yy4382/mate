@@ -134,6 +134,7 @@ export const AccountView = z.object({
   displayName: z.string(),
   kind: AccountKind,
   active: z.boolean(),
+  avatarVersion: z.string().nullable(),
 });
 export type AccountView = z.output<typeof AccountView>;
 
@@ -144,6 +145,7 @@ const AccountViewRow = z
     display_name: z.string(),
     kind: AccountKind,
     active: SqlBoolean,
+    avatar_version: z.string().nullable(),
   })
   .transform((row): AccountView => ({
     accountId: row.id,
@@ -151,9 +153,11 @@ const AccountViewRow = z
     displayName: row.display_name,
     kind: row.kind,
     active: row.active,
+    avatarVersion: row.avatar_version,
   }));
 
-const SELECT_ACCOUNT_VIEW = "SELECT id, handle, display_name, kind, active FROM accounts";
+const SELECT_ACCOUNT_VIEW = `SELECT id, handle, display_name, kind, active,
+  (SELECT version FROM account_avatars WHERE account_id = accounts.id) AS avatar_version FROM accounts`;
 
 /** Every account, deactivated ones included, since their entries stay readable. */
 export function listAccounts(db: ChatDatabase): AccountView[] {

@@ -35,6 +35,7 @@ export type Route = {
   readonly admin?: true;
 } & (
   | { readonly json: (input: RouteInput) => unknown }
+  | { readonly binary: (input: RouteInput) => { bytes: Uint8Array; contentType: string } }
   | { readonly stream: (input: RouteInput, stream: EventStream) => Promise<void> }
 );
 

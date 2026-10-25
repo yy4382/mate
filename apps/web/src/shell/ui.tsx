@@ -218,18 +218,23 @@ const avatarSizes: Record<AvatarSize, string> = {
 
 const avatarUrl = (account: number) => `https://api.dicebear.com/10.x/thumbs/svg?seed=${account}`;
 
-/** A human shows the name's initial. An Agent (`agentAccount` is its chat account ID) shows its generated picture, and the initial if that fails to load. */
+/** Uploaded pictures take precedence; failed pictures fall back to the generated picture or initial. */
 export function Avatar({
   name,
   size = "md",
   agentAccount,
+  src,
 }: {
   name: string;
   size?: AvatarSize;
   agentAccount?: number;
+  src?: string | undefined;
 }) {
-  const [failedUrl, setFailedUrl] = useState<string>();
-  const url = agentAccount === undefined ? undefined : avatarUrl(agentAccount);
+  const [failedUrls, setFailedUrls] = useState<readonly string[]>([]);
+  const generated = agentAccount === undefined ? undefined : avatarUrl(agentAccount);
+  const url = [src, generated].find(
+    (candidate) => candidate !== undefined && !failedUrls.includes(candidate),
+  );
   const initial = Array.from(name.trim())[0] ?? "?";
   return (
     <span
@@ -239,7 +244,7 @@ export function Avatar({
         avatarSizes[size],
       )}
     >
-      {url === undefined || url === failedUrl ? (
+      {url === undefined ? (
         initial
       ) : (
         <img
@@ -249,8 +254,8 @@ export function Avatar({
           decoding="async"
           referrerPolicy="no-referrer"
           draggable={false}
-          className="size-full"
-          onError={() => setFailedUrl(url)}
+          className="size-full object-cover"
+          onError={() => setFailedUrls((urls) => [...urls, url])}
         />
       )}
     </span>
