@@ -45,7 +45,7 @@ const { foreground, background } = BASH_TIMEOUT_SECONDS;
  */
 const BashArgumentsSchema = z
   .object({
-    command: z.string().describe("The command, run verbatim by /bin/sh -c"),
+    command: z.string().describe("The command, run by the node's system shell"),
     timeout: z
       .number()
       .positive()
@@ -99,7 +99,7 @@ const { $schema: _, ...bashParameters } = z.toJSONSchema(BashArgumentsSchema, { 
 export const bashTool = {
   name: "bash",
   description:
-    "Run a shell command with /bin/sh -c in your workspace, which is both the working directory and HOME. Returns " +
+    "Run a command with the node's system shell (/bin/sh -c on Linux and macOS, PowerShell on Windows) in your workspace, which is both the working directory and HOME. Returns " +
     `the combined stdout and stderr; only the last ${BASH_KEPT_OUTPUT_BYTES / 1024}KB are kept, and the result says ` +
     "how much was dropped before them. A nonzero exit, a kill by signal, and a timeout are errors. When the command " +
     "returns while processes it started in the background still run, the result says so; if they still hold the " +

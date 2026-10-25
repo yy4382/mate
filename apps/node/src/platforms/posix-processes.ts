@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from "node:fs";
  * unrelated process; that process then has a different start time than the leader we recorded, which is how `owned`
  * tells them apart.
  */
-export class ProcessGroup {
+export class PosixProcessGroup {
   readonly pgid: number;
   readonly #leaderStart: string | undefined;
 
@@ -41,8 +41,8 @@ export class ProcessGroup {
 /**
  * `kill(-pgid, 0)` succeeds while the group exists at all, including when every member is a zombie whose parent has
  * not reaped it, the normal state under an init that does not reap orphans. On Linux, `/proc` tells zombies apart.
- * EPERM means a member this account may not signal exists, which counts as running. Without `/proc` (macOS, used
- * only in development) the signal probe is all the evidence there is.
+ * EPERM means a member this account may not signal exists, which counts as running. Without `/proc` (macOS),
+ * the signal probe is all the evidence there is.
  */
 function groupHasRunningMember(pgid: number): boolean {
   try {

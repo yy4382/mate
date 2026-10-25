@@ -1,7 +1,6 @@
-import type { ChildProcess } from "node:child_process";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { FakeGateway } from "@mate/testkit";
-import { host, type Host } from "./cli-support.ts";
+import { host, writeBundle, type Host, type SpawnedMate } from "./cli-support.ts";
 import { eventually } from "./support.ts";
 
 const ISO_TIME = "\\d{4}-\\d{2}-\\d{2}T[\\d:.]+Z";
@@ -12,9 +11,11 @@ const linkLine = (h: Host) => {
   return result.stdout.split("\n").find((line) => line.startsWith("Link:"));
 };
 
-/** An account whose node, started with `node run`, is the service's main process as far as systemd says. */
-async function runningNode(controlPlane: string): Promise<{ h: Host; child: ChildProcess }> {
+/** An account whose foreground node is also the fake service manager's main process. */
+async function runningNode(controlPlane: string): Promise<{ h: Host } & SpawnedMate> {
   const h = host();
+  const installed = h.mate("node", "install", writeBundle(h.inputs, { version: "1.0.0" }));
+  expect(installed.status, installed.stderr).toBe(0);
   const configured = h.mate(
     "node",
     "configure",
@@ -24,12 +25,9 @@ async function runningNode(controlPlane: string): Promise<{ h: Host; child: Chil
     "t",
   );
   expect(configured.status, configured.stderr).toBe(0);
-  const child = h.spawnMate("node", "run");
-  onTestFinished(() => {
-    child.kill("SIGKILL");
-  });
-  h.setSystemd({ active: "active", enabled: "enabled", mainPid: child.pid ?? 0 });
-  return { h, child };
+  const { child, closed } = h.spawnMate("node", "run");
+  h.setService({ loaded: true, active: "active", enabled: "enabled", mainPid: child.pid ?? 0 });
+  return { h, child, closed };
 }
 
 async function startedGateway(): Promise<FakeGateway> {
@@ -71,7 +69,7 @@ describe("node link status (MODULE_TESTS 8.3, 9)", () => {
 
   it("status reports no link once the node process is gone, although its file still says connected", async () => {
     const gateway = await startedGateway();
-    const { h, child } = await runningNode(gateway.url);
+    const { h, child, closed } = await runningNode(gateway.url);
     await eventually(
       () => (linkLine(h) ?? "").startsWith("Link: connected"),
       "status reports the link connected",
@@ -79,11 +77,11 @@ describe("node link status (MODULE_TESTS 8.3, 9)", () => {
     );
 
     child.kill("SIGKILL");
-    await new Promise((resolve) => child.once("exit", resolve));
+    await closed;
 
-    h.setSystemd({ active: "inactive", mainPid: 0 });
+    h.setService({ active: "inactive", mainPid: 0 });
     expect(linkLine(h)).toBe("Link: none");
-    h.setSystemd({ active: "active", mainPid: (child.pid ?? 0) + 1 });
+    h.setService({ loaded: true, active: "active", mainPid: (child.pid ?? 0) + 1 });
     expect(linkLine(h), "a new main process has not written its own file yet").toBe("Link: none");
   });
 });

@@ -20,13 +20,6 @@ import { z } from "zod";
  */
 export const BUNDLE_ROOT = "mate-node";
 export const MANIFEST = "manifest.json";
-/** Where the Node runtime, the bundled script and the `mate` command sit inside the bundle. */
-export const BUNDLE_ENTRIES = {
-  runtime: "node/bin/node",
-  script: "lib/mate.mjs",
-  command: "bin/mate",
-} as const;
-
 const relativePath = z
   .string()
   .refine(

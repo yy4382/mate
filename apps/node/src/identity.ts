@@ -9,6 +9,7 @@ import {
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
+import { currentPlatform } from "./platforms/index.ts";
 
 const identitySchema = z.object({
   id: z.string().uuid(),
@@ -36,8 +37,12 @@ export function loadOrCreateNodeIdentity(dataDirectory: string): {
   const path = join(directory, "node-identity.json");
   try {
     const file = lstatSync(path);
-    if (!file.isFile() || file.isSymbolicLink() || (file.mode & 0o077) !== 0) {
-      throw new Error("node identity file must be a private regular file (mode 0600)");
+    if (
+      !file.isFile() ||
+      file.isSymbolicLink() ||
+      (currentPlatform().checkIdentityMode && (file.mode & 0o077) !== 0)
+    ) {
+      throw new Error("node identity file must be a private regular file");
     }
     const parsed = identitySchema.parse(JSON.parse(readFileSync(path, "utf8")));
     const privateKey = createPrivateKey(parsed.privateKey);
@@ -56,7 +61,6 @@ export function loadOrCreateNodeIdentity(dataDirectory: string): {
     if (code !== "ENOENT") throw error;
   }
 
-  // Generate new identity
   const pair = generateKeyPairSync("ed25519", {
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },

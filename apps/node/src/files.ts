@@ -1,5 +1,4 @@
-import { lstat, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { realpath } from "node:fs/promises";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import type {
@@ -14,6 +13,7 @@ import { createEditTool, createReadTool, createWriteTool } from "@earendil-works
 import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";
 import type { ToolResult } from "@mate/node-protocol";
 import type { TSchema } from "typebox";
+import { currentPlatform } from "./platforms/index.ts";
 
 export type FileToolName = "read" | "write" | "edit";
 
@@ -43,7 +43,7 @@ export async function runFileTool(
   signal: AbortSignal,
 ): Promise<ToolResult> {
   try {
-    const env = new WorkspaceEnv(await realpath(workspace));
+    const env = new WorkspaceEnv(await realpath(workspace), workspace);
     return await fileTools[name](args, env, withAbortSignal(signal, BACKGROUND_CONTEXT));
   } catch (error) {
     return text(error instanceof Error ? error.message : String(error), true);
@@ -139,39 +139,25 @@ function localApi<D extends JsonValue>(
  */
 export class WorkspaceEnv extends NodeExecutionEnv {
   readonly #root: string;
+  readonly #configuredRoot: string;
 
-  constructor(root: string) {
+  constructor(root: string, configuredRoot: string) {
     super({ cwd: root });
     this.#root = root;
+    this.#configuredRoot = configuredRoot;
   }
 
   override async absolutePath(path: string, context: Context): Promise<Result<string, FileError>> {
     const resolved = await super.absolutePath(path, context);
     if (!resolved.ok) return resolved;
-    const real = await realExistingPrefix(resolved.value);
-    return real !== undefined && inside(this.#root, resolved.value) && inside(this.#root, real)
-      ? ok(resolved.value)
-      : err(new FileError("permission_denied", `${path} is outside the workspace`, path));
-  }
-}
-
-function inside(root: string, path: string): boolean {
-  const rest = relative(root, path);
-  // Only a first segment of exactly `..` leaves the root; `..notes.md` or `...` is an ordinary name inside it.
-  return rest !== ".." && !rest.startsWith(`..${sep}`) && !isAbsolute(rest);
-}
-
-/**
- * Where the existing part of `path` really is, following every symbolic link: the deepest ancestor that exists,
- * resolved. A dangling link has no real location and yields nothing, since writing through it could land anywhere.
- */
-async function realExistingPrefix(path: string): Promise<string | undefined> {
-  for (let current = resolve(path); ; current = dirname(current)) {
-    const exists = await lstat(current).then(
-      () => true,
-      () => false,
+    const accepted = await currentPlatform().workspacePaths.resolve(
+      this.#root,
+      this.#configuredRoot,
+      path,
+      resolved.value,
     );
-    if (exists) return realpath(current).catch(() => undefined);
-    if (dirname(current) === current) return undefined;
+    return accepted !== undefined
+      ? ok(accepted)
+      : err(new FileError("permission_denied", `${path} is outside the workspace`, path));
   }
 }

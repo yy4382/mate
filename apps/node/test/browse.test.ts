@@ -4,7 +4,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BROWSE_DIRECTORY_ENTRIES, BROWSE_FILE_BYTES } from "@mate/node-protocol";
-import { connectedNode, temporaryDirectory, type NodeProcess } from "./support.ts";
+import { connectedNode, temporaryDirectory, windows, type NodeProcess } from "./support.ts";
 
 const browse = (node: NodeProcess, agentId: string, path: string) =>
   node.gateway.browse(randomUUID(), agentId, path);
@@ -16,7 +16,7 @@ describe("node workspace browsing (MODULE_TESTS 8.4)", () => {
     mkdirSync(join(workspace, "notes"));
     writeFileSync(join(workspace, "notes", "today.md"), "één\ntwo\n");
     writeFileSync(join(workspace, "..notes.md"), "dots");
-    symlinkSync(join(workspace, "notes"), join(workspace, "latest"));
+    symlinkSync(join(workspace, "notes"), join(workspace, "latest"), windows ? "junction" : "dir");
 
     expect(await browse(node, agentId, ".")).toEqual({
       ok: true,
@@ -32,16 +32,28 @@ describe("node workspace browsing (MODULE_TESTS 8.4)", () => {
         truncated: false,
       },
     });
-    expect(await browse(node, agentId, "latest/today.md"), "a link inside is followed").toEqual({
-      ok: true,
-      listing: {
-        kind: "file",
-        path: "latest/today.md",
-        size: Buffer.byteLength("één\ntwo\n"),
-        content: "één\ntwo\n",
-        truncated: false,
-      },
-    });
+    if (windows) {
+      expect(
+        await browse(node, agentId, "latest/today.md"),
+        "Windows junctions are refused",
+      ).toMatchObject({
+        ok: false,
+        reason: "outside-workspace",
+      });
+    } else
+      expect(
+        await browse(node, agentId, "latest/today.md"),
+        "a POSIX link inside is followed",
+      ).toEqual({
+        ok: true,
+        listing: {
+          kind: "file",
+          path: "latest/today.md",
+          size: Buffer.byteLength("één\ntwo\n"),
+          content: "één\ntwo\n",
+          truncated: false,
+        },
+      });
     expect(
       await browse(node, agentId, join(workspace, "notes")),
       "an absolute path inside is allowed",
@@ -91,12 +103,8 @@ describe("node workspace browsing (MODULE_TESTS 8.4)", () => {
     const { agentId, workspace } = await node.agent();
     const outside = temporaryDirectory();
     writeFileSync(join(outside, "secret.txt"), "secret");
-    symlinkSync(outside, join(workspace, "link"));
-    symlinkSync(join(outside, "secret.txt"), join(workspace, "secret-link.txt"));
-    symlinkSync(join(outside, "not-yet.txt"), join(workspace, "dangling.txt"));
-    const before = readdirSync(workspace).sort();
-
-    for (const path of [
+    symlinkSync(outside, join(workspace, "link"), windows ? "junction" : "dir");
+    const paths = [
       "..",
       "../",
       `../${agentId}-other`,
@@ -104,9 +112,14 @@ describe("node workspace browsing (MODULE_TESTS 8.4)", () => {
       join(outside, "secret.txt"),
       "link",
       "link/secret.txt",
-      "secret-link.txt",
-      "dangling.txt",
-    ]) {
+    ];
+    if (!windows) {
+      symlinkSync(join(outside, "secret.txt"), join(workspace, "secret-link.txt"));
+      symlinkSync(join(outside, "not-yet.txt"), join(workspace, "dangling.txt"));
+      paths.push("secret-link.txt", "dangling.txt");
+    }
+    const before = readdirSync(workspace).sort();
+    for (const path of paths) {
       const outcome = await browse(node, agentId, path);
       expect(outcome, path).toEqual({
         ok: false,
@@ -119,10 +132,9 @@ describe("node workspace browsing (MODULE_TESTS 8.4)", () => {
     expect(readFileSync(join(outside, "secret.txt"), "utf8")).toBe("secret");
   });
 
-  it("refuses a path that does not exist, a missing workspace, and a FIFO, without waiting on the FIFO", async () => {
+  it("refuses a path that does not exist and a missing workspace", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    execFileSync("mkfifo", [join(workspace, "pipe")]);
 
     expect(await browse(node, agentId, "absent.txt")).toMatchObject({
       ok: false,
@@ -132,13 +144,16 @@ describe("node workspace browsing (MODULE_TESTS 8.4)", () => {
       ok: false,
       reason: "not-found",
     });
-    expect(await browse(node, agentId, "pipe")).toMatchObject({
-      ok: false,
-      reason: "unreadable",
-    });
 
     rmSync(workspace, { recursive: true });
     expect(await browse(node, agentId, ".")).toMatchObject({ ok: false, reason: "not-found" });
     expect(readdirSync(node.workspacesRoot), "the node did not recreate it").not.toContain(agentId);
+  });
+
+  it.skipIf(windows)("refuses a POSIX FIFO without waiting for its writer", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    execFileSync("mkfifo", [join(workspace, "pipe")]);
+    expect(await browse(node, agentId, "pipe")).toMatchObject({ ok: false, reason: "unreadable" });
   });
 });

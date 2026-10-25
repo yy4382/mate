@@ -47,7 +47,9 @@ if (process.env.MATE_SMOKE_IMAGE === undefined)
     },
   );
 const bundles = join(root, "dist/smoke");
-run("pnpm", ["bundle:node", VERSION, "--arch", arch, "--out", bundles], { inherit: true });
+run("pnpm", ["bundle:node", VERSION, "--platform", "linux", "--arch", arch, "--out", bundles], {
+  inherit: true,
+});
 const bundle = join(bundles, `mate-node-${VERSION}-linux-${arch}.tar.gz`);
 
 const work = mkdtempSync(join(tmpdir(), "mate-smoke-"));

@@ -2,85 +2,121 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   readlinkSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
+import { afterAll, onTestFinished } from "vitest";
 import { temporaryDirectory } from "./support.ts";
 
 const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
+const fake = fileURLToPath(new URL("./fixtures/service-manager.cjs", import.meta.url));
 
-/** What the fake `systemctl` knows about `mate-node.service`, and every call it got. */
-export type FakeSystemd = {
+export type FakeService = {
   available: boolean;
   active: string;
   enabled: string;
-  /** What the unit's `MainPID` reports; 0 when nothing runs. */
   mainPid: number;
+  loaded: boolean;
+  foreignDefinition: boolean;
+  unverifiedProcess?: boolean;
+  created?: string;
   calls: string[][];
   journal: string[][];
 };
 
-// The fake answers only for the one unit and reads the unit file the way the real user manager would find it.
-const FAKE_SYSTEMCTL = `#!/usr/bin/env node
-const fs = require("node:fs");
-const file = process.env.FAKE_SYSTEMD;
-const state = JSON.parse(fs.readFileSync(file, "utf8"));
-const args = process.argv.slice(2);
-const exit = (code) => { fs.writeFileSync(file, JSON.stringify(state)); process.exit(code); };
-state.calls.push(args);
-if (!state.available) { console.error("Failed to connect to bus: No medium found"); exit(1); }
-const unit = process.env.HOME + "/.config/systemd/user/mate-node.service";
-const [scope, verb, ...rest] = args;
-if (scope !== "--user") exit(1);
-const now = rest.includes("--now");
-if (verb === "show") {
-  const loaded = fs.existsSync(unit);
-  process.stdout.write("LoadState=" + (loaded ? "loaded" : "not-found") + "\\nActiveState=" + state.active + "\\nUnitFileState=" + (loaded ? state.enabled : "") + "\\nMainPID=" + state.mainPid + "\\n");
-} else if (verb === "enable" && fs.existsSync(unit)) {
-  state.enabled = "enabled";
-  if (now) state.active = "active";
-} else if (verb === "disable") {
-  state.enabled = "disabled";
-  if (now) state.active = "inactive";
-} else if (verb !== "daemon-reload") {
-  console.error("fake systemctl cannot " + args.join(" "));
-  exit(1);
-}
-exit(0);
-`;
+export type HostPaths = {
+  program: string;
+  command: string;
+  unit: string;
+  config: string;
+  data: string;
+  workspaces: string;
+};
 
-const FAKE_JOURNALCTL = `#!/usr/bin/env node
-const fs = require("node:fs");
-const file = process.env.FAKE_SYSTEMD;
-const state = JSON.parse(fs.readFileSync(file, "utf8"));
-state.journal.push(process.argv.slice(2));
-fs.writeFileSync(file, JSON.stringify(state));
-process.stdout.write("a journal line\\n");
-`;
+export function hostPaths(home: string, localAppData = join(home, "AppData/Local")): HostPaths {
+  if (process.platform === "win32") {
+    const root = join(localAppData, "Mate");
+    return {
+      program: join(root, "program"),
+      command: join(root, "bin/mate.cmd"),
+      unit: join(root, "config/node-task.xml"),
+      config: join(root, "config/node.json"),
+      data: join(root, "data"),
+      workspaces: join(home, "mate/workspaces"),
+    };
+  }
+  return {
+    program: join(home, ".local/lib/mate-node"),
+    command: join(home, ".local/bin/mate"),
+    unit: join(
+      home,
+      process.platform === "darwin"
+        ? "Library/LaunchAgents/io.mate.node.plist"
+        : ".config/systemd/user/mate-node.service",
+    ),
+    config: join(home, ".config/mate/node.json"),
+    data: join(home, ".local/share/mate/node"),
+    workspaces: join(home, "mate/workspaces"),
+  };
+}
+
+let windowsRunner: string | undefined;
+const runnerDirectories = new Set<string>();
+afterAll(() => {
+  for (const directory of runnerDirectories) rmSync(directory, { recursive: true, force: true });
+});
+
+function executableRunner(): string {
+  if (windowsRunner !== undefined) return windowsRunner;
+  const directory = mkdtempSync(join(tmpdir(), "mate-cli-runner-"));
+  runnerDirectories.add(directory);
+  const source = fileURLToPath(new URL("./fixtures/service-runner.cs", import.meta.url));
+  const executable = join(directory, "runner.exe");
+  const compiler = join(process.env["WINDIR"]!, "Microsoft.NET/Framework64/v4.0.30319/csc.exe");
+  const built = spawnSync(compiler, ["/nologo", "/target:exe", `/out:${executable}`, source], {
+    encoding: "utf8",
+  });
+  if (built.status !== 0)
+    throw new Error(`Cannot build the Windows command fixture: ${built.stdout} ${built.stderr}`);
+  windowsRunner = executable;
+  return executable;
+}
 
 export type Result = { status: number | null; stdout: string; stderr: string };
 
-/** An account's home with a fake systemd on PATH, and the `mate` CLI run as that account. */
+export type SpawnedMate = { child: ChildProcess; closed: Promise<void> };
+
 export type Host = {
   home: string;
-  /** A directory outside the home for bundles and other inputs. */
   inputs: string;
+  paths: HostPaths;
   env: NodeJS.ProcessEnv;
   mate(...args: string[]): Result;
-  /** Start `mate` without waiting for it, for a test that kills it midway. */
-  spawnMate(...args: string[]): ChildProcess;
-  /** The same CLI invocation, for a test that wraps it in another command. */
+  spawnMate(...args: string[]): SpawnedMate;
   argv(...args: string[]): string[];
-  systemd(): FakeSystemd;
-  setSystemd(change: Partial<FakeSystemd>): void;
+  service(): FakeService;
+  setService(change: Partial<FakeService>): void;
 };
+
+export function serviceChanges(h: Host): string[][] {
+  return h.service().calls.filter(([tool, first, second]) => {
+    if (tool === "systemctl") return second !== "show" && second !== "daemon-reload";
+    if (tool === "launchctl") return first !== "print" && first !== "print-disabled";
+    if (tool === "schtasks") return first !== "/Create";
+    return tool === "taskkill";
+  });
+}
 
 export function host(): Host {
   const root = temporaryDirectory();
@@ -88,7 +124,8 @@ export function host(): Host {
   const inputs = join(root, "inputs");
   const bin = join(root, "bin");
   for (const directory of [home, inputs, bin]) mkdirSync(directory);
-  const state = join(root, "systemd.json");
+  const paths = hostPaths(home);
+  const state = join(root, "service.json");
   writeFileSync(
     state,
     JSON.stringify({
@@ -96,30 +133,51 @@ export function host(): Host {
       active: "inactive",
       enabled: "",
       mainPid: 0,
+      loaded: false,
+      foreignDefinition: false,
       calls: [],
       journal: [],
     }),
   );
-  for (const [name, script] of [
-    ["systemctl", FAKE_SYSTEMCTL],
-    ["journalctl", FAKE_JOURNALCTL],
-  ] as const) {
-    writeFileSync(join(bin, name), script);
-    chmodSync(join(bin, name), 0o755);
+  const commands =
+    process.platform === "win32"
+      ? ["powershell", "schtasks", "taskkill"]
+      : ["systemctl", "journalctl", "launchctl", "tail"];
+  for (const command of commands) {
+    if (process.platform === "win32") copyFileSync(executableRunner(), join(bin, `${command}.exe`));
+    else {
+      const path = join(bin, command);
+      writeFileSync(
+        path,
+        `#!/usr/bin/env node\nprocess.argv.splice(2, 0, ${JSON.stringify(command)});\nrequire(process.env.MATE_FAKE_SERVICE_SCRIPT);\n`,
+      );
+      chmodSync(path, 0o755);
+    }
   }
+  const replaced = new Set(["PATH", "HOME", "USERPROFILE", "LOCALAPPDATA"]);
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !replaced.has(key.toUpperCase())),
+  );
   const env = {
-    ...process.env,
+    ...inherited,
     HOME: home,
-    PATH: `${bin}:${process.env["PATH"]}`,
-    FAKE_SYSTEMD: state,
+    USERPROFILE: home,
+    LOCALAPPDATA: join(home, "AppData/Local"),
+    PATH: `${bin}${delimiter}${process.env["PATH"] ?? process.env["Path"]}`,
+    MATE_FAKE_SERVICE_STATE: state,
+    MATE_FAKE_SERVICE_PATHS: JSON.stringify(paths),
+    MATE_FAKE_SERVICE_SCRIPT: fake,
+    MATE_TEST_NODE: process.execPath,
   };
   const argv = (...args: string[]) => [process.execPath, "--conditions=mate-source", main, ...args];
-  const systemd = (): FakeSystemd => JSON.parse(readFileSync(state, "utf8"));
+  const service = (): FakeService => JSON.parse(readFileSync(state, "utf8"));
   return {
     home,
     inputs,
+    paths,
     env,
     argv,
+    service,
     mate(...args) {
       const [command, ...rest] = argv(...args);
       const result = spawnSync(command!, rest, { env, encoding: "utf8", cwd: inputs });
@@ -127,11 +185,16 @@ export function host(): Host {
     },
     spawnMate(...args) {
       const [command, ...rest] = argv(...args);
-      return spawn(command!, rest, { env, cwd: inputs, stdio: "ignore" });
+      const child = spawn(command!, rest, { env, cwd: inputs, stdio: "ignore" });
+      const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+      onTestFinished(async () => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await closed;
+      });
+      return { child, closed };
     },
-    systemd,
-    setSystemd(change) {
-      writeFileSync(state, JSON.stringify({ ...systemd(), ...change }));
+    setService(change) {
+      writeFileSync(state, JSON.stringify({ ...service(), ...change }));
     },
   };
 }
@@ -160,9 +223,10 @@ export type BundleOptions = {
  * archive with everything under `mate-node/` and a manifest listing the files. Options make it wrong in one way.
  */
 export function writeBundle(directory: string, options: BundleOptions): string {
+  const windows = process.platform === "win32";
   const files: Record<string, string | Buffer> = {
-    "bin/mate": "#!/bin/sh\n",
-    "node/bin/node": `node runtime for ${options.version}\n`,
+    [windows ? "bin/mate.cmd" : "bin/mate"]: windows ? "@echo off\r\n" : "#!/bin/sh\n",
+    [windows ? "node/node.exe" : "node/bin/node"]: `node runtime for ${options.version}\n`,
     "lib/mate.mjs": `// mate ${options.version}\n`,
   };
   if (options.bigFileBytes !== undefined) {

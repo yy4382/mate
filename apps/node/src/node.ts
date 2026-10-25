@@ -29,8 +29,8 @@ export class NodeRejectedError extends Error {
 
 /**
  * Run the node until `signal` aborts: connect to the gateway, and reconnect with backoff whenever the link is lost.
- * Rejects with `NodeRejectedError` when the gateway refuses who the node is. However it ends, every process group the
- * node started is killed first.
+ * Rejects with `NodeRejectedError` when the gateway refuses who the node is. On shutdown, stops the commands the
+ * platform can still identify, and rejects if any termination attempt fails.
  */
 export async function startNode(options: NodeOptions, signal: AbortSignal): Promise<void> {
   const clock = options.clock ?? systemClock;
