@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { AccountNames, type ChatApp } from "@mate/chat";
 import type { Clock } from "@mate/clock";
-import { GatewayError, type NodeGateway, type NodeStatusResult } from "@mate/gateway";
+import { NodeGatewayError, type NodeGateway, type NodeStatusResult } from "@mate/gateway";
 import {
   AgentIdInUse,
   isAgentId,
@@ -303,7 +303,7 @@ export class Admin {
     try {
       this.#gateway.renameNode(nodeId, name);
     } catch (error) {
-      if (error instanceof GatewayError) throw new AdminError(error.reason, error.message);
+      if (error instanceof NodeGatewayError) throw new AdminError(error.reason, error.message);
       throw error;
     }
   }

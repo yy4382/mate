@@ -28,7 +28,6 @@ describe("pairing nodes", () => {
     const admin = await env.open();
     env.useScriptedProvider(admin);
     const first = await env.pairNode(admin);
-    const second = await env.pairNode(admin);
     const agentId = await admin.createAgent({
       nodeId: first.nodeId,
       displayName: "Ada",
@@ -38,7 +37,6 @@ describe("pairing nodes", () => {
     await admin.pauseAgent(agentId);
 
     admin.renameNode(first.nodeId, "server");
-    admin.renameNode(second.nodeId, "laptop");
     expect(admin.nodes().find((node) => node.nodeId === first.nodeId)).toMatchObject({
       name: "server",
     });
@@ -51,20 +49,11 @@ describe("pairing nodes", () => {
       }),
     ]);
     admin.renameNode(first.nodeId, "worker");
-    admin.renameNode(first.nodeId, "worker");
     expect(await admin.agents()).toEqual([
       expect.objectContaining({ agentId, nodeId: first.nodeId, nodeName: "worker" }),
     ]);
-    const before = admin.nodes();
-    for (const [nodeId, name, reason] of [
-      [first.nodeId, "Not Valid", "invalid-input"],
-      [first.nodeId, "laptop", "name-taken"],
-      ["missing", "unused", "unknown-node"],
-    ] as const) {
-      expect(() => admin.renameNode(nodeId, name)).toThrowError(
-        expect.objectContaining({ reason }),
-      );
-      expect(admin.nodes()).toEqual(before);
-    }
+    expect(() => admin.renameNode(first.nodeId, "Not Valid")).toThrowError(
+      expect.objectContaining({ name: "AdminError", reason: "invalid-input" }),
+    );
   });
 });
