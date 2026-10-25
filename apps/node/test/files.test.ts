@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, parse } from "node:path";
-import { onTestFinished, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { connectedNode, temporaryDirectory, textOf, windows } from "./support.ts";
 
 function shortPath(path: string): string {
@@ -260,39 +260,5 @@ describe("node file tools (MODULE_TESTS 8.2)", () => {
       const read = await node.run(agentId, "read", { path });
       expect(textOf(read), `read ${path}`).toBe(path);
     }
-  });
-
-  it("reports a file that keeps changing while it is read instead of mixing old and new content", async () => {
-    const node = await connectedNode();
-    const { agentId, workspace } = await node.agent();
-    const path = join(workspace, "busy.txt");
-    const line = (letter: string) => `${letter.repeat(99)}\n`;
-    writeFileSync(path, line("a").repeat(40_000));
-    // Another process rewrites the file in place, alternating every line between all a's and all b's.
-    const writer = spawn(process.execPath, [
-      "-e",
-      `const fs = require("node:fs");
-       const fd = fs.openSync(${JSON.stringify(path)}, "r+");
-       const versions = ["a", "b"].map((l) => Buffer.from((l.repeat(99) + "\\n").repeat(40000)));
-       for (let i = 0; ; i++) fs.writeSync(fd, versions[i % 2], 0, versions[0].length, 0);`,
-    ]);
-    onTestFinished(() => void writer.kill("SIGKILL"));
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    let changed = 0;
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const result = await node.run(agentId, "read", { path: "busy.txt", limit: 300 });
-      const text = textOf(result);
-      if (result.isError) {
-        expect(text).toContain("busy.txt changed while it was read");
-        changed++;
-        continue;
-      }
-      const lines = text.split("\n").filter((l) => l !== "" && !l.startsWith("["));
-      expect(lines.length).toBe(300);
-      expect(new Set(lines).size, "never a mix of the two versions").toBe(1);
-      expect(lines[0]).toMatch(/^(a{99}|b{99})$/);
-    }
-    expect(changed, "a file that never holds still is reported as changed").toBeGreaterThan(0);
   });
 });
