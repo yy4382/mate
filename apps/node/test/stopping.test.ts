@@ -63,16 +63,19 @@ describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
     "accepts failed Windows termination when the process has already exited",
     async () => {
       const bin = temporaryDirectory();
-      copyFileSync(process.execPath, join(bin, "taskkill.exe"));
+      const racingTaskkill = join(bin, "taskkill.exe");
+      copyFileSync(process.execPath, racingTaskkill);
       const preload = join(bin, "taskkill.cjs");
       writeFileSync(
         preload,
         `
 if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.exe') {
-  require('node:child_process').spawnSync(
+  const result = require('node:child_process').spawnSync(
     require('node:path').join(process.env.SystemRoot, 'System32', 'taskkill.exe'),
-    process.argv.slice(1),
+    ['/PID', ...process.argv.slice(2)],
+    { encoding: 'utf8' },
   );
+  if (result.status !== 0) throw new Error(JSON.stringify(result));
   process.exit(1);
 }
 `,
@@ -90,12 +93,16 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
         command: longCommand("exit-during-stop"),
       });
       const pids = await pidsOf(workspace, "exit-during-stop");
-      node.gateway.stopTool("exit-during-stop");
-      const result = await call;
-      expect(textOf(result)).toContain("Command was stopped");
-      expect(textOf(result)).not.toContain("processes may still be running");
-      for (const pid of pids) await eventually(() => !running(pid), `process ${pid} is stopped`);
-      await node.shutdown();
+      try {
+        node.gateway.stopTool("exit-during-stop");
+        const result = await call;
+        expect(textOf(result)).toContain("Command was stopped");
+        expect(textOf(result)).not.toContain("processes may still be running");
+        for (const pid of pids) await eventually(() => !running(pid), `process ${pid} is stopped`);
+      } finally {
+        rmSync(racingTaskkill);
+        await node.shutdown();
+      }
       expect(await node.exited).toEqual({ code: 0, signal: null });
     },
   );
