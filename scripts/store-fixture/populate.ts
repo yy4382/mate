@@ -80,7 +80,8 @@ for (const nodeId of [
       sign(null, Buffer.from(nonce), createPrivateKey(privateKey)).toString("base64url"),
   });
   await node.connect();
-  await node.close();
+  node.close();
+  await node.closed();
   pairedNodes.push({
     nodeId,
     privateKey,

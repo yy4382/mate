@@ -366,7 +366,7 @@ interface AgentManager {
 
 **node 的名字和系统信息。** UUID 只做身份，配对、签名认证、工具调用和 Agent 文件都继续使用它。**node 名字**是管理员可改的人读名字，在全部已配对 node 中唯一。名字有 1 到 32 个小写字母、数字或 `-`，以字母或数字开头。**系统信息**是 node 每次握手现取的一份完整报告，包含 `platform`、`arch`、`hostname`、`osRelease`、`version`，五项都是字符串。前四项来自 `process.platform`、`process.arch`、`os.hostname()`、`os.release()`；`version` 是构建发布包时写入程序的发布版本，源码运行时为 `dev`。
 
-新 node 的 `node.authenticate`、`node.pair` 都必须带 `system`。网关容忍旧 node 缺少这个字段；带了字段就必须是完整报告。新配对的名字取 hostname，转成小写、把非法字符逐个换成 `-`、去掉开头的 `-`、截到 32 位。结果为空或旧 node 没有报告时，用 `node-<UUID 前 8 位>`。名字冲突时依次加 `-2`、`-3`，先为后缀留出长度。配对时，令牌消耗、身份、名字、系统报告和连接时间在同一个事务提交。认证时一起更新系统报告、报告时间和连接时间，之后才登记在线连接；旧握手只更新连接时间，不清空已有报告。改名只改名字，之后的握手保留它；网关的拒绝用 `GatewayError` 表示，不改变已存事实。
+新 node 的 `node.authenticate`、`node.pair` 都必须带 `system`。网关容忍旧 node 缺少这个字段；带了字段就必须是完整报告。新配对的名字取规范化的 hostname，冲突加 `-2`、`-3`，空则 `node-<UUID 前 8 位>`。配对时，令牌消耗、身份、名字、系统报告和连接时间在同一个事务提交。认证时一起更新系统报告、报告时间和连接时间，之后才登记在线连接；旧握手只更新连接时间，不清空已有报告。改名只改名字，之后的握手保留它；网关的拒绝用 `NodeGatewayError` 表示，不改变已存事实。
 
 **工具调用按"整个调用"转发。** runtime 把一次完整的工具调用（工具名、参数）交给网关，网关发给 node，node 在本地执行，边执行边把输出流回来，最后返回结果。这样每次工具调用只有一次往返，不需要在网络上逐个实现 Durable 执行环境接口的二十多个文件方法。网关为每次调用生成自己的请求 ID（随机 UUID），输出、结果和停止都按它对应；调用方的任何 ID 都不上线路，所以不同 Agent 的调用不可能撞号。node 工具调用不按 ID 去重：有副作用的工具崩溃后不重做（4.2 规则 2），可重做的 `read` 重做一次也无妨。
 
@@ -381,7 +381,7 @@ interface NodeGateway {
   // 或 signal 中止时结束。中止 signal 时网关让 node 停掉这一次调用，并立即以"已停止"结束它
   runTool(nodeId, agentId, { tool, arguments }, onOutput, signal): ToolResult
   prepareWorkspace(nodeId, agentId): ToolResult // 建工作目录和空的 MEMORY.md，可重复；离线时返回"节点离线"
-  status(nodeId): NodeStatusResult // 不存在的 node 以 unknown-node 拒绝
+  status(nodeId): NodeStatusResult
   nodes(): NodeStatusResult[] // 所有已配对 node，给管理界面用
   renameNode(nodeId, name) // 名字不合法为 invalid-input，被其他 node 占用为 name-taken，不存在为 unknown-node；原名不变
   createPairingToken(): { pairingToken, expiresAt } // 一次性令牌，只能配对一个新 node
@@ -414,12 +414,12 @@ type NodeStatusResult = {
 10. **违规的连接立即结束。** 未认证的连接最多 32 条，超出的直接关闭；单条消息按收到的序列化帧计不超过 1 MiB，超出的由 WebSocket 层关闭；无法解析、不认识的消息、认证前发别的消息、重复认证，网关回一个 `gateway.error` 后关闭连接，并且从这一刻起不再读取这条连接送来的任何东西，node 立即离线。心跳超时（TCP 没断但收不到数据也算）同样结束连接。
 
 **持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。网关的 node 注册表和配对令牌存在**控制库** `data/control.sqlite`，这个文件和 Web 外壳的登录、管理模块的 API key 共用：
-- 网关结构第 2 版在 `nodes` 中加入唯一且非空的 `name`、完整系统报告的 `system_json` 和报告时间 `reported_at`。迁移给已有 node 起名 `node-<UUID 前 8 位>`；前缀相同的按 UUID 排序，第二个起加 `-2`、`-3`。公钥、配对时间和上次连接时间保留，系统报告和报告时间为空，等下次新格式握手补齐。
 - 每个模块用 `@mate/control-store` 的 `openControlTables(dataDirectory, { module, migrations })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
 - 每个模块只建、只检查自己的表。结构版本记在 `schema_versions` 表里，每个模块一行（网关是 `gateway`）。模块的结构是一份 `Migrations`（`@mate/migrations`）：按版本递增的迁移列表。一个模块的版本比代码新、或不是列表里的版本，只有这个模块拒绝启动，抛出带文件路径的 `ControlStoreIncompatible`；别的模块照常打开。
 - 打开时在同一个事务里把模块带到最新版本：没有记录就跑完整个列表并插入一行；记录在列表里的某个版本，就只跑它之后的迁移并更新这一行。迁移中途失败，事务回滚，存储留在原来的版本，拒绝启动。第一条迁移的建表用不带 `IF NOT EXISTS` 的 `CREATE TABLE`，表名和别的模块撞了同样拒绝启动，不会两个模块悄悄共用一张表。
 - 文件由 `openControlTables` 以 0600 新建（SQLite 的 `-wal`、`-shm` 随主文件的权限），里面有密码哈希、登录会话和 API key；已有的文件不改权限。
 - 每条连接都用 WAL、`synchronous=FULL`、5 秒 busy timeout。WAL 让一个模块开着读事务时别的模块照常提交。`node:sqlite` 是同步的，一个不 await 的事务在进程里别的连接开始事务之前就已结束，所以同一进程里的几条连接从不互相等待。规则是**控制库的事务里不 await**；busy timeout 只给进程外的读写者（备份、`sqlite3` 命令行）留余地。
+- 网关结构第 2 版在 `nodes` 中加入唯一且非空的 `name`、完整系统报告的 `system_json` 和报告时间 `reported_at`。迁移给已有 node 起名 `node-<UUID 前 8 位>`；前缀相同的按 UUID 排序，第二个起加 `-2`、`-3`。公钥、配对时间和上次连接时间保留，系统报告和报告时间为空，等下次新格式握手补齐。
 
 **后台命令。** `bash` 带 `background: true` 时，runtime 在发起它的对话（主对话或工作助手）里建一个 Durable 后台任务，把这个任务的 ID 作为命令 ID 立即返回给模型。后台任务不让对话保持忙碌，也不随对话的 run 结束或被中止，所以 Agent 照常工作、照常空闲。这个任务把调用交给网关、等结果，步骤和 Durable 自己的工具任务一样：
 
@@ -463,7 +463,7 @@ interface Admin {
   setCredentials(provider, { apiKey, baseUrl? }) / deleteCredentials(provider)
   models() // 已存了 key 的提供商的模型目录，每个模型带它接受的 thinking 级别
   nodes() / createPairingToken() // 转给网关
-  renameNode(nodeId, name) // 转给网关；GatewayError 转成相同 reason 的 AdminError
+  renameNode(nodeId, name) // 转给网关；NodeGatewayError 转成相同 reason 的 AdminError
   close() // 关闭 Manager（所有 runtime），再关自己的控制库连接；网关和聊天 app 由 Web 外壳关闭
 }
 ```

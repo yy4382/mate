@@ -281,6 +281,9 @@ Agent Manager 看到的"工作区在哪里"：在一个 node 上为一个 Agent 
 **node 网关**（node gateway）
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
 
+**网关操作拒绝**（NodeGatewayError）
+`@mate/gateway` 对 node 操作的拒绝异常，带 `reason`，与线路上的 `gateway.error` 消息不同（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
+
 **工作区**（workspace）
 Agent 在 node 上的工作目录。Agent 在里面自由组织记忆、文件和脚本。
 
