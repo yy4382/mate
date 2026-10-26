@@ -128,6 +128,7 @@ export function connect(
             nodeId: options.identity.id,
             signature: signChallenge(options.identity, nonce),
             system: nodeSystem(),
+            workspaceVisits: true,
           });
           return;
         case "gateway.refused":
@@ -144,6 +145,7 @@ export function connect(
               signature: signChallenge(options.identity, nonce),
               pairingToken: options.pairingToken,
               system: nodeSystem(),
+              workspaceVisits: true,
             });
             return;
           }
@@ -174,7 +176,7 @@ export function connect(
           send({
             type: "node.tool.result",
             requestId: message.requestId,
-            ...executor.prepareWorkspace(message.agentId),
+            ...executor.prepareWorkspace(message.agentId, message.access),
           });
           return;
         case "gateway.browse":

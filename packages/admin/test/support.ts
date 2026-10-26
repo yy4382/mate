@@ -8,6 +8,7 @@ import type {
   GatewayBrowse,
   GatewayRunTool,
   NodeBrowseOutcome,
+  NodeAccess,
   NodeSystem,
   ToolResult,
 } from "@mate/node-protocol";
@@ -38,8 +39,9 @@ type Answer = { outputs: string[]; result: ToolResult };
 export type TestNode = {
   readonly nodeId: string;
   readonly node: FakeNode;
-  /** The Agents whose workspace it was asked to prepare. */
-  readonly prepared: string[];
+  /** The workspace preparations requested over the node protocol. */
+  readonly prepared: { agentId: string; access: NodeAccess }[];
+  answerPrepare: (agentId: string) => Promise<void>;
   readonly calls: GatewayRunTool[];
   /** Request IDs of the calls the gateway told it to stop. */
   readonly stopped: string[];
@@ -133,17 +135,19 @@ export async function environment(data = temporaryDirectory()) {
     /** Pair a new fake node with a token from `admin`, and wait until it is connected. */
     async pairNode(admin: Admin, system?: NodeSystem): Promise<TestNode> {
       const identity = newIdentity();
-      const prepared: string[] = [];
+      const prepared: { agentId: string; access: NodeAccess }[] = [];
       const calls: GatewayRunTool[] = [];
       const stopped: string[] = [];
       const browses: GatewayBrowse[] = [];
       const node = new FakeNode({
         gatewayUrl,
+        workspaceVisits: true,
         ...identity,
         pairingToken: admin.createPairingToken().pairingToken,
         ...(system === undefined ? {} : { system }),
-        onPrepareWorkspace: async (agentId) => {
-          prepared.push(agentId);
+        onPrepareWorkspace: async (agentId, access) => {
+          prepared.push({ agentId, access });
+          await test.answerPrepare(agentId);
         },
         onRunTool: (call) => {
           calls.push(call);
@@ -160,6 +164,7 @@ export async function environment(data = temporaryDirectory()) {
         nodeId: identity.nodeId,
         node,
         prepared,
+        answerPrepare: async () => {},
         calls,
         stopped,
         answer: async () => ({ outputs: [], result: ok("ok") }),

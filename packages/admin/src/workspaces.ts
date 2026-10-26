@@ -2,10 +2,6 @@ import type { NodeGateway } from "@mate/gateway";
 import type { WorkspaceHost } from "@mate/manager";
 import type { AdminStore } from "./store.ts";
 
-/**
- * Workspace preparation stays on the home node. Each tool call resolves its target and current access before
- * forwarding to the gateway, with the caller's signal to stop it there.
- */
 export function gatewayWorkspaces(
   gateway: Pick<NodeGateway, "nodes" | "prepareWorkspace" | "runTool">,
   store: AdminStore,

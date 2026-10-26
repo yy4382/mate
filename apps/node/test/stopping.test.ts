@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
@@ -226,6 +226,9 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
       (await node.run(agentId, "write", { path: "notes.txt", content: "x" })).isError,
       "file tools too",
     ).toBe(false);
+    expect(existsSync(memory)).toBe(false);
+    expect((await node.gateway.prepareWorkspace("prepare-existing", agentId)).isError).toBe(false);
+    expect(readFileSync(memory, "utf8")).toBe("");
   });
 
   it("exits instead of retrying when the gateway rejects its identity, with the status its service unit never restarts", async () => {

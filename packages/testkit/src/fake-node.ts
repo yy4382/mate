@@ -6,6 +6,7 @@ import {
   type NodeBrowseOutcome,
   type NodeRequest,
   type NodeSystem,
+  type NodeAccess,
   type ToolResult,
 } from "@mate/node-protocol";
 import { randomUUID } from "node:crypto";
@@ -23,11 +24,12 @@ export interface FakeNodeOptions {
   pairingToken?: string | undefined;
   /** Omitted for an older node that does not report system information. */
   system?: NodeSystem;
+  workspaceVisits?: true;
   onRunTool?: (msg: GatewayRunTool) => Promise<{
     outputs: string[];
     result: ToolResult;
   }>;
-  onPrepareWorkspace?: (agentId: string) => Promise<void>;
+  onPrepareWorkspace?: (agentId: string, access: NodeAccess) => Promise<void>;
   /** Called with the request ID of a call the gateway stopped. */
   onStopTool?: (requestId: string) => void;
   /** Answers a browse. Without it, the node never answers one. */
@@ -102,6 +104,7 @@ export class FakeNode {
         requestId: randomUUID(),
         nodeId: this.#options.nodeId,
         signature: sig,
+        ...(this.#options.workspaceVisits === true ? { workspaceVisits: true } : {}),
       };
       const system = this.#options.system;
       this.#ws?.send(JSON.stringify(system === undefined ? message : { ...message, system }));
@@ -124,6 +127,7 @@ export class FakeNode {
           publicKey,
           signature: this.#options.sign(challenge),
           pairingToken,
+          ...(this.#options.workspaceVisits === true ? { workspaceVisits: true } : {}),
         };
         const system = this.#options.system;
         this.#ws?.send(JSON.stringify(system === undefined ? message : { ...message, system }));
@@ -160,7 +164,7 @@ export class FakeNode {
     }
 
     if (msg.type === "gateway.prepare.workspace") {
-      void this.#handlePrepareWorkspace(msg.requestId, msg.agentId);
+      void this.#handlePrepareWorkspace(msg.requestId, msg.agentId, msg.access);
       return;
     }
 
@@ -194,9 +198,13 @@ export class FakeNode {
     });
   }
 
-  async #handlePrepareWorkspace(requestId: string, agentId: string): Promise<void> {
+  async #handlePrepareWorkspace(
+    requestId: string,
+    agentId: string,
+    access: NodeAccess,
+  ): Promise<void> {
     try {
-      await this.#options.onPrepareWorkspace?.(agentId);
+      await this.#options.onPrepareWorkspace?.(agentId, access);
       this.send({
         type: "node.tool.result",
         requestId,

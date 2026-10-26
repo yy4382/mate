@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Clock } from "@mate/clock";
 import {
@@ -7,6 +6,7 @@ import {
   type GatewayBrowse,
   type GatewayRunTool,
   type NodeBrowseOutcome,
+  type NodeAccess,
   type ToolResult,
 } from "@mate/node-protocol";
 import { browseWorkspace } from "./browse.ts";
@@ -29,11 +29,11 @@ export class Executor {
     onOutput: (chunk: string) => void,
     signal: AbortSignal,
   ): Promise<ToolResult> {
-    const home = call.access === "home";
-    const directory = home ? join(this.#root, call.agentId) : homedir();
-    // The only check before executing (ARCHITECTURE 4.5 rule 4). The node never recreates a missing workspace: its
-    // path is the Agent's, made only by preparing it.
-    if (home && !isDirectory(directory)) {
+    const directory = join(this.#root, call.agentId);
+    if (call.access === "visit") {
+      const prepared = this.prepareWorkspace(call.agentId, "visit");
+      if (prepared.isError) return prepared;
+    } else if (!isDirectory(directory)) {
       return failure(
         `The workspace ${directory} does not exist. The node does not recreate it; prepare the workspace again.`,
       );
@@ -41,7 +41,7 @@ export class Executor {
     if (call.tool !== "bash") return runFileTool(call.tool, call.arguments, directory, signal);
     const args = parseBashArguments(call.arguments);
     if (!args.ok) return failure(args.error);
-    const env = { ...process.env, PWD: directory, ...(home ? { HOME: directory } : {}) };
+    const env = { ...process.env, PWD: directory, HOME: directory };
     return this.#commands.run(
       {
         command: args.arguments.command,
@@ -67,13 +67,15 @@ export class Executor {
     return browseWorkspace(workspace, call.path);
   }
 
-  /** Create the Agent's workspace with an empty MEMORY.md; repeating it changes nothing. */
-  prepareWorkspace(agentId: string): ToolResult {
+  /** Prepare a workspace, initializing MEMORY.md only for home access. Existing files are preserved. */
+  prepareWorkspace(agentId: string, access: NodeAccess = "home"): ToolResult {
     const workspace = join(this.#root, agentId);
     try {
       mkdirSync(workspace, { recursive: true });
-      const memory = join(workspace, "MEMORY.md");
-      if (!existsSync(memory)) writeFileSync(memory, "", { flag: "wx" });
+      if (access === "home") {
+        const memory = join(workspace, "MEMORY.md");
+        if (!existsSync(memory)) writeFileSync(memory, "", { flag: "wx" });
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return failure(`Failed to prepare workspace: ${reason}`);

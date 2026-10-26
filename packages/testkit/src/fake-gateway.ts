@@ -158,10 +158,14 @@ export class FakeGateway {
   }
 
   /** Send a prepare-workspace message. */
-  prepareWorkspace(requestId: string, agentId: string): Promise<ToolResult> {
+  prepareWorkspace(
+    requestId: string,
+    agentId: string,
+    access: NodeAccess = "home",
+  ): Promise<ToolResult> {
     return new Promise((resolve, reject) => {
       this.#pendingToolCalls.set(requestId, { resolve, reject, onOutput: () => {} });
-      this.#send({ type: "gateway.prepare.workspace", requestId, agentId });
+      this.#send({ type: "gateway.prepare.workspace", requestId, agentId, access });
     });
   }
 

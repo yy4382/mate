@@ -27,7 +27,9 @@ describe("creating an Agent on a node", () => {
     env.post("Build it, @richard.", [account]);
     await env.provider.received(2);
 
-    expect(chosen.prepared, "the workspace is on the chosen node").toEqual([agentId]);
+    expect(chosen.prepared, "the workspace is on the chosen node").toEqual([
+      { agentId, access: "home" },
+    ]);
     expect(other.prepared, "and on no other").toEqual([]);
     await vi.waitFor(() => expect(chosen.calls.map((call) => call.agentId)).toEqual([agentId]));
     expect(other.calls, "no command ran elsewhere").toEqual([]);
