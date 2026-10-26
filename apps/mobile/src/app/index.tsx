@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router } from "expo-router";
+import { Redirect, router } from "expo-router";
 import { auth } from "../auth-native";
 import { useTheme } from "../theme";
 
@@ -165,12 +165,14 @@ function Message({ text }: { text: string }) {
   ) : null;
 }
 
-export default function HomeScreen() {
+export default function HomeScreen({ account = false }: { account?: boolean }) {
   const colors = useTheme();
   const state = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
   const [editingServer, setEditingServer] = useState(false);
   const server = "server" in state ? state.server : "";
   const clearing = state.kind === "clearing";
+
+  if (state.kind === "signed-in" && !account && !editingServer) return <Redirect href="/chat" />;
 
   return (
     <SafeAreaView style={styles.screen} edges={["left", "right", "bottom"]}>

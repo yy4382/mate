@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MobileAuth, type AuthPlatform } from "../src/auth";
+import { MobileAuth, type AuthPlatform } from "../src/auth.ts";
 
 const server = "https://mate.example.com";
 const human = { accountId: 7, handle: "sam", displayName: "小山", role: "member", active: true };

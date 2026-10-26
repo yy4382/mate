@@ -8,6 +8,12 @@
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     },
+    "./contracts": {
+      "react-native": "./src/contracts.ts",
+      "mate-source": "./src/contracts.ts",
+      "types": "./dist/src/contracts.d.ts",
+      "default": "./dist/src/contracts.js"
+    },
     "./push": {
       "react-native": "./src/push-contract.ts",
       "mate-source": "./src/push-contract.ts",

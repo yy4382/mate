@@ -1,13 +1,15 @@
+import { SentMessage, SendResult } from "./contracts.ts";
+export { SentMessage, HeldMessage, SendResult } from "./contracts.ts";
 import { z } from "zod";
 import { targetAccount, type Actor } from "./accounts.ts";
 import { READABLE_BY, requireWritable, type Conversation } from "./conversations.ts";
 import { idList, type ChatDatabase } from "./database.ts";
 import { Attachment, loadEntries, appendEntry } from "./entries.ts";
-import { FreshnessOptions, ReadPage, freshWrite } from "./forward-reading.ts";
+import { FreshnessOptions, freshWrite } from "./forward-reading.ts";
 import { Id, RequestId } from "./identifiers.ts";
 import { notifyMessage } from "./inbox.ts";
 import { TimelineRef, createTimeline, resolveTimeline } from "./timelines.ts";
-import { insertTask, TaskTitle, type Task } from "./tasks.ts";
+import { insertTask, TaskTitle } from "./tasks.ts";
 import type { Entry } from "./entries.ts";
 
 export const SendRequest = z.object({
@@ -27,23 +29,6 @@ export const SendRequest = z.object({
   createTask: z.object({ title: TaskTitle }).optional(),
   ...FreshnessOptions,
 });
-
-/** A message that reached the timeline. `task` is present when `createTask` was passed. */
-export const SentMessage = z.object({
-  status: z.literal("sent"),
-  conversationId: Id,
-  timeline: TimelineRef,
-  seq: z.number(),
-  messageId: Id,
-  task: z.object({ taskId: Id, title: z.string() }).nullable(),
-});
-export type SentMessage = z.output<typeof SentMessage>;
-
-/** A message blocked by the freshness check: the timeline had new entries the caller had not read. */
-export const HeldMessage = z.object({ status: z.literal("held"), page: ReadPage });
-
-export const SendResult = z.discriminatedUnion("status", [SentMessage, HeldMessage]);
-export type SendResult = z.output<typeof SendResult>;
 
 /** Send a message to `timeline`. One transaction: message, thread timeline (if top-level), task, and inbox events. */
 export function sendMessage(
