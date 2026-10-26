@@ -2,7 +2,7 @@ import { Stack, router } from "expo-router";
 import { useHuman } from "../../../admin/session";
 import { Button, Copy, Screen } from "../../../ui";
 import { useTheme } from "../../../theme";
-export const unstable_settings = { initialRouteName: "admin/agents/index" };
+export const unstable_settings = { initialRouteName: "agents/index" };
 export default function AgentsLayout() {
   const c = useTheme();
   if (useHuman()?.role !== "admin")
@@ -23,12 +23,9 @@ export default function AgentsLayout() {
         headerShadowVisible: false,
       }}
     >
-      <Stack.Screen
-        name="admin/agents/index"
-        options={{ title: "Agent", headerLargeTitle: true }}
-      />
-      <Stack.Screen name="admin/agents/create" options={{ title: "创建 Agent" }} />
-      <Stack.Screen name="admin/agents/[id]" options={{ title: "Agent 详情" }} />
+      <Stack.Screen name="agents/index" options={{ title: "Agent", headerLargeTitle: true }} />
+      <Stack.Screen name="agents/create" options={{ title: "创建 Agent" }} />
+      <Stack.Screen name="agents/[id]" options={{ title: "Agent 详情" }} />
     </Stack>
   );
 }

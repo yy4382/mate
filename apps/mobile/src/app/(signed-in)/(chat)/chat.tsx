@@ -3,7 +3,7 @@ import { useState } from "react";
 import { ActivityIndicator, ScrollView, View, RefreshControl } from "react-native";
 import { conversationLabel } from "../../../chat";
 import { useChat, useChatState } from "../../../session";
-import { Button, Caption, Empty, Row, styles } from "../../../ui";
+import { Button, Caption, Empty, Row, Segmented, styles } from "../../../ui";
 import { ConversationRow } from "../../../conversation-row";
 export default function Conversations() {
   const chat = useChat();
@@ -43,11 +43,11 @@ export default function Conversations() {
           <ActivityIndicator accessibilityLabel="正在读取聊天" />
         ) : (
           <>
-            <View style={styles.row}>
-              {(["全部", "未读", "提及"] as const).map((f) => (
-                <Button key={f} title={f} primary={filter === f} onPress={() => setFilter(f)} />
-              ))}
-            </View>
+            <Segmented
+              options={["全部", "未读", "提及"] as const}
+              value={filter}
+              onChange={setFilter}
+            />
             {state.connection !== "live" && (
               <Caption>
                 {state.connection === "connecting"
@@ -69,7 +69,7 @@ export default function Conversations() {
                     const title =
                       root?.kind === "message"
                         ? (root.body.split("\n")[0] ?? "").replace(/^#+\s*/, "").slice(0, 60)
-                        : `${t.latestSender}的回复`;
+                        : `${state.accounts.find((a) => a.handle === t.latestSender)?.displayName ?? t.latestSender}的回复`;
                     return (
                       <ConversationRow
                         key={JSON.stringify(t.timeline)}
@@ -116,7 +116,7 @@ export default function Conversations() {
                           title={conversationLabel(x, state.accounts, state.me)}
                           subtitle={
                             u?.unread
-                              ? `${u.latestSender} · 有未读消息`
+                              ? `${state.accounts.find((a) => a.handle === u.latestSender)?.displayName ?? u.latestSender} · 有未读消息`
                               : peer
                                 ? `${peer.kind === "agent" ? "Agent" : "人类"} · @${peer.handle}`
                                 : x.kind === "private"

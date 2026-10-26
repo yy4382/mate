@@ -17,7 +17,7 @@ export function AgentList() {
   return (
     <Screen onRefresh={agents.refresh} refreshing={agents.loading}>
       <Copy muted>每个 Agent 有自己的上下文和工作区。</Copy>
-      <Button title="创建 Agent" primary onPress={() => router.push("/admin/agents/create")} />
+      <Button title="创建 Agent" primary onPress={() => router.push("/agents/create")} />
       <ErrorLine error={agents.error} />
       <Loading loading={agents.loading && !agents.data} empty={agents.data?.length === 0} />
       {agents.data?.map((agent) => (
@@ -39,9 +39,7 @@ export function AgentList() {
           )}
           <Button
             title={`查看 ${agent.displayName ?? "Agent"}`}
-            onPress={() =>
-              router.push({ pathname: "/admin/agents/[id]", params: { id: agent.agentId } })
-            }
+            onPress={() => router.push({ pathname: "/agents/[id]", params: { id: agent.agentId } })}
           />
         </Card>
       ))}

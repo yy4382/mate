@@ -23,9 +23,9 @@ export default function AdminLayout() {
       }}
     >
       <Stack.Screen name="index" options={{ title: "管理" }} />
-      <Stack.Screen name="agents/index" options={{ title: "Agent" }} />
-      <Stack.Screen name="agents/create" options={{ title: "创建 Agent" }} />
-      <Stack.Screen name="agents/[id]" options={{ title: "Agent 详情" }} />
+      <Stack.Screen name="agents/index" options={{ headerShown: false }} />
+      <Stack.Screen name="agents/create" options={{ headerShown: false }} />
+      <Stack.Screen name="agents/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="providers" options={{ title: "模型提供商" }} />
       <Stack.Screen name="nodes" options={{ title: "Node" }} />
       <Stack.Screen name="humans" options={{ title: "人类" }} />
