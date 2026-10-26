@@ -10,7 +10,7 @@ export function Login({ next }: { next: string | null }) {
   const [busy, setBusy] = useState(false);
   return (
     <main className="grid min-h-dvh place-items-center p-4">
-      <Card className="w-full max-w-sm">
+      <Card className="w-full max-w-sm duration-[250ms]">
         <form
           onSubmit={async (event) => {
             event.preventDefault();

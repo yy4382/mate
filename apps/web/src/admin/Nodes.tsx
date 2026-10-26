@@ -153,7 +153,13 @@ function CopyBlock(props: { label: string; text: string; testId?: string }) {
           }
         }}
       >
-        {copied ? <Check aria-hidden className="text-success" /> : <Copy aria-hidden />}
+        {copied ? (
+          <span className="inline-flex transition-[opacity,scale] duration-150 ease-out-expo starting:opacity-0 motion-safe:starting:scale-95 motion-reduce:transition-opacity motion-reduce:duration-[120ms] [html[data-input=keyboard]_&]:transition-none">
+            <Check aria-hidden className="text-success" />
+          </span>
+        ) : (
+          <Copy aria-hidden />
+        )}
       </button>
     </div>
   );

@@ -22,18 +22,20 @@ import {
   Field,
   Input,
   PageHeader,
+  cx,
+  feedbackClass,
 } from "./ui.tsx";
 
 /** The saved note or error that sits in a form card's footer, next to its button. */
 function Outcome({ saved, error }: { saved: boolean; error: string | null }) {
   if (error !== null)
     return (
-      <p role="alert" className="text-sm text-danger">
+      <p role="alert" className={cx("text-sm text-danger", feedbackClass)}>
         {error}
       </p>
     );
   return saved ? (
-    <p role="status" className="text-sm text-muted">
+    <p role="status" className={cx("text-sm text-muted", feedbackClass)}>
       已保存
     </p>
   ) : (

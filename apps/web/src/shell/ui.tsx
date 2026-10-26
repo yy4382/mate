@@ -12,6 +12,10 @@ type Class = string | false | null | undefined;
 /** Joins class names, skipping the falsy ones; a later class wins over an earlier one it conflicts with, so a caller's `className` overrides the primitive's own. */
 export const cx = (...parts: Class[]): string => twMerge(parts.filter(Boolean).join(" "));
 
+const enterClass =
+  "transition-[opacity,translate] ease-out-expo starting:opacity-0 motion-reduce:transition-opacity motion-reduce:duration-[120ms] [html[data-input=keyboard]_&]:transition-none";
+export const feedbackClass = cx(enterClass, "duration-150 motion-safe:starting:translate-y-1");
+
 // Buttons
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
@@ -41,7 +45,7 @@ export function buttonClass(
 ): string {
   const { variant = "secondary", size = "md", className } = options;
   return cx(
-    "inline-flex shrink-0 cursor-pointer select-none items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium no-underline transition-colors disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+    "inline-flex shrink-0 cursor-pointer select-none items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium no-underline transition-[color,background-color,border-color,scale] duration-150 ease-out-expo motion-safe:active:scale-97 motion-safe:active:duration-0 disabled:pointer-events-none disabled:opacity-50 [html[data-input=keyboard]_&]:transition-none [html[data-input=keyboard]_&]:active:scale-100 motion-reduce:transition-[color,background-color,border-color] [&_svg]:size-4 [&_svg]:shrink-0",
     buttonVariants[variant],
     buttonSizes[size],
     className,
@@ -61,7 +65,7 @@ export function Button({
 // Form controls
 
 const controlClass =
-  "h-9 w-full rounded-md border border-border-strong bg-background px-3 text-sm font-normal text-foreground placeholder:text-muted focus-visible:border-accent focus-visible:outline-offset-0 disabled:opacity-50";
+  "h-9 w-full rounded-md border border-border-strong bg-background px-3 text-sm font-normal text-foreground placeholder:text-muted transition-colors duration-150 focus-visible:border-accent focus-visible:outline-offset-0 focus-visible:transition-none disabled:opacity-50 [html[data-input=keyboard]_&]:transition-none";
 
 export function Input({ className, ...rest }: ComponentProps<"input">) {
   return <input className={cx(controlClass, className)} {...rest} />;
@@ -118,7 +122,7 @@ export function Field(props: {
       </label>
       {props.hint === undefined ? null : <p className="text-xs text-muted">{props.hint}</p>}
       {props.error === undefined ? null : (
-        <p className="text-xs text-danger" role="alert">
+        <p className={cx("text-xs text-danger", feedbackClass)} role="alert">
           {props.error}
         </p>
       )}
@@ -131,7 +135,12 @@ export function Field(props: {
 export function Card({ className, ...rest }: ComponentProps<"div">) {
   return (
     <div
-      className={cx("overflow-hidden rounded-lg border border-border bg-background", className)}
+      className={cx(
+        "overflow-hidden rounded-lg border border-border bg-background",
+        enterClass,
+        "duration-[220ms] motion-safe:starting:translate-y-2",
+        className,
+      )}
       {...rest}
     />
   );
@@ -259,9 +268,15 @@ export function Avatar({
 
 // Dialogs
 
-const backdropClass = "fixed inset-0 z-40 bg-backdrop";
-const dialogPopupClass =
-  "fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-xl border border-border bg-background p-6 shadow-lg outline-none";
+const popupTransitionClass =
+  "transition-[opacity,scale] ease-out-expo motion-reduce:transition-opacity [html[data-input=keyboard]_&]:transition-none";
+const backdropClass =
+  "fixed inset-0 z-40 bg-backdrop transition-opacity duration-200 ease-out-expo [html[data-input=keyboard]_&]:transition-none";
+const dialogPopupClass = cx(
+  "fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-xl border border-border bg-background p-6 shadow-lg outline-none",
+  popupTransitionClass,
+  "duration-200",
+);
 
 /** A dialog that is open while it is mounted: render it conditionally and close it from `onClose`. */
 export function Dialog(props: {
@@ -278,8 +293,10 @@ export function Dialog(props: {
       }}
     >
       <BaseDialog.Portal>
-        <BaseDialog.Backdrop className={backdropClass} />
-        <BaseDialog.Popup className={dialogPopupClass}>
+        <BaseDialog.Backdrop className={cx(backdropClass, "starting:opacity-0")} />
+        <BaseDialog.Popup
+          className={cx(dialogPopupClass, "starting:opacity-0 motion-safe:starting:scale-98")}
+        >
           <div className="flex items-start justify-between gap-4">
             <div className="grid gap-1">
               <BaseDialog.Title className="text-base font-semibold">{props.title}</BaseDialog.Title>
@@ -319,8 +336,18 @@ export function ConfirmDialog(props: {
   return (
     <AlertDialog.Root open={props.open} onOpenChange={props.onOpenChange}>
       <AlertDialog.Portal>
-        <AlertDialog.Backdrop className={backdropClass} />
-        <AlertDialog.Popup className={dialogPopupClass}>
+        <AlertDialog.Backdrop
+          className={cx(
+            backdropClass,
+            "data-starting-style:opacity-0 data-ending-style:opacity-0 data-ending-style:duration-100",
+          )}
+        />
+        <AlertDialog.Popup
+          className={cx(
+            dialogPopupClass,
+            "data-starting-style:opacity-0 data-ending-style:opacity-0 data-ending-style:duration-100 motion-safe:data-starting-style:scale-98 motion-safe:data-ending-style:scale-98",
+          )}
+        >
           <AlertDialog.Title className="text-base font-semibold">{props.title}</AlertDialog.Title>
           <AlertDialog.Description className="mt-1 text-sm text-muted">
             {props.description}
@@ -373,7 +400,13 @@ export function Menu(props: {
           sideOffset={4}
           className="z-50"
         >
-          <BaseMenu.Popup className="min-w-44 rounded-lg border border-border bg-background p-1 shadow-md outline-none">
+          <BaseMenu.Popup
+            className={cx(
+              "min-w-44 rounded-lg border border-border bg-background p-1 shadow-md outline-none",
+              popupTransitionClass,
+              "origin-(--transform-origin) duration-150 data-starting-style:opacity-0 data-ending-style:opacity-0 data-ending-style:duration-100 data-instant:transition-none motion-safe:data-starting-style:scale-97 motion-safe:data-ending-style:scale-97",
+            )}
+          >
             {props.children}
           </BaseMenu.Popup>
         </BaseMenu.Positioner>
@@ -429,16 +462,17 @@ export function Tabs(props: {
       onValueChange={(value) => props.onValueChange(String(value))}
       className={props.className}
     >
-      <BaseTabs.List className="flex gap-1 border-b border-border">
+      <BaseTabs.List className="relative flex gap-1 border-b border-border">
         {props.items.map((item) => (
           <BaseTabs.Tab
             key={item.value}
             value={item.value}
-            className="-mb-px inline-flex h-9 cursor-pointer items-center border-b-2 border-transparent px-3 text-sm text-muted hover:text-foreground data-active:border-foreground data-active:text-foreground"
+            className="-mb-px inline-flex h-9 cursor-pointer items-center border-b-2 border-transparent px-3 text-sm text-muted transition-colors duration-150 hover:text-foreground data-active:text-foreground [html[data-input=keyboard]_&]:transition-none"
           >
             {item.label}
           </BaseTabs.Tab>
         ))}
+        <BaseTabs.Indicator className="pointer-events-none absolute bottom-0 left-0 h-0.5 w-(--active-tab-width) translate-x-(--active-tab-left) bg-foreground transition-[translate] duration-180 ease-out-expo motion-reduce:transition-none [html[data-input=keyboard]_&]:transition-none" />
       </BaseTabs.List>
       {props.children}
     </BaseTabs.Root>
@@ -465,7 +499,13 @@ export function PageHeader(props: {
   badge?: ReactNode;
 }) {
   return (
-    <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <header
+      className={cx(
+        "flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between",
+        enterClass,
+        "duration-180 motion-safe:starting:translate-y-1",
+      )}
+    >
       <div className="flex min-w-0 items-start gap-3">
         {props.leading}
         <div className="grid min-w-0 gap-1">
@@ -493,7 +533,13 @@ export function EmptyState(props: {
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border-strong px-6 py-10 text-center">
+    <div
+      className={cx(
+        "flex flex-col items-center gap-3 rounded-lg border border-dashed border-border-strong px-6 py-10 text-center",
+        enterClass,
+        "duration-200 motion-safe:starting:translate-y-2",
+      )}
+    >
       {props.icon === undefined ? null : (
         <span aria-hidden className="text-muted [&_svg]:size-6">
           {props.icon}
@@ -512,7 +558,10 @@ export function EmptyState(props: {
 
 export function Notice({ children }: { children: ReactNode }) {
   return (
-    <p role="status" className="rounded-md border border-border bg-subtle px-3 py-2 text-sm">
+    <p
+      role="status"
+      className={cx("rounded-md border border-border bg-subtle px-3 py-2 text-sm", feedbackClass)}
+    >
       {children}
     </p>
   );
@@ -520,7 +569,7 @@ export function Notice({ children }: { children: ReactNode }) {
 
 export function ErrorLine({ error }: { error: unknown }) {
   return error === null || error === undefined ? null : (
-    <p className="text-sm text-danger" role="alert">
+    <p className={cx("text-sm text-danger", feedbackClass)} role="alert">
       {describe(error)}
     </p>
   );
