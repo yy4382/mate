@@ -1,9 +1,9 @@
 import type { AgentView, CatalogModel, NodeStatusResult } from "@mate/admin";
 import { router } from "expo-router";
-import { useState } from "react";
 import { ApiError } from "./client";
+import { emptyAgentDraft, useAgentCreationDraft } from "./creation";
 import { useClient, useOperation, useResource } from "./session";
-import { emptySettings, settingsBody, SettingsFields } from "./settings";
+import { settingsBody, SettingsFields } from "./settings";
 import { Button, Card, Copy, ErrorLine, Field, Loading, Outcome, Screen, Select } from "./ui";
 
 export const stateLabel: Record<AgentView["state"], string> = {
@@ -55,11 +55,9 @@ export function CreateAgent() {
   const nodes = useResource<NodeStatusResult[]>("/api/admin/nodes");
   const models = useResource<CatalogModel[]>("/api/admin/models");
   const operation = useOperation();
-  const [displayName, setDisplayName] = useState("");
-  const [handle, setHandle] = useState("");
-  const [nodeId, setNodeId] = useState("");
-  const [settings, setSettings] = useState(emptySettings);
-  const [unfinished, setUnfinished] = useState<string>();
+  const [draft, update] = useAgentCreationDraft();
+  const { displayName, handle, nodeId, settings, unfinished } = draft;
+  const busy = operation.busy || draft.pending;
   const node = nodes.data?.length === 1 ? nodes.data[0]?.nodeId : nodeId;
   return (
     <Screen>
@@ -68,16 +66,16 @@ export function CreateAgent() {
         <Field
           label="显示名"
           value={displayName}
-          onChangeText={setDisplayName}
-          editable={!operation.busy}
+          onChangeText={(displayName) => update((draft) => ({ ...draft, displayName }))}
+          editable={!busy}
           maxLength={256}
         />
         <Field
           label="Handle"
           hint="登录名与 @ 名字，不能含空格。"
           value={handle}
-          onChangeText={setHandle}
-          editable={!operation.busy}
+          onChangeText={(handle) => update((draft) => ({ ...draft, handle }))}
+          editable={!busy}
           maxLength={256}
         />
         <ErrorLine error={nodes.error} />
@@ -92,12 +90,12 @@ export function CreateAgent() {
           <Select
             label="主 Node"
             value={node ?? ""}
-            disabled={operation.busy}
+            disabled={busy}
             options={(nodes.data ?? []).map((n) => ({
               value: n.nodeId,
               label: `${n.name}（${n.online ? "在线" : "离线"}）`,
             }))}
-            onChange={setNodeId}
+            onChange={(nodeId) => update((draft) => ({ ...draft, nodeId }))}
           />
         )}
         {models.data?.length === 0 ? (
@@ -109,22 +107,21 @@ export function CreateAgent() {
           <SettingsFields
             models={models.data ?? []}
             value={settings}
-            disabled={operation.busy}
+            disabled={busy}
             onChange={(next) => {
               operation.reset();
-              setSettings(next);
+              update((draft) => ({ ...draft, settings: next }));
             }}
           />
         )}
         <Outcome operation={operation} />
         {unfinished && <Copy muted>创建中断，继续时保留同一个 Agent ID。</Copy>}
         <Button
-          title={operation.busy ? "正在创建…" : unfinished ? "继续创建" : "创建"}
+          title={busy ? "正在创建…" : unfinished ? "继续创建" : "创建"}
           primary
-          disabled={
-            operation.busy || !node || !settings.model || !displayName.trim() || !handle.trim()
-          }
+          disabled={busy || !node || !settings.model || !displayName.trim() || !handle.trim()}
           onPress={() => {
+            update((draft) => ({ ...draft, pending: true }));
             void operation
               .run(async () => {
                 try {
@@ -135,9 +132,13 @@ export function CreateAgent() {
                     handle: handle.trim(),
                     settings: settingsBody(settings, models.data ?? []),
                   });
+                  update(() => emptyAgentDraft);
                 } catch (cause) {
-                  if (cause instanceof ApiError && cause.agentId) setUnfinished(cause.agentId);
+                  if (cause instanceof ApiError && cause.agentId)
+                    update((draft) => ({ ...draft, unfinished: cause.agentId }));
                   throw cause;
+                } finally {
+                  update((draft) => ({ ...draft, pending: false }));
                 }
               }, "Agent 已创建。")
               .then((ok) => {

@@ -1,7 +1,8 @@
 import { describe, expect, it, onTestFinished } from "vitest";
+import type { Admin, AgentView } from "@mate/admin";
 import { HumanView } from "@mate/auth";
 import { MobileAuth } from "../src/auth";
-import { ManagementClient } from "../src/admin/client";
+import { ApiError, ManagementClient } from "../src/admin/client";
 import { environment, PASSWORD } from "../../control-plane/test/support.ts";
 
 async function mobile() {
@@ -31,7 +32,7 @@ async function mobile() {
   if (session.kind !== "signed-in") throw new Error("native session failed to log in");
   const client = new ManagementClient(auth, session, network, network);
   onTestFinished(() => client.close());
-  return { auth, client, session };
+  return { auth, client, session, site };
 }
 
 describe("native management against the control plane HTTP interface", () => {
@@ -50,6 +51,48 @@ describe("native management against the control plane HTTP interface", () => {
       status: 400,
       reason: "invalid-input",
     });
+  });
+
+  it("finishes an interrupted create with its returned ID instead of creating another account", async () => {
+    const { client, site } = await mobile();
+    const admin = site.browser();
+    await admin.logInAdmin();
+    let broken = true;
+    const nodeId = await site.pairNode(admin, {
+      onPrepareWorkspace: async () => {
+        if (broken) throw new Error("disk full");
+      },
+    });
+    await client.request("/api/admin/providers/openai/credentials", "PUT", {
+      apiKey: "disposable-test-key",
+    });
+    const input: Parameters<Admin["createAgent"]>[0] = {
+      nodeId,
+      displayName: "Recoverable",
+      handle: "recoverable",
+      settings: { model: { provider: "openai", modelId: "gpt-4.1" } },
+    };
+    const failed = await client
+      .request("/api/admin/agents", "POST", input)
+      .catch((error: unknown) => error);
+    expect(failed).toMatchObject({
+      status: 500,
+      reason: "creation-failed",
+      agentId: expect.any(String),
+    });
+    if (!(failed instanceof ApiError)) throw failed;
+    expect(await client.request<AgentView[]>("/api/admin/agents")).toEqual([]);
+    broken = false;
+    await expect(client.request("/api/admin/agents", "POST", input)).rejects.toMatchObject({
+      status: 409,
+      reason: "handle-taken",
+    });
+    expect(
+      await client.request("/api/admin/agents", "POST", { ...input, agentId: failed.agentId }),
+    ).toEqual({ agentId: failed.agentId });
+    expect(await client.request<AgentView[]>("/api/admin/agents")).toEqual([
+      expect.objectContaining({ agentId: failed.agentId, handle: "recoverable", state: "open" }),
+    ]);
   });
 
   it("persists native profile and password changes while preserving the current cookie session", async () => {
