@@ -147,9 +147,9 @@ interface ChatApp {
   ensureAccount({ externalId, displayName, handle, kind }): AccountId
   listAccounts(): AccountView[] // 只读；每个账号（停用的也列出）的 accountId、handle、displayName、kind、active、avatarVersion
   // 外壳鉴权后的账号管理操作。png 是 base64 PNG，null 恢复默认；按账号和 requestId 幂等
-  setAccountAvatar(account, { requestId, png }): AccountView
+  setAccountAvatar(account, { requestId, png }): Promise<AccountView>
   // 读取当前图片，停用账号的图片仍可读取；没有头像时为 undefined
-  accountAvatar(account): { version, png: Uint8Array } | undefined
+  accountAvatar(account): { version, webp: Uint8Array } | undefined
   findAccount(externalId): AccountId | undefined // 只读；停用的账号也能找到。Manager 打开 Agent 时用它找账号，不另存账号 ID
   findHuman(handle): { accountId, externalId, active } | undefined // 只读；handle 不分大小写，只找人类账号（Agent 的 handle 找不到），停用的也找到。Web 外壳的登录用它从 handle 找到人类
   deactivateAccount(account, { requestId })
@@ -211,9 +211,9 @@ interface ChatApp {
    - 游标是一个不透明字符串，由**纪元**和事件 ID 组成，可以直接用作 SSE 的事件 ID。纪元在新建 `chat.sqlite` 时随机生成，之后不变：数据重置（换了新文件）后纪元不同，旧游标随之作废。
    - 事件保留一天，过期的在之后的写操作里删掉。游标的纪元不对、早于保留的事件、超前于库里最新的事件（例如恢复了旧备份）或者根本不是游标，`liveEvents` 都回答 `resnapshot`，客户端重新拉快照。恢复旧备份只在库里的事件追上客户端的游标之前能被发现；追上之后同一个纪元下的事件 ID 已经指向别的变化，所以恢复备份后应当让浏览器重新加载。
 
-**头像：** `account_avatars` 按账号 ID 保存一份 PNG 和它的 SHA-256 头像版本，账号视图只带 `avatarVersion`，没有图片时为 `null`。新增、替换、移除图片的触发器在同一事务中追加账号实时事件；重复上传相同内容不产生新事件。头像不随改名或停用丢失。写入要求目标账号存在且有效，角色权限由外壳检查。
+**头像：** `account_avatars` 按账号 ID 保存一份 WebP 和它的 SHA-256 头像版本，账号视图只带 `avatarVersion`，没有图片时为 `null`。新增、替换、移除图片的触发器在同一事务中追加账号实时事件；重复上传相同内容不产生新事件。头像不随改名或停用丢失。写入要求目标账号存在且有效，角色权限由外壳检查。
 
-聊天接口只接受最多 320 KiB、每边 1 至 256px 的 8-bit 非交错 RGB 或 RGBA PNG。解码前检查块边界、CRC、唯一 IHDR、尺寸、编码方式和 IEND，限制解压后的扫描线字节数；随后用 pngjs 解码并重新编码。颜色和文字元数据在解码前移除；SVG、动图块、截断、伪造尺寸和超量解压输入被拒绝，旧头像不变。HTTP 仍使用现有的 1 MiB JSON 请求体限制。
+聊天接口接受最多 320 KiB、每边 1 至 256px 的 PNG。先校验 base64 和字节上限，再由 sharp 限制输入像素数、检查格式和尺寸并完整解码，以质量 80 编码成静态 WebP，不保留上传元数据。非 PNG、无法解码或超出限制的输入被拒绝，旧头像不变。转换在数据库事务外异步完成；随后在同步事务内检查账号有效性，提交图片、版本、事件和回执。幂等指纹使用原始上传请求，同一请求并发提交也只保存一次。HTTP 仍使用现有的 1 MiB JSON 请求体限制。
 
 **持久化：** `data/chat.sqlite`，包括头像图片、推送订阅（带订阅它的账号）、推送队列和实时事件（带受众）。
 
@@ -523,7 +523,7 @@ interface Admin {
 - **路由。** 除了 `POST /api/login`（`{ handle, password, next? }`，回 `{ next }`：`next` 是站内 `/app` 下的路径时原样返回，否则是 `/app`）和 `POST /api/logout`，`/api/*` 都要登录，未登录回 401。页面请求：前端目录里存在的文件（脚本、样式、图标）不需要登录；`/` 跳到 `/app`；`/app` 及其下的页面未登录时跳到 `/login?next=<原地址>`；其余页面路径都回前端的 `index.html`，由前端路由。没有前端目录时页面回 404，API 照常工作。
   - `/api/chat/*` 一个路由对应聊天 app 的一个操作，账号固定为发出请求的人类自己的账号：每个人类读到全部会话，有自己的实时视图、未读摘要和推送订阅。读：`GET snapshot`（可带 `conversation=` 或 `thread=`）、`conversations`、`unread`、`history`（`conversation=`/`thread=`、`before`、`limit`）、`search?q=`。写都带浏览器生成的 `requestId`：`POST read`（读未读，推进这个人类的已读位置）、`messages`、`channels`、`dms`、`conversations/:id/join|leave|archive|invite`、`tasks`、`tasks/:id/change`。发送和任务操作总是关闭新鲜度检查（4.1 规则 2），请求里不接受这一项。推送：`GET push/key`（VAPID 公钥）、`POST push/subscribe`、`POST push/unsubscribe`。
   - `/api/me`：`GET` 回 `{ accountId, handle, displayName, role, active }`，`active` 表示人类账号是否有效；`PATCH { displayName, handle }` 改自己的名字（经聊天 app 的 `ensureAccount`，handle 被占用回 409 `handle-taken`）；`POST password { current, next }` 改自己的密码（`current` 不对回 403 `wrong-password`，`next` 至少 12 字节），自己其他的登录会话随之结束，当前这个保留。
-  - 头像：`PUT /api/me/avatar { requestId, png }` 改自己的头像；`PUT /api/accounts/:accountId/avatar { requestId, png }` 只允许管理员，目标可以是人类或 Agent。`png: null` 恢复默认。成功返回账号视图。`GET /api/accounts/:accountId/avatar?v=<avatarVersion>` 需登录，返回 `image/png`、`nosniff` 和 `private, max-age=31536000, immutable`，按内容版本 URL 在浏览器缓存一年，更换头像使用新 URL；无头像或版本已过时且未命中浏览器缓存时回 404。更换头像的权限仍在读取请求体之前检查，修改请求沿用同源和 JSON Content-Type 防护。
+  - 头像：`PUT /api/me/avatar { requestId, png }` 改自己的头像；`PUT /api/accounts/:accountId/avatar { requestId, png }` 只允许管理员，目标可以是人类或 Agent。`png: null` 恢复默认。成功返回账号视图。`GET /api/accounts/:accountId/avatar?v=<avatarVersion>` 需登录，返回 `image/webp`、`nosniff` 和 `private, max-age=31536000, immutable`，按内容版本 URL 在浏览器缓存一年，更换头像使用新 URL；无头像或版本已过时且未命中浏览器缓存时回 404。更换头像的权限仍在读取请求体之前检查，修改请求沿用同源和 JSON Content-Type 防护。
   - `/api/humans`（只有管理员）：`GET` 回每个人类的 `{ accountId, handle, displayName, role, active }`；`POST { requestId, handle, displayName, password, role }` 添加；`POST :accountId/role { role }`（结束那个人类所有的登录会话）、`POST :accountId/password { password }`（结束那个人类所有的登录会话）、`POST :accountId/deactivate`。
   - `/api/admin/*`（只有管理员）一个路由对应管理模块的一个操作：`GET|POST agents`、`POST agents/:id/pause|resume`、`DELETE agents/:id`、`PUT agents/:id/settings`、`PUT|DELETE agents/:id/nodes/:nodeId`（授权或收回，成功均为 204）、`GET agents/:id/assistants`、`GET agents/:id/events`（事件流，可带 `assistant=`）、`GET agents/:id/workspace?path=`、`GET providers`、`PUT|DELETE providers/:provider/credentials`、`GET models`、`GET nodes`、`PUT nodes/:id`（`{ name }`，改名字）、`POST pairing-tokens`。
   - **跨站防护。** 请求体必须声明 `content-type: application/json`（可带 charset），否则回 415 `unsupported-media-type`：别的站点的表单或不预检的 `fetch` 只能发 `text/plain` 之类，所以带着人类的 cookie 也伪造不出请求。带 `Origin` 头的非 GET 请求，`Origin` 的 host 必须等于请求的 `Host`，否则回 403 `cross-origin`（登录、退出也一样）；没有 `Origin`（脚本、curl）不是浏览器页面发的，放行。路径参数里不合法的百分号编码回 400 `invalid-input`。
@@ -533,7 +533,7 @@ interface Admin {
 
 **前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、账号视图、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。样式用 Tailwind CSS v4，对话框、菜单、标签页等交互组件用 Base UI，界面原语集中在 `src/shell/ui.tsx`；外观和交互规则见 [界面规范](DESIGN.md)。页面在 `/login` 和 `/app` 下：聊天（`/app`、`/app/c/…`）、搜索、个人资料（`/app/profile`：改头像、显示名和 handle、改密码、退出）、管理（`/app/admin/agents|providers|nodes|humans`，人类页让管理员添加人类、改角色、重置密码、停用）。当前人类来自 `GET /api/me`，导航据此显示名字和头像，普通人类不显示管理入口，直接打开管理地址显示"需要管理员权限"；当前人类自己的账号在实时流里变化时这份数据重新获取。`apps/web` 用 Vite 构建，`MATE_WEB_DIRECTORY` 指向构建产物（`apps/web/dist`）。
 
-- **账号视图只有一个缓存。** 外壳的 `accounts.ts` 持有共享账号查询，聊天快照和实时账号事件写入它；聊天、管理和个人资料都用 `AccountAvatar` 读取这份缓存。头像上传用 TanStack Query mutation，成功后的显示由实时事件推进，不另拉没有游标顺序的账号快照覆盖较新的事件。浏览器把最多 5 MiB 的 PNG、JPEG 或 WebP 居中裁剪并缩为最多 256px 的 PNG，再发送 base64 JSON。服务器仍独立验证全部图片字节。
+- **账号视图只有一个缓存。** 外壳的 `accounts.ts` 持有共享账号查询，聊天快照和实时账号事件写入它；聊天、管理和个人资料都用 `AccountAvatar` 读取这份缓存。头像上传用 TanStack Query mutation，成功后的显示由实时事件推进，不另拉没有游标顺序的账号快照覆盖较新的事件。浏览器把最多 5 MiB 的 PNG、JPEG 或 WebP 居中裁剪并缩为最多 256px 的 PNG，再发送 base64 JSON。服务器用 sharp 独立验证并转换为 WebP 后保存和提供给浏览器。
 - **管理操作按 node ID 提交，模型调用按名字选目标。** Node 页显示名字、在线状态和最近一次系统信息；没有报告时显示尚未收到。改名失败贴在名字字段下面，保存成功后同时刷新 node 和 Agent 查询。创建 Agent 的选择项显示名字，提交仍用 node ID；Agent 列表显示从网关读取的 `nodeName`。
 - **Agent 设置页列出全部已配对 node。** 主 node 固定可访问，其他 node 可逐个授权或收回；每行显示操作进度、成功或错误，成功后刷新 Agent 查询。授权操作独立于模型设置表单。
 - **每条时间线一个查询，条目按序号存放。** 重复或重放的实时事件落在同一个序号上，既不会多出一条消息，也不会让讨论串的回复数虚增（回复数是已见回复序号的集合）。实时事件只更新已经存在的时间线查询；一条时间线的第一页还在加载时到达的条目先暂存，页面到达后并进去。

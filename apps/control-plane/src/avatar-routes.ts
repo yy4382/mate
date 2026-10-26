@@ -23,8 +23,8 @@ export function avatarRoutes(chat: ChatApp): Route[] {
         if (avatar === undefined || query.get("v") !== avatar.version)
           throw new HttpError(404, "not-found");
         return {
-          bytes: avatar.png,
-          contentType: "image/png",
+          bytes: avatar.webp,
+          contentType: "image/webp",
           cacheControl: "private, max-age=31536000, immutable",
         };
       },

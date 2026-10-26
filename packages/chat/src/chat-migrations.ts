@@ -303,7 +303,7 @@ CREATE INDEX push_subscriptions_account ON push_subscriptions (account_id);
 CREATE TABLE account_avatars (
   account_id INTEGER PRIMARY KEY REFERENCES accounts (id),
   version TEXT NOT NULL,
-  png BLOB NOT NULL
+  webp BLOB NOT NULL
 ) STRICT;
 CREATE TRIGGER live_avatar_created AFTER INSERT ON account_avatars BEGIN
   INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'account', NEW.account_id);

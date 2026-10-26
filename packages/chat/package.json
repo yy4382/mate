@@ -16,11 +16,10 @@
   "dependencies": {
     "@mate/clock": "workspace:*",
     "@mate/migrations": "workspace:*",
-    "pngjs": "7.0.0",
+    "sharp": "0.35.5",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@mate/testkit": "workspace:*",
-    "@types/pngjs": "6.0.5"
+    "@mate/testkit": "workspace:*"
   }
 }

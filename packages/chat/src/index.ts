@@ -12,7 +12,13 @@ import {
   EnsureAccountInput,
   AccountView,
 } from "./accounts.ts";
-import { accountAvatar, setAccountAvatar, AvatarPng, type AccountAvatar } from "./avatars.ts";
+import {
+  accountAvatar,
+  setAccountAvatar,
+  normalizeAvatar,
+  AvatarPng,
+  type AccountAvatar,
+} from "./avatars.ts";
 import { ChatError, parseInput } from "./chat-error.ts";
 import {
   archiveChannel,
@@ -248,11 +254,15 @@ export class ChatApp {
   }
 
   /** The shell authorizes this account-management operation; null restores the default avatar. */
-  setAccountAvatar(account: number, request: z.input<typeof AvatarRequest>): AccountView {
+  async setAccountAvatar(
+    account: number,
+    request: z.input<typeof AvatarRequest>,
+  ): Promise<AccountView> {
     const id = parseInput(Id, account);
     const { requestId, png } = parseInput(AvatarRequest, request);
+    const webp = png === null ? null : await normalizeAvatar(png);
     return this.#once(id, requestId, { avatar: png }, AccountView, () =>
-      setAccountAvatar(this.#db, id, png),
+      setAccountAvatar(this.#db, id, webp),
     );
   }
 

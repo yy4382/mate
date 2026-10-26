@@ -68,7 +68,7 @@ describe("account avatar HTTP operations", () => {
     );
   });
 
-  it("serves validated PNG bytes, notifies other clients, replaces the URL, survives restart, and restores the default", async () => {
+  it("serves WebP bytes, notifies other clients, replaces the URL, survives restart, and restores the default", async () => {
     const env = environment();
     let site = await env.start();
     const admin = site.browser();
@@ -86,11 +86,12 @@ describe("account avatar HTTP operations", () => {
       headers: { cookie: admin.cookie! },
     });
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("content-type")).toBe("image/webp");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(response.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
     const bytes = Buffer.from(await response.arrayBuffer());
-    expect([...bytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    expect(bytes.toString("ascii", 0, 4)).toBe("RIFF");
+    expect(bytes.toString("ascii", 8, 12)).toBe("WEBP");
     const second = (await save(admin, "/api/me/avatar", blue, "replace")).json as AccountView;
     expect(second.avatarVersion).not.toBe(first.avatarVersion);
     expect(
@@ -145,7 +146,7 @@ describe("account avatar HTTP operations", () => {
     for (const png of [
       "not-base64",
       Buffer.from("<svg></svg>").toString("base64"),
-      red.slice(0, -8),
+      Buffer.from(red, "base64").subarray(0, 45).toString("base64"),
     ]) {
       expect((await save(admin, "/api/me/avatar", png, "invalid-file")).status).toBe(400);
     }

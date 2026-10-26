@@ -231,7 +231,7 @@ describe("uploading account avatars in the browser", () => {
     }
   });
 
-  it("normalizes JPEG and WebP uploads into square PNG pictures", async () => {
+  it("displays JPEG and WebP uploads as square WebP pictures", async () => {
     const site = await startSite();
     const { accountId } = await site.owner.get<{ accountId: number }>("/api/me");
     const { page } = await openApp(site, "/app/profile");
@@ -253,7 +253,7 @@ describe("uploading account avatars in the browser", () => {
       await page.getByText("头像已保存", { exact: true }).waitFor();
       const source = await renderedAvatar(page, accountId);
       const response = await page.request.get(site.origin + source);
-      expect(response.headers()["content-type"]).toBe("image/png");
+      expect(response.headers()["content-type"]).toBe("image/webp");
       expect(
         await page
           .locator(`img[src="${source}"]`)
