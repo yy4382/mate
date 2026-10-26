@@ -152,6 +152,7 @@ function fixture(clock?: Clock) {
       emit("events", batch);
     },
     emit,
+    chunk: (bytes: Uint8Array) => stream?.enqueue(bytes),
     failNextSend: () => {
       failSend = true;
     },
@@ -217,6 +218,29 @@ describe("native chat public interface", () => {
     await until(f.chat, (s) => s.connection === "live");
     expect(f.chat.timeline(f.ref).entries).toHaveLength(1);
     expect(entry.status).toBe("sent");
+  });
+  it("receives messages when CRLF and Chinese UTF-8 characters split across stream chunks", async () => {
+    const f = fixture();
+    await f.start();
+    await f.chat.load(f.ref);
+    const cursor = f.server.liveSnapshot(f.me, {}).cursor;
+    for (const body of ["跨块中文消息一", "跨块中文消息二"])
+      f.server.send(f.other, f.ref, { requestId: body, body, freshness: false });
+    const batch = f.server.liveEvents(f.me, cursor);
+    const frame = new TextEncoder().encode(
+      `: heartbeat\r\nevent: events\r\ndata: ${JSON.stringify(batch)}\r\n\r\n`,
+    );
+    for (const byte of frame) f.chunk(Uint8Array.of(byte));
+    await until(f.chat, (s) => s.timelines.get(`c${f.ref.conversation}`)?.entries.length === 2);
+    expect(f.chat.timeline(f.ref).entries.map((e) => e.kind === "message" && e.body)).toEqual([
+      "跨块中文消息一",
+      "跨块中文消息二",
+    ]);
+    expect(f.chat.getSnapshot()).toMatchObject({
+      connection: "live",
+      error: "",
+      unread: { total: 2 },
+    });
   });
   it("keeps thread and channel drafts independent and advances unread only when asked", async () => {
     const f = fixture();
