@@ -652,7 +652,7 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 | 6 | 一个 Agent 的工作区在哪个 node？ | 创建时选定主 node，ID 记在 Agent 文件里，之后不变。工作区和 MEMORY.md 只在主 node；经授权访问其他 node 时使用那个 node 账号的主目录 | 4.4、4.5 |
 | 7 | 要不要 Web Push 和附件？ | 要推送；聊天接口接受附件元数据，但附件文件的上传和存储还没有实现 | 4.1 |
 | 8 | 数据库结构变了怎么升级？ | 原地向前迁移：每个存储的结构是一串按版本递增的迁移；比代码新、或版本不在列表里的存储拒绝启动；已发布版本的存储夹具证明升级可行 | 第 6 节、4.5 |
-| 9 | 要不要 CI？ | 要。GitHub Actions 对每个 PR 和 main 各检查一次：`pnpm check` 和 `pnpm test:linux` 的内容拆成几个并行任务（格式与类型、node 和系统场景以外的测试、两片 `test:linux`、`mate-deploy` 的测试），node 套件另在 macOS 和 Windows 原生 runner 上运行，并用本机实际发布包验证服务；x64、arm64 Linux runner 构建镜像并运行部署冒烟，不发布产物。全部汇总成一个 `checks` 结果；`v*` 标签不重跑，等这个提交在 main 上的 `checks` 通过后发布镜像和 node 发布包，设了部署主机时再自动部署（失败回退到原版本和部署前的数据备份） | `.github/workflows/ci.yml` |
+| 9 | 要不要 CI？ | 要。GitHub Actions 对每个 PR 和 main 各检查一次：`pnpm check` 和 `pnpm test:linux` 的内容拆成几个并行任务（格式与类型、node 和系统场景以外的测试、两片 `test:linux`、`mate-deploy` 的测试），node 套件另在 macOS 和 Windows 原生 runner 上运行，并用本机实际发布包验证服务；发布构建任务构建两种 Linux 架构的镜像和 node 发布包，PR 和 main 跳过发布步骤，不运行部署冒烟。全部汇总成一个 `checks` 结果；`v*` 标签不重跑，等这个提交在 main 上的 `checks` 通过后发布镜像和 node 发布包，设了部署主机时再自动部署（失败回退到原版本和部署前的数据备份） | `.github/workflows/ci.yml` |
 | 10 | 几个人怎么共用？ | 每个人是一个人类账号，各有登录（handle 加密码）、名字、已读位置和推送。角色只有管理员和普通人类两种：角色和登录归外壳的 `humans` 表，名字和账号种类归聊天 app，两边靠 externalId 对上。任何时候至少有一个有效的管理员；第一个人类（管理员）由初始密码文件和初始 handle 在第一次启动时创建；原来的所有者升级后成为 handle 为 `owner` 的管理员 | 4.7、第 6 节 |
 | 11 | 怎样区分配对的机器，又不让改名影响身份？ | UUID 继续用于配对、认证、工具调用和 Agent 文件；网关保存唯一的 node 名字及 node 握手报告的系统信息，管理员只改名字。Agent 列表从网关现查名字 | 4.5、4.6、4.7、第 6 节 |
 | 12 | node 支持哪些平台，Windows 用什么 shell？ | Linux、macOS、Windows，分别支持 x64 和 arm64。平台表选择 shell、进程管理、服务、布局、权限和路径规则，公共安装与命令流程不复制。Windows 用自带的 PowerShell 5.1，进程树追踪范围见 4.5；macOS 和 Windows 由管理员手动安装，不加入 Linux 的自动部署 | 4.5、第 7 节、DEPLOYMENT §3.2 |

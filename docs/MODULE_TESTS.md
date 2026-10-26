@@ -485,7 +485,7 @@
 
 ## 13. 部署冒烟
 
-**边界：** 发布的东西本身：控制面镜像、`deploy/control-plane/` 的两个 Compose 文件、node 发布包。`pnpm smoke:deploy`（`deploy/smoke.ts`）需要 Docker，不在 `pnpm check` 里；CI 对每个 PR 和 main 在 x64、arm64 Linux runner 上运行，构建但不发布。也可以手动跑，或对已构建的镜像设 `MATE_SMOKE_IMAGE` 跑。
+**边界：** 发布的东西本身：控制面镜像、`deploy/control-plane/` 的两个 Compose 文件、node 发布包。`pnpm smoke:deploy`（`deploy/smoke.ts`）需要 Docker，不在 `pnpm check` 里，发布前手动跑，或对已构建的镜像设 `MATE_SMOKE_IMAGE` 跑。
 
 **替身：** 脚本化模型提供商跑在宿主上，容器经 `host.docker.internal` 和一个监听 `0.0.0.0` 的中继到达它。其余都是真的：用宿主账号的 UID/GID 起 Compose 项目，node 在普通的 Debian 13 容器里由发布包安装（systemctl 是只回答"未运行"的替身，同 §9），管理员的操作通过 HTTP 发出。
 
