@@ -17,6 +17,7 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="index" options={{ title: "Mate" }} />
+        <Stack.Screen name="(management)" options={{ headerShown: false }} />
       </Stack>
     </>
   );

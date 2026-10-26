@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { router } from "expo-router";
 import { auth } from "../auth-native";
 import { useTheme } from "../theme";
 
@@ -231,6 +232,10 @@ export default function HomeScreen() {
                       账号 ID：{state.human.accountId} · {state.human.active ? "有效" : "已停用"}
                     </Text>
                     <Button title="重新验证登录" secondary onPress={() => void auth.revalidate()} />
+                    <Button title="个人资料" onPress={() => router.push("/profile")} />
+                    {state.human.role === "admin" && (
+                      <Button title="管理" onPress={() => router.push("/admin")} />
+                    )}
                   </>
                 )}
                 {state.kind === "unavailable" && (

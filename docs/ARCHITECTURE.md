@@ -82,7 +82,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 | `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |
 | `apps/control-plane`（`@mate/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
 | `apps/web`（`@mate/web`） | Vite 网页客户端 |
-| `apps/mobile`（`@mate/mobile`） | Expo 原生移动客户端，当前只有启动页和导航入口 |
+| `apps/mobile`（`@mate/mobile`） | Expo 原生 iOS 客户端，包含认证、管理、Agent 观察和个人资料 |
 | `apps/node`（`@mate/node`） | node 进程和 `mate node` CLI |
 | `tests/system`（`@mate/system-tests`） | 起真实控制面和 node 进程的系统场景（MODULE_TESTS 第 12 节） |
 
@@ -538,13 +538,21 @@ interface Admin {
 
 网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑；API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
 
-移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前支持保存一个 HTTPS 服务器地址，用已有 handle 和密码登录、显示当前身份、恢复登录和退出。聊天、管理、分发与签名、原生推送仍未实现。
+移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前支持保存一个 HTTPS 服务器地址，用已有 handle 和密码登录、显示当前身份、恢复登录和退出，以及完整管理和个人资料。聊天、分发与签名、原生推送仍未实现。
 
 移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。启动和回到前台以 `GET /api/me` 验证 cookie；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
 
 退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问并清理全部 app cookie，切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
 
 `@mate/auth` 只拥有实际共享的认证契约 `Role`、`HumanView`、`LoginInput` 和 `LoginResult`。控制面、网页和移动端从同一处消费这些类型，移动端在网络边界用 schema 解析响应；控制面的 cookie、Origin 和路由行为保持不变。
+
+原生管理路由在 `apps/mobile/src/app/(management)`，功能在 `src/admin` 与 `src/profile`。管理员可创建 Agent，修改模型、思考级别和说明文字，暂停、恢复和删除 Agent，管理提供商 key 与接口地址，查看模型目录，生成和复制 Node 配对命令、改名、授权与收回访问，以及添加人类、修改角色、重置密码和永久停用。Agent 显示名与 Handle 没有独立修改端点，主 Node 创建后不变；人类停用后不提供重新启用。普通人类能修改自己的显示名、Handle 和密码，不能进入管理功能。服务端仍负责每次请求的角色检查。
+
+观察使用已有 SSE 接口，显示主对话或工作助手的 run 状态、排队输入、系统提示、上下文起点、文字与思考、工具参数和流式输出，以及模型和工具用量。断线显示错误并可重新连接，重新连接取得新的快照。工作区沿用只读浏览接口，支持目录、文本、二进制提示与截断说明，不新增写文件能力。
+
+`ManagementClient` 只给当前服务器和人类的这次登录发 cookie 请求。登录结束、前台重验或切换服务器时中止旧请求并丢弃迟到响应；查询缓存随这次登录关闭，不持久化管理数据。HTTP 401 和 SSE 的 `login` 事件要求认证模块重新验证。资料保存响应经 `HumanView` schema 解析，`MobileAuth.updateHuman(previous, human)` 只更新提交它的同一次登录，不重新清理 cookie；密码修改继续使用服务端保留当前会话的规则。
+
+请求状态用与网页同版本的 TanStack Query，SSE 分帧用 `eventsource-parser`，长表单的键盘滚动用 Expo 58 对应的 Keyboard Controller。对话记录和模型选项用 React Native `FlatList`；其余小表单用原生输入框、按钮和确认框，不生成表单 schema 或引入整体 UI 框架。管理数据的类型从 `@mate/admin` 推导，个人身份从 `@mate/auth` 取得，不复制服务端协议。
 
 当前不做折叠屏 iPhone Duo 的专用适配，不增加折叠状态处理或专用布局。
 
