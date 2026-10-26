@@ -330,7 +330,7 @@ export default function ConversationScreen() {
         {canWrite ? (
           <ScrollView
             testID="message-composer-panel"
-            style={{ flexGrow: 0, flexShrink: 1 }}
+            style={{ flexGrow: 0, flexShrink: 0, maxHeight: "65%" }}
             contentContainerStyle={{
               padding: 12,
               gap: 8,
