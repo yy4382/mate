@@ -1,5 +1,7 @@
+import { AgentCreationProvider } from "../admin/creation";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { AuthLifecycle } from "../lifecycle";
 import { NotificationIntegration } from "../notifications-root";
 import { useTheme } from "../theme";
 
@@ -7,7 +9,8 @@ export default function RootLayout() {
   const colors = useTheme();
 
   return (
-    <>
+    <AgentCreationProvider>
+      <AuthLifecycle />
       <NotificationIntegration />
       <StatusBar style="auto" />
       <Stack
@@ -19,8 +22,9 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="index" options={{ title: "Mate" }} />
-        <Stack.Screen name="notifications" options={{ title: "通知" }} />
+        <Stack.Screen name="(management)" options={{ headerShown: false }} />
+        <Stack.Screen name="notifications" options={{ title: "通知", headerBackTitle: "返回" }} />
       </Stack>
-    </>
+    </AgentCreationProvider>
   );
 }

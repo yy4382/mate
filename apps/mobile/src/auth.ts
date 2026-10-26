@@ -59,6 +59,12 @@ export class MobileAuth {
     };
   };
 
+  /** Accept a profile response only for the login that submitted it. */
+  updateHuman(previous: Extract<AuthState, { kind: "signed-in" }>, human: HumanView): void {
+    if (this.state !== previous || human.accountId !== previous.human.accountId) return;
+    this.publish({ ...previous, human });
+  }
+
   private publish(state: AuthState) {
     this.state = state;
     this.listeners.forEach((listener) => listener());
