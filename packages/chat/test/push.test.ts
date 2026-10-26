@@ -81,6 +81,79 @@ function post(
 }
 
 describe("3.8 push", () => {
+  it("native cancellation survives restart and rejects a late subscribe without disturbing a newer binding", async () => {
+    const f = ownerWithAgents([]);
+    const first = {
+      transport: "apns",
+      token: "ab".repeat(32),
+      environment: "sandbox",
+      binding: "11111111-1111-4111-8111-111111111111",
+    } as const;
+    f.app.unsubscribePush(f.owner, first);
+    f.app.close();
+    const app = f.open();
+    expect(refusalReason(() => app.subscribePush(f.owner, first))).toBe("invalid-input");
+    const next = { ...first, binding: "22222222-2222-4222-8222-222222222222" };
+    app.subscribePush(f.owner, next);
+    app.unsubscribePush(f.owner, first);
+    expect(refusalReason(() => app.subscribePush(f.owner, first))).toBe("invalid-input");
+    post(app, f.ada, dm(app, f.ada, f.owner), "only the new enrollment");
+    await f.service.received(1);
+    expect(f.service.requests.map((delivery) => delivery.subscription)).toEqual([next]);
+    app.close();
+  });
+
+  it("native cancellation is scoped to its account, token, environment and binding", async () => {
+    const { app, owner } = ownerWithAgents([]);
+    const first = {
+      transport: "apns",
+      token: "ab".repeat(32),
+      environment: "sandbox",
+      binding: "11111111-1111-4111-8111-111111111111",
+    } as const;
+    const other = app.ensureAccount({
+      externalId: "sam",
+      handle: "sam",
+      displayName: "Sam",
+      kind: "human",
+    });
+    app.unsubscribePush(owner, first);
+    expect(() => app.subscribePush(other, first)).not.toThrow();
+    expect(() => app.subscribePush(owner, { ...first, token: "cd".repeat(32) })).not.toThrow();
+    const production = { ...first, environment: "production" } as const;
+    expect(() => app.subscribePush(owner, production)).not.toThrow();
+    expect(() =>
+      app.subscribePush(owner, { ...first, binding: "22222222-2222-4222-8222-222222222222" }),
+    ).not.toThrow();
+    expect(refusalReason(() => app.subscribePush(owner, first))).toBe("invalid-input");
+    app.close();
+  });
+
+  it("a late invalid-token answer and an old unsubscribe cannot remove a newer native binding", async () => {
+    const { app, service, owner, ada } = ownerWithAgents([]);
+    const first = {
+      transport: "apns",
+      token: "ab".repeat(32),
+      environment: "sandbox",
+      binding: "11111111-1111-4111-8111-111111111111",
+    } as const;
+    const next = { ...first, binding: "22222222-2222-4222-8222-222222222222" };
+    app.subscribePush(owner, first);
+    service.answer(first.token, "hang");
+    const timeline = dm(app, ada, owner);
+    post(app, ada, timeline, "first registration");
+    await service.received(1);
+    app.subscribePush(owner, next);
+    app.unsubscribePush(owner, first);
+    service.release(410);
+    await settled();
+    const sent = post(app, ada, timeline, "new registration");
+    await service.received(2);
+    expect(service.requests[1]?.subscription).toEqual(next);
+    expect(service.requests[1]?.notice.messageId).toBe(sent.messageId);
+    app.close();
+  });
+
   it("an Agent's DM to the owner pushes to every subscription, pointing at the message without its body", async () => {
     const { app, clock, service, owner, ada } = ownerWithAgents(["phone", "laptop"]);
     const timeline = dm(app, ada, owner);
@@ -93,6 +166,7 @@ describe("3.8 push", () => {
     );
     for (const { notice } of service.requests) {
       expect(notice, "where the message is, and who wrote it").toEqual({
+        accountId: owner,
         tag: expect.any(String),
         messageId: sent.messageId,
         conversationId: sent.conversationId,

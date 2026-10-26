@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
+import { router } from "expo-router";
+import { useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
 import {
-  AppState,
   Keyboard,
   KeyboardAvoidingView,
   Pressable,
@@ -172,14 +172,6 @@ export default function HomeScreen() {
   const server = "server" in state ? state.server : "";
   const clearing = state.kind === "clearing";
 
-  useEffect(() => {
-    void auth.start();
-    const subscription = AppState.addEventListener("change", (value) => {
-      if (value === "active") void auth.revalidate();
-    });
-    return () => subscription.remove();
-  }, []);
-
   return (
     <SafeAreaView style={styles.screen} edges={["left", "right", "bottom"]}>
       <KeyboardAvoidingView style={styles.screen} behavior="padding" keyboardVerticalOffset={100}>
@@ -230,6 +222,11 @@ export default function HomeScreen() {
                     <Text style={[styles.description, { color: colors.muted }]}>
                       账号 ID：{state.human.accountId} · {state.human.active ? "有效" : "已停用"}
                     </Text>
+                    <Button
+                      title="通知设置"
+                      secondary
+                      onPress={() => router.push("/notifications")}
+                    />
                     <Button title="重新验证登录" secondary onPress={() => void auth.revalidate()} />
                   </>
                 )}

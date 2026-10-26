@@ -7,6 +7,26 @@ import { ChatApp, ChatStoreIncompatible } from "../src/index.ts";
 import { FakePushService, openAppAt, rid } from "./support.ts";
 
 describe("the chat store opened by newer code (MODULE_TESTS 3.10)", () => {
+  it("delivers the Web Push notices already queued by the released store without writing new messages", async () => {
+    const { dataDirectory, facts } = storeFixture("v0.1.0-alpha.2");
+    const clock = new FakeClock(Date.UTC(2100, 0, 1));
+    const service = new FakePushService(clock);
+    const app = openAppAt(join(dataDirectory, "chat.sqlite"), { clock, push: service.send });
+    const owner = app.findAccount("owner")!;
+    const expected = app
+      .inboxEvents(owner)
+      .filter((event) => event.direct || event.mentionsYou)
+      .map((event) => event.messageId);
+    expect(expected).toHaveLength(3);
+    await service.received(expected.length);
+    expect(service.requests.map((request) => request.notice.messageId).sort()).toEqual(
+      expected.sort(),
+    );
+    expect(service.requests.every((request) => request.notice.accountId === owner)).toBe(true);
+    expect(new Set(service.endpoints())).toEqual(new Set([facts.pushEndpoint]));
+    app.close();
+  });
+
   it("keeps the accounts, conversations, messages, thread, task and the owner's unread summary of a v0.1.0-alpha.2 store", () => {
     const { dataDirectory, facts } = storeFixture("v0.1.0-alpha.2");
     const app = openAppAt(join(dataDirectory, "chat.sqlite"));

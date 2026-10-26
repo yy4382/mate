@@ -14,6 +14,7 @@ import { Humans, bootstrapHumans, SESSION_TTL_MS, type Session } from "./humans.
 import { vapidKeys, webPushSender } from "./push.ts";
 import { adminRoutes, chatRoutes, matchRoute, requireRole } from "./routes.ts";
 import { openShellTables } from "./store.ts";
+import { openApns, type ApnsOptions } from "./apns.ts";
 
 /** `__Host-` makes the browser accept the cookie only from this origin, over HTTPS, for every path. */
 const SESSION_COOKIE = "__Host-mate_session";
@@ -39,6 +40,7 @@ export type ControlPlaneOptions = {
   readonly clock?: Clock | undefined;
   /** Replaces Web Push delivery, for tests. */
   readonly push?: PushSender | undefined;
+  readonly apns?: ApnsOptions | undefined;
 };
 
 export type ControlPlane = {
@@ -61,10 +63,19 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
     closers.push(() => store.close());
     const humans = new Humans(store, clock);
     const keys = vapidKeys(store);
+    const apns = options.apns && openApns(options.apns, () => clock.now());
+    if (apns) closers.push(() => apns.close());
+    const web = webPushSender(keys, options.vapidSubject ?? "mailto:owner@mate.invalid");
     const chat = new ChatApp(join(dataDirectory, "chat.sqlite"), {
       clock,
       push:
-        options.push ?? webPushSender(keys, options.vapidSubject ?? "mailto:owner@mate.invalid"),
+        options.push ??
+        ((subscription, notice) =>
+          subscription.transport === "apns"
+            ? apns
+              ? apns.send(subscription, notice)
+              : Promise.resolve(503)
+            : web(subscription, notice)),
     });
     closers.push(() => chat.close());
     await bootstrapHumans(humans, chat, {
@@ -83,7 +94,7 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
     closers.push(() => admin.close());
 
     const routes = [
-      ...chatRoutes(chat, keys.publicKey),
+      ...chatRoutes(chat, keys.publicKey, options.apns),
       ...humanRoutes(chat, humans),
       ...adminRoutes(admin),
     ];

@@ -105,7 +105,10 @@ Mate 内置的类 Slack 聊天系统。它不知道 runtime 和模型的存在�
 `liveEvents` 对一个无法接着读的游标的回答：纪元不同、早于保留的事件、超前于库里最新的事件，或者根本不是游标。客户端收到后重新取实时快照。
 
 **推送订阅**（push subscription）
-某个人类账号的一个浏览器的 Web Push 订阅：endpoint 加 `p256dh`、`auth` 两个密钥，连同订阅它的账号，存在 `chat.sqlite` 里，以 endpoint 为键。推送只推给订阅所属账号自己的通知；另一个人类账号再订阅同一个 endpoint，订阅就归到它名下。
+某个人类账号的一个浏览器或原生 app 的推送登记，存在 `chat.sqlite`。Web Push 用 endpoint 与 `p256dh`、`auth` 密钥；APNs 用原生 token、环境和登记 binding。自然键是 Web endpoint 或 APNs 环境与 token，不把原生 token 当成 URL。换账号时清掉旧队列，之后只推新账号自己的通知。
+
+**原生登记 binding**
+移动 app 每次为一个服务器与账号开启通知时生成的随机 UUID。它随 APNs 订阅和通知数据传递；点击必须匹配当前登记，退出前旧的点击响应失效。token 轮换生成新 binding；同一 token 的未取消登记重试沿用 binding。取消记录按账号、token、环境与 binding 持久保存，已取消的登记不能由迟到的订阅请求恢复。
 
 **推送队列**（push queue）
 还没送达的推送，每条是"一条消息推给一个推送订阅"。在消息提交的同一个事务里追加，由聊天 app 的投递循环按到期时间投递；暂时失败时等待翻倍后重试，重启后照原计划继续。
@@ -114,7 +117,7 @@ Mate 内置的类 Slack 聊天系统。它不知道 runtime 和模型的存在�
 一次推送带的东西：定位和显示一条消息所需的信息（会话、时间线、序号、发送者、发送时间等），不含正文。同一条消息的每次投递 `tag` 相同。
 
 **推送发送器**（PushSender）
-调用方交给聊天 app 的端口：把一份推送内容发给一个推送订阅，返回推送服务的 HTTP 状态码，连不上时抛错。Web 外壳用 VAPID 密钥实现它。
+调用方交给聊天 app 的端口：把一份推送内容发给一个推送订阅，返回推送服务的 HTTP 状态码，连不上时抛错。Web 外壳分别用 VAPID 和 APNs provider 实现它，共用聊天 app 的投递队列。
 
 **requestId**
 调用方为一次操作生成的稳定 ID。接收方按它去重：同一个 ID 只生效一次，重复调用返回第一次的结果。Agent 的聊天工具调用用 Durable 的工具调用 ID 作为 requestId；人类的网页请求由浏览器生成。node 工具调用没有调用方的 requestId：网关为每次调用生成自己的请求 ID，只用来对应输出、结果和停止。
@@ -335,7 +338,7 @@ node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 
 ## 共用基础
 
 **移动客户端**（mobile client）
-`apps/mobile` 的 Expo 原生 iOS 客户端，最低支持 iOS 27，与 `apps/web` 的网页客户端面向同一个控制面。当前只有启动页与导航入口，尚未接入聊天、管理或通知。
+`apps/mobile` 的 Expo 原生 iOS 客户端，最低支持 iOS 27，与 `apps/web` 面向同一个控制面。认证和推送通知分别由 `MobileAuth` 与 `MobileNotifications` 持有。
 
 **时钟**（clock）
 `@mate/clock` 里的 `Clock`：读当前时间（`now`），以及睡到某个时长或某个 `AbortSignal` 中止为止（`sleep`）。所有需要时间或定时器的模块都通过它，而不是直接调用 `Date.now` 或 `setTimeout`；一个定时器就是一次带自己 signal 的 `sleep`，中止 signal 就是取消它。测试里换成**可控时钟**（`FakeClock`），由测试推进时间。

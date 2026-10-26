@@ -91,7 +91,10 @@ export class FakePushService {
 
   readonly send: PushSender = async (subscription, notice) => {
     this.requests.push({ subscription, notice, at: this.#clock.now() });
-    const answer = this.#scripts.get(subscription.endpoint)?.shift() ?? 201;
+    const answer =
+      this.#scripts
+        .get(subscription.transport === "apns" ? subscription.token : subscription.endpoint)
+        ?.shift() ?? 201;
     if (answer === "unreachable") throw new Error("push service unreachable");
     if (answer === "hang") return new Promise<number>((resolve) => this.#held.push(resolve));
     return answer;
@@ -113,7 +116,11 @@ export class FakePushService {
 
   /** The endpoints the requests went to, in arrival order. */
   endpoints(): string[] {
-    return this.requests.map((request) => request.subscription.endpoint);
+    return this.requests.map((request) =>
+      request.subscription.transport === "apns"
+        ? request.subscription.token
+        : request.subscription.endpoint,
+    );
   }
 }
 
