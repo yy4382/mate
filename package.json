@@ -7,6 +7,7 @@
   },
   "packageManager": "pnpm@10.33.0",
   "scripts": {
+    "dev:mobile": "pnpm --filter @mate/mobile start",
     "check": "pnpm format:check && pnpm typecheck && pnpm test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

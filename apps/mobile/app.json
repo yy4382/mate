@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "Mate",
+    "slug": "mate-mobile",
+    "version": "0.0.0",
+    "scheme": "mate",
+    "platforms": ["ios"],
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "com.yy4382.mate",
+      "deploymentTarget": "27.0"
+    },
+    "plugins": ["expo-router", "expo-system-ui"]
+  }
+}

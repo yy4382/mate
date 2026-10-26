@@ -318,3 +318,32 @@ curl -i -X POST localhost:8787/api/login -H 'content-type: application/json' -d 
 
 登录返回的 `Set-Cookie` 要原样带在之后的请求里。路由见 ARCHITECTURE §4.7。各模块的边界测试是验证系统的主要手段，`apps/control-plane/test/composition.test.ts` 以真实 HTTP 跑通"经 HTTP 配对 node、创建 Agent、管理员私信它、它回复并推送"。
 
+### 6.1 原生移动客户端
+
+`apps/mobile` 是自用的 iOS 27+ Expo app，当前显示开发中的启动页，不连接控制面。所有依赖从仓库根安装，只有一个 `pnpm-lock.yaml`。SDK 58 使用 React Native 0.88、React 19.3 和 app 自己的 TypeScript 6.0；版本依据 [Expo SDK 参考](https://docs.expo.dev/versions/latest/)、[官方 TypeScript 指南](https://docs.expo.dev/guides/typescript/) 和 SDK 58 模板。网页继续使用自己的 React 版本。
+
+从仓库根运行：
+
+```sh
+pnpm install
+pnpm dev:mobile --port 8087                 # 启动 Metro；多个 worktree 使用不同端口
+pnpm --filter @mate/mobile typecheck
+pnpm --filter @mate/mobile exec expo install --check
+pnpm --filter @mate/mobile bundle:check     # 导出 iOS JS/Hermes bundle 到 apps/mobile/dist
+```
+
+Metro 使用 [Expo 默认的 monorepo 支持](https://docs.expo.dev/guides/monorepos/)，不需要自定义解析器或 workspace 全局 hoisting。`pnpm typecheck` 包含移动端，CI 在现有格式与类型检查任务里另跑一次 iOS bundle 检查。导出 bundle 不需要原生 SDK，也不证明已在设备上运行。
+
+安装了原生开发工具时，可以构建并启动开发版：
+
+```sh
+pnpm --filter @mate/mobile ios --device --port 8087
+```
+
+iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模拟器或设备，工具安装见 [Expo 环境设置](https://docs.expo.dev/get-started/set-up-your-environment/)。共享机器先确认设备未被其他 session 占用，再选择设备。生成的 `ios/` 和 `.expo/` 只留在本地，由 app config 和依赖重新生成。
+
+最低版本通过 Expo 内置的 [`ios.deploymentTarget`](https://docs.expo.dev/versions/v58.0.0/config/app/#deploymenttarget) 配置为 `27.0`，不需要额外的构建属性插件。`pnpm --filter @mate/mobile exec expo prebuild --platform ios --no-install` 生成的 `ios/Podfile.properties.json` 含 `ios.deploymentTarget: "27.0"`；Xcode 工程的应用 target 在 Debug 和 Release 配置中均为 `IPHONEOS_DEPLOYMENT_TARGET = 27.0`。原生编译和运行验证使用自己的开发版；Expo Go 的宿主部署目标不能证明 Mate 自身的最低版本。
+
+`com.yy4382.mate` 是当前开发用的 iOS bundle identifier；签名与自用分发方式仍待确认，本阶段不添加公开应用商店发布自动化。根 `pnpm build` 只构建已有网页和服务端包，移动端不参与控制面镜像或 node 发布包的构建。
+
+移动任务 PR 以长期集成分支 `mobile` 为 base，依赖任务可在其上堆叠。合入任务 PR 不发布移动 app，也不触发 `v*` 发布。整体 `mobile` 到 `main` 的集成另等用户批准；本阶段不合并、不打 tag、不发布、不部署。移动端认证、服务器选择和原生推送在后续阶段决定。

@@ -81,7 +81,8 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 | `packages/admin`（`@mate/admin`） | 管理模块：Agent 的生命周期和设置、提供商的 API key、模型目录、node 配对、观察 Agent；它打开 Agent Manager，并把 node 网关接成工作区宿主 |
 | `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |
 | `apps/control-plane`（`@mate/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
-| `apps/web`（`@mate/web`） | 前端 |
+| `apps/web`（`@mate/web`） | Vite 网页客户端 |
+| `apps/mobile`（`@mate/mobile`） | Expo 原生移动客户端，当前只有启动页和导航入口 |
 | `apps/node`（`@mate/node`） | node 进程和 `mate node` CLI |
 | `tests/system`（`@mate/system-tests`） | 起真实控制面和 node 进程的系统场景（MODULE_TESTS 第 12 节） |
 
@@ -532,6 +533,16 @@ interface Admin {
 - **看到就是读过。** 打开的时间线上有未读时，页面向 `POST read` 报一次（每个最新序号一次），已读位置由此前进。
 - **推送。** 开启通知时注册 `sw.js`，用 `GET push/key` 的公钥订阅，再 `POST push/subscribe`。退出登录时先取消这个浏览器的订阅（`POST push/unsubscribe`，再取消浏览器自己的订阅），失败也照常退出，所以同一个浏览器上下一个登录的人类不会收到上一个人类的通知；服务端另有保底：另一个人类再订阅同一个 endpoint 时订阅归这个人类，前一个人类排队的推送被丢弃。通知点开后进 `/app/c/:会话[/t/:讨论串]?seq=N`；那条消息不在时回到最新消息并提示。
 - **提醒后端的缺口**（前端据此降级）：历史条目不带回复数，所以讨论串的回复数只统计本次页面见过的回复；搜索结果不带会话和时间线，所以不能点进去；没有列出任务的接口，任务只在所属消息和时间线上显示。
+
+### 4.8 客户端边界
+
+网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑；API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
+
+移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前阶段只建立可运行的工程和启动页，尚未连接控制面。服务器选择、认证实现、分发与签名、原生推送方案仍未确定。
+
+当前不做折叠屏 iPhone Duo 的专用适配，不增加折叠状态处理或专用布局。
+
+移动端依赖和 TypeScript 配置由 `@mate/mobile` 自己持有。它使用 Expo 的 TypeScript 基础配置和默认 Metro workspace 支持，保留 pnpm 的隔离安装；不继承服务端的 NodeNext 配置，也不改网页的 React 版本。根 `typecheck` 包含移动端；iOS bundle 检查走独立的 `bundle:check` 命令。移动端没有 `build` 脚本，因此根递归 `build`、控制面构建和 node 发布包都不要求 Xcode 或签名凭据。运行命令见 [开发机运行](DEPLOYMENT.md#6-在开发机上运行)。
 
 ## 5. 关键流程
 

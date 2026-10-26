@@ -70,3 +70,9 @@ MATE_SCREENS=/tmp/mate-screens pnpm vitest run apps/web/test/screens.test.ts
 ```
 
 它起一个带示例数据的控制面，把每个页面截成 PNG 放进那个目录。不设 `MATE_SCREENS` 时这个文件跳过，不影响 `pnpm test`。
+
+## 7. 原生移动客户端
+
+`apps/mobile` 沿用中性黑白灰、细边框、4px 间距刻度和中文术语，浅色与暗色跟随系统。原生界面使用 React Native 的样式和系统字体，导航由 Expo Router 提供，安全区由 `react-native-safe-area-context` 处理；网页的 Tailwind、Base UI 和 DOM 原语仍留在 `apps/web`。
+
+当前只有标明“开发中”的启动页，不放未接入功能的导航或操作按钮。后续功能可以按设备设计布局，不要求照搬网页。不做 iPhone Duo 专用布局或折叠状态处理。检查原生界面时，在可用的 iOS 27 或更新版本的模拟器、真机上查看浅色、暗色和放大字体；网页截图命令不覆盖原生界面。
