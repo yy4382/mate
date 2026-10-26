@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { describe, expect, it } from "vitest";
 import { openApp, startSite } from "./support.ts";
 
@@ -26,8 +26,8 @@ async function upload(
   await page.getByText("头像已保存", { exact: true }).waitFor();
 }
 
-async function renderedAvatar(page: Page, accountId: number): Promise<string> {
-  const picture = page.locator(`img[src^="/api/accounts/${accountId}/avatar?"]`).first();
+async function renderedAvatar(scope: Page | Locator, accountId: number): Promise<string> {
+  const picture = scope.locator(`img[src^="/api/accounts/${accountId}/avatar?"]`).first();
   await picture.waitFor({ state: "visible" });
   await expect
     .poll(() =>
@@ -49,18 +49,10 @@ describe("uploading account avatars in the browser", () => {
     const { page } = await openApp(site, "/app/profile");
     const { page: chat } = await openApp(site, `/app/c/${channel}`);
     const { page: humans } = await openApp(site, "/app/admin/humans");
-    const snapshots: string[] = [];
-    page.on("request", (request) => {
-      if (request.url().includes("/api/chat/snapshot")) snapshots.push(request.url());
-    });
     expect(await page.locator('img[src^="/api/accounts/"]').count()).toBe(0);
     await upload(page, image(red));
     await page.getByText("头像已保存", { exact: true }).waitFor();
     const first = await renderedAvatar(page, accountId);
-    expect(
-      snapshots,
-      "saving follows the live stream without a snapshot that could overwrite a newer event",
-    ).toEqual([]);
     expect(await renderedAvatar(chat, accountId)).toBe(first);
     expect(await renderedAvatar(humans, accountId)).toBe(first);
     await expect.poll(() => chat.locator(`article img[src="${first}"]`).count()).toBe(1);
@@ -144,17 +136,27 @@ describe("uploading account avatars in the browser", () => {
     await upload(page, image(red));
     await page.getByText("头像已保存", { exact: true }).waitFor();
     const first = await renderedAvatar(page, agent.accountId);
-    for (const path of [
-      "/app/admin/agents",
-      `/app/c/${channel}`,
-      "/app/search?q=avatar%20marker",
-      "/app?dm=ada",
-    ]) {
-      await page.goto(site.origin + path);
-      expect(await renderedAvatar(page, agent.accountId)).toBe(first);
-      if (path === "/app?dm=ada")
-        await page.locator(`header img[src="${first}"]`).waitFor({ state: "visible" });
-    }
+    await page.goto(`${site.origin}/app/admin/agents`);
+    expect(await renderedAvatar(page.locator('[data-agent="ada"]'), agent.accountId)).toBe(first);
+    await page.goto(`${site.origin}/app/c/${channel}`);
+    expect(
+      await renderedAvatar(
+        page.getByRole("article").filter({ hasText: "avatar marker" }),
+        agent.accountId,
+      ),
+    ).toBe(first);
+    expect(
+      await renderedAvatar(page.getByRole("navigation", { name: "会话" }), agent.accountId),
+    ).toBe(first);
+    await page.goto(`${site.origin}/app/search?q=avatar%20marker`);
+    expect(
+      await renderedAvatar(
+        page.getByRole("listitem").filter({ hasText: "avatar marker" }),
+        agent.accountId,
+      ),
+    ).toBe(first);
+    await page.goto(`${site.origin}/app?dm=ada`);
+    expect(await renderedAvatar(page.locator("header"), agent.accountId)).toBe(first);
     await page.route(`**${first}`, (route) => route.abort());
     await page.goto(`${site.origin}/app/admin/agents/${agent.agentId}`);
     await page
@@ -164,6 +166,37 @@ describe("uploading account avatars in the browser", () => {
     await upload(page, image(blue));
     await page.getByText("头像已保存", { exact: true }).waitFor();
     expect(await renderedAvatar(page, agent.accountId)).not.toBe(first);
+  });
+
+  it("keeps the newer avatar when an earlier upload response arrives late", async () => {
+    const site = await startSite();
+    const { accountId } = await site.owner.get<{ accountId: number }>("/api/me");
+    const { page } = await openApp(site, "/app/profile");
+    const { page: other } = await openApp(site, "/app/profile");
+    const committed = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    await page.route("**/api/me/avatar", async (route) => {
+      const response = await route.fetch();
+      committed.resolve();
+      await release.promise;
+      await route.fulfill({ response });
+    });
+    try {
+      await page.getByLabel("头像图片").setInputFiles(image(red));
+      await committed.promise;
+      const original = await renderedAvatar(page, accountId);
+      await upload(other, image(blue));
+      const latest = await renderedAvatar(other, accountId);
+      expect(latest).not.toBe(original);
+      await page.locator(`img[src="${latest}"]`).first().waitFor({ state: "visible" });
+      release.resolve();
+      await page.getByText("头像已保存", { exact: true }).waitFor();
+      expect(await renderedAvatar(page, accountId)).toBe(latest);
+      await page.reload();
+      expect(await renderedAvatar(page, accountId)).toBe(latest);
+    } finally {
+      release.resolve();
+    }
   });
 
   it("normalizes JPEG and WebP uploads into square PNG pictures", async () => {
