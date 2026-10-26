@@ -14,7 +14,7 @@ import {
   Outcome,
   Screen,
   Select,
-  confirm,
+  ConfirmButton,
 } from "./ui";
 
 const roleLabel = { admin: "管理员", member: "普通人类" };
@@ -120,17 +120,13 @@ function HumanRow({ human, refresh }: { human: Human; refresh: () => void }) {
       {human.active && (
         <>
           {isMe && <Button title="编辑个人资料" onPress={() => router.push("/profile")} />}
-          <Button
+          <ConfirmButton
             title={`设为${roleLabel[other]}`}
             disabled={operation.busy}
-            onPress={() =>
-              confirm(
-                `将 ${human.displayName} 设为${roleLabel[other]}？`,
-                "这个人的所有登录会话会结束，需要重新登录。",
-                "更改角色",
-                () => run("role", { role: other }, "角色已更改。"),
-              )
-            }
+            question={`将 ${human.displayName} 设为${roleLabel[other]}？`}
+            message="这个人的所有登录会话会结束，需要重新登录。"
+            confirmLabel="更改角色"
+            onConfirm={() => run("role", { role: other }, "角色已更改。")}
           />
           {!isMe && (
             <>
@@ -143,18 +139,14 @@ function HumanRow({ human, refresh }: { human: Human; refresh: () => void }) {
                   setResetting(true);
                 }}
               />
-              <Button
+              <ConfirmButton
                 title={`停用 ${human.displayName}`}
                 danger
                 disabled={operation.busy}
-                onPress={() =>
-                  confirm(
-                    `停用 ${human.displayName}？`,
-                    "所有登录立即结束，不能再登录，无法恢复。已发送的消息保留。",
-                    "停用",
-                    () => run("deactivate", undefined, "已停用。"),
-                  )
-                }
+                question={`停用 ${human.displayName}？`}
+                message="所有登录立即结束，不能再登录，无法恢复。已发送的消息保留。"
+                confirmLabel="停用"
+                onConfirm={() => run("deactivate", undefined, "已停用。")}
               />
             </>
           )}

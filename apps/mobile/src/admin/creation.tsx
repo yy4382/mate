@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { randomUUID } from "expo-crypto";
 import { auth } from "../auth-native";
 import type { SignedIn } from "./client";
 import { emptySettings, type SettingsDraft } from "./settings";
@@ -8,28 +9,28 @@ type Draft = {
   handle: string;
   nodeId: string;
   settings: SettingsDraft;
-  unfinished: string | undefined;
-  pending: boolean;
+  attempt: { kind: "new" | "pending" | "interrupted"; agentId: string };
 };
-export const emptyAgentDraft: Draft = {
-  displayName: "",
-  handle: "",
-  nodeId: "",
-  settings: emptySettings,
-  unfinished: undefined,
-  pending: false,
-};
+export function newAgentDraft(): Draft {
+  return {
+    displayName: "",
+    handle: "",
+    nodeId: "",
+    settings: emptySettings,
+    attempt: { kind: "new", agentId: randomUUID() },
+  };
+}
 type Update = (change: (draft: Draft) => Draft) => void;
 const Creation = createContext<readonly [Draft, Update] | null>(null);
 
 export function AgentCreationProvider({ children }: { children: ReactNode }) {
-  const [draft, setDraft] = useState(emptyAgentDraft);
+  const [draft, setDraft] = useState(newAgentDraft);
   const generation = useRef(0);
   useEffect(() => {
     let owner: SignedIn | undefined;
     const reset = () => {
       generation.current++;
-      setDraft({ ...emptyAgentDraft });
+      setDraft(newAgentDraft());
     };
     const update = () => {
       const state = auth.getSnapshot();

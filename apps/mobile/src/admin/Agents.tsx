@@ -1,7 +1,6 @@
 import type { AgentView, CatalogModel, NodeStatusResult } from "@mate/admin";
 import { router } from "expo-router";
-import { ApiError } from "./client";
-import { emptyAgentDraft, useAgentCreationDraft } from "./creation";
+import { newAgentDraft, useAgentCreationDraft } from "./creation";
 import { useClient, useOperation, useResource } from "./session";
 import { settingsBody, SettingsFields } from "./settings";
 import { Button, Card, Copy, ErrorLine, Field, Loading, Outcome, Screen, Select } from "./ui";
@@ -56,8 +55,8 @@ export function CreateAgent() {
   const models = useResource<CatalogModel[]>("/api/admin/models");
   const operation = useOperation();
   const [draft, update] = useAgentCreationDraft();
-  const { displayName, handle, nodeId, settings, unfinished } = draft;
-  const busy = operation.busy || draft.pending;
+  const { displayName, handle, nodeId, settings, attempt } = draft;
+  const busy = operation.busy || attempt.kind === "pending";
   const node = nodes.data?.length === 1 ? nodes.data[0]?.nodeId : nodeId;
   return (
     <Screen>
@@ -115,30 +114,33 @@ export function CreateAgent() {
           />
         )}
         <Outcome operation={operation} />
-        {unfinished && <Copy muted>创建中断，继续时保留同一个 Agent ID。</Copy>}
+        {attempt.kind === "interrupted" && !busy && (
+          <Copy muted>创建中断，继续时保留同一个 Agent ID。</Copy>
+        )}
         <Button
-          title={busy ? "正在创建…" : unfinished ? "继续创建" : "创建"}
+          title={busy ? "正在创建…" : attempt.kind === "interrupted" ? "继续创建" : "创建"}
           primary
           disabled={busy || !node || !settings.model || !displayName.trim() || !handle.trim()}
           onPress={() => {
-            update((draft) => ({ ...draft, pending: true }));
+            if (!node) return;
+            update((draft) => ({ ...draft, attempt: { ...draft.attempt, kind: "pending" } }));
             void operation
               .run(async () => {
                 try {
-                  await client.request("/api/admin/agents", "POST", {
-                    ...(unfinished ? { agentId: unfinished } : {}),
+                  await client.createAgent({
+                    agentId: attempt.agentId,
                     nodeId: node,
                     displayName: displayName.trim(),
                     handle: handle.trim(),
                     settings: settingsBody(settings, models.data ?? []),
                   });
-                  update(() => emptyAgentDraft);
+                  update(newAgentDraft);
                 } catch (cause) {
-                  if (cause instanceof ApiError && cause.agentId)
-                    update((draft) => ({ ...draft, unfinished: cause.agentId }));
+                  update((draft) => ({
+                    ...draft,
+                    attempt: { ...draft.attempt, kind: "interrupted" },
+                  }));
                   throw cause;
-                } finally {
-                  update((draft) => ({ ...draft, pending: false }));
                 }
               }, "Agent 已创建。")
               .then((ok) => {

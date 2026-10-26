@@ -21,7 +21,7 @@ import { Redirect, Stack, useFocusEffect } from "expo-router";
 import { fetch as streamingFetch } from "expo/fetch";
 import { auth } from "../auth-native";
 import { ManagementClient } from "./client";
-import { Button, Screen, Copy, ErrorLine } from "./ui";
+import { Button, Screen, Copy, ErrorLine, ManagementPresentationAccess } from "./ui";
 import { useTheme } from "../theme";
 
 const Client = createContext<ManagementClient | null>(null);
@@ -58,7 +58,9 @@ function Session({ client, children }: { client: ManagementClient; children: Rea
       importantForAccessibility={suspended ? "no-hide-descendants" : "auto"}
     >
       <Client.Provider value={client}>
-        <QueryClientProvider client={queries}>{children}</QueryClientProvider>
+        <ManagementPresentationAccess.Provider value={!suspended}>
+          <QueryClientProvider client={queries}>{children}</QueryClientProvider>
+        </ManagementPresentationAccess.Provider>
       </Client.Provider>
     </View>
   );

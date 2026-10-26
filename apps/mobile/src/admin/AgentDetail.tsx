@@ -8,7 +8,7 @@ import { SettingsFields, settingsBody, settingsDraft, type SettingsDraft } from 
 import { Usage } from "./Usage";
 import { Watch } from "./Watch";
 import { Workspace } from "./Workspace";
-import { Button, Card, Copy, ErrorLine, Loading, Outcome, Screen, confirm } from "./ui";
+import { Button, Card, Copy, ErrorLine, Loading, Outcome, Screen, ConfirmButton } from "./ui";
 
 function Settings({ agent, refresh }: { agent: ReadableAgent; refresh: () => void }) {
   const client = useClient();
@@ -120,31 +120,24 @@ export function AgentDetail({ agentId }: { agentId: string }) {
               />
             </>
           )}
-          <Button
+          <ConfirmButton
             title="删除 Agent"
             danger
             disabled={operation.busy}
-            onPress={() =>
-              confirm(
-                `删除 ${agent.displayName ?? "Agent"}？`,
-                "设置和对话记录将被删除，聊天账号停用，无法恢复。已经发出的消息保留。",
-                "删除",
-                () => {
-                  void operation
-                    .run(
-                      () =>
-                        client.request(
-                          `/api/admin/agents/${encodeURIComponent(agentId)}`,
-                          "DELETE",
-                        ),
-                      "Agent 已删除。",
-                    )
-                    .then((ok) => {
-                      if (ok) router.back();
-                    });
-                },
-              )
-            }
+            question={`删除 ${agent.displayName ?? "Agent"}？`}
+            message="设置和对话记录将被删除，聊天账号停用，无法恢复。已经发出的消息保留。"
+            confirmLabel="删除"
+            onConfirm={() => {
+              void operation
+                .run(
+                  () =>
+                    client.request(`/api/admin/agents/${encodeURIComponent(agentId)}`, "DELETE"),
+                  "Agent 已删除。",
+                )
+                .then((ok) => {
+                  if (ok) router.back();
+                });
+            }}
           />
           <Outcome operation={operation} />
           {agent.state === "unreadable" ? (

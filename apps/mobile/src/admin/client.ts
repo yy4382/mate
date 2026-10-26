@@ -1,4 +1,4 @@
-import type { Admin, AgentEvent } from "@mate/admin";
+import type { Admin, AgentEvent, AgentView } from "@mate/admin";
 import { HumanView } from "@mate/auth";
 import { z } from "zod";
 import { createParser } from "eventsource-parser";
@@ -177,6 +177,20 @@ export class ManagementClient {
       clearTimeout(timeout);
       signal?.removeEventListener("abort", abort);
       this.requests.delete(request);
+    }
+  }
+
+  async createAgent(
+    input: Parameters<Admin["createAgent"]>[0] & { agentId: string },
+  ): Promise<void> {
+    try {
+      await this.request("/api/admin/agents", "POST", input);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.reason === "agent-exists") {
+        const agents = await this.request<AgentView[]>("/api/admin/agents");
+        if (agents.some((agent) => agent.agentId === input.agentId)) return;
+      }
+      throw cause;
     }
   }
 

@@ -1,8 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   FlatList,
-  Alert,
   Modal,
   Pressable,
   StyleSheet,
@@ -164,6 +163,33 @@ export function Field({
   );
 }
 
+export const ManagementPresentationAccess = createContext(false);
+
+function ManagementModal({
+  visible,
+  onClose,
+  children,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const ready = useContext(ManagementPresentationAccess);
+  const colors = useTheme();
+  return (
+    <Modal
+      visible={visible && ready}
+      animationType="none"
+      presentationStyle="pageSheet"
+      onRequestClose={onClose}
+    >
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+        {ready ? children : null}
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
 export function Select({
   label,
   value,
@@ -179,7 +205,6 @@ export function Select({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const colors = useTheme();
   return (
     <View style={{ gap: 6 }}>
       <Copy>{label}</Copy>
@@ -191,37 +216,30 @@ export function Select({
           setOpen(true);
         }}
       />
-      <Modal
-        visible={open}
-        animationType="none"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setOpen(false)}
-      >
-        <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-          <View style={{ padding: 16, gap: 12 }}>
-            <Copy title>{label}</Copy>
-            <Button title="取消选择" onPress={() => setOpen(false)} />
-            {options.length > 8 && <Field label="搜索选项" value={query} onChangeText={setQuery} />}
-          </View>
-          <FlatList
-            contentContainerStyle={{ padding: 16, gap: 10 }}
-            keyboardShouldPersistTaps="handled"
-            data={options.filter((option) =>
-              option.label.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
-            )}
-            keyExtractor={(option) => option.value}
-            renderItem={({ item: option }) => (
-              <Button
-                title={`${option.value === value ? "✓ " : ""}${option.label}`}
-                onPress={() => {
-                  onChange(option.value);
-                  setOpen(false);
-                }}
-              />
-            )}
-          />
-        </SafeAreaView>
-      </Modal>
+      <ManagementModal visible={open} onClose={() => setOpen(false)}>
+        <View style={{ padding: 16, gap: 12 }}>
+          <Copy title>{label}</Copy>
+          <Button title="取消选择" onPress={() => setOpen(false)} />
+          {options.length > 8 && <Field label="搜索选项" value={query} onChangeText={setQuery} />}
+        </View>
+        <FlatList
+          contentContainerStyle={{ padding: 16, gap: 10 }}
+          keyboardShouldPersistTaps="handled"
+          data={options.filter((option) =>
+            option.label.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+          )}
+          keyExtractor={(option) => option.value}
+          renderItem={({ item: option }) => (
+            <Button
+              title={`${option.value === value ? "✓ " : ""}${option.label}`}
+              onPress={() => {
+                onChange(option.value);
+                setOpen(false);
+              }}
+            />
+          )}
+        />
+      </ManagementModal>
     </View>
   );
 }
@@ -260,11 +278,45 @@ export function Loading({ loading, empty }: { loading: boolean; empty?: boolean 
     <Copy muted>暂无内容。</Copy>
   ) : null;
 }
-export function confirm(title: string, message: string, label: string, action: () => void) {
-  Alert.alert(title, message, [
-    { text: "取消", style: "cancel" },
-    { text: label, style: "destructive", onPress: action },
-  ]);
+export function ConfirmButton({
+  title,
+  question,
+  message,
+  confirmLabel,
+  onConfirm,
+  disabled = false,
+  danger = false,
+}: {
+  title: string;
+  question: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button title={title} disabled={disabled} danger={danger} onPress={() => setOpen(true)} />
+      <ManagementModal visible={open} onClose={() => setOpen(false)}>
+        <Screen topInset>
+          <Copy title>{question}</Copy>
+          <Copy>{message}</Copy>
+          <Button title="取消" onPress={() => setOpen(false)} />
+          <Button
+            title={confirmLabel}
+            danger={danger}
+            disabled={disabled}
+            onPress={() => {
+              setOpen(false);
+              onConfirm();
+            }}
+          />
+        </Screen>
+      </ManagementModal>
+    </>
+  );
 }
 export function Fact({ label, value }: { label: string; value: ReactNode }) {
   return (

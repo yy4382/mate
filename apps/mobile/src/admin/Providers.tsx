@@ -1,7 +1,17 @@
 import type { CatalogModel, ProviderView } from "@mate/admin";
 import { useState } from "react";
 import { useClient, useOperation, useResource } from "./session";
-import { Button, Card, Copy, ErrorLine, Field, Loading, Outcome, Screen, confirm } from "./ui";
+import {
+  Button,
+  Card,
+  Copy,
+  ErrorLine,
+  Field,
+  Loading,
+  Outcome,
+  Screen,
+  ConfirmButton,
+} from "./ui";
 
 function Provider({ provider, refresh }: { provider: ProviderView; refresh: () => void }) {
   const client = useClient();
@@ -67,29 +77,25 @@ function Provider({ provider, refresh }: { provider: ProviderView; refresh: () =
         }}
       />
       {provider.credentials && (
-        <Button
+        <ConfirmButton
           title={`删除 ${provider.name} key`}
           danger
           disabled={operation.busy}
-          onPress={() =>
-            confirm(
-              `删除 ${provider.name} 的 key？`,
-              "使用这家提供商的 Agent 将无法请求模型，直到重新保存 key。",
-              "删除 key",
-              () => {
-                void operation
-                  .run(() => client.request(path, "DELETE"), "已删除 key。")
-                  .then((ok) => {
-                    if (ok) {
-                      setApiKey("");
-                      setBaseUrl("");
-                      refresh();
-                      models.refresh();
-                    }
-                  });
-              },
-            )
-          }
+          question={`删除 ${provider.name} 的 key？`}
+          message="使用这家提供商的 Agent 将无法请求模型，直到重新保存 key。"
+          confirmLabel="删除 key"
+          onConfirm={() => {
+            void operation
+              .run(() => client.request(path, "DELETE"), "已删除 key。")
+              .then((ok) => {
+                if (ok) {
+                  setApiKey("");
+                  setBaseUrl("");
+                  refresh();
+                  models.refresh();
+                }
+              });
+          }}
         />
       )}
       <Button
