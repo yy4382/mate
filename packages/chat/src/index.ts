@@ -47,7 +47,7 @@ import {
 import {
   enqueuePushes,
   PushDelivery,
-  PushEndpoint,
+  PushAddress,
   PushSubscription,
   subscribePush,
   unsubscribePush,
@@ -460,9 +460,8 @@ export class ChatApp {
   // ── Push ────────────────────────────────────────────────────────────────────
 
   /**
-   * Push the human's DMs and mentions to this browser from now on. Idempotent on the endpoint rather than on a
-   * requestId: the endpoint is the subscription's natural key, so subscribing again refreshes its keys and, from
-   * another human, moves it to that human.
+   * Push this human's DMs and mentions to a browser or native app. The transport address is its natural key;
+   * subscribing from another human moves it to that human and drops the old human's pending deliveries.
    */
   subscribePush(account: number, subscription: z.input<typeof PushSubscription>): void {
     const human = requireHuman(this.#db, account);
@@ -471,13 +470,13 @@ export class ChatApp {
   }
 
   /**
-   * Stop pushing to the human's own subscription at the endpoint, dropping its queued pushes. An unknown endpoint, or
-   * one subscribed by another human, changes nothing and is answered the same way.
+   * Remove this human's own subscription and its queued pushes. Another human's subscription or an old native
+   * binding changes nothing and is answered the same way.
    */
-  unsubscribePush(account: number, request: z.input<typeof PushEndpoint>): void {
+  unsubscribePush(account: number, request: z.input<typeof PushAddress>): void {
     const human = requireHuman(this.#db, account);
-    const { endpoint } = parseInput(PushEndpoint, request);
-    this.#write(() => unsubscribePush(this.#db, human, endpoint));
+    const address = parseInput(PushAddress, request);
+    this.#write(() => unsubscribePush(this.#db, human, address));
   }
 
   close(): void {

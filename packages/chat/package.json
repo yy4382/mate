@@ -7,6 +7,12 @@
       "mate-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
+    },
+    "./push": {
+      "react-native": "./src/push-contract.ts",
+      "mate-source": "./src/push-contract.ts",
+      "types": "./dist/src/push-contract.d.ts",
+      "default": "./dist/src/push-contract.js"
     }
   },
   "scripts": {

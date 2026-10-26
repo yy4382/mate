@@ -1,5 +1,6 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { NotificationIntegration } from "../notifications-root";
 import { useTheme } from "../theme";
 
 export default function RootLayout() {
@@ -7,6 +8,7 @@ export default function RootLayout() {
 
   return (
     <>
+      <NotificationIntegration />
       <StatusBar style="auto" />
       <Stack
         screenOptions={{
@@ -17,6 +19,7 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="index" options={{ title: "Mate" }} />
+        <Stack.Screen name="notifications" options={{ title: "通知" }} />
       </Stack>
     </>
   );

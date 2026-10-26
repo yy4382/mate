@@ -297,4 +297,25 @@ ALTER TABLE push_subscriptions_v4 RENAME TO push_subscriptions;
 CREATE INDEX push_subscriptions_account ON push_subscriptions (account_id);
 `,
   },
+  {
+    version: 5,
+    sql: `
+CREATE TABLE push_subscriptions_v5 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL REFERENCES accounts (id),
+  subscription_key TEXT NOT NULL UNIQUE,
+  subscription_json TEXT NOT NULL CHECK (json_valid(subscription_json))
+) STRICT;
+INSERT INTO push_subscriptions_v5 (id, account_id, subscription_key, subscription_json)
+  SELECT id, account_id, json_array('web', endpoint),
+    json_object('endpoint', endpoint, 'keys', json_object('p256dh', p256dh, 'auth', auth))
+  FROM push_subscriptions;
+DELETE FROM sqlite_sequence WHERE name = 'push_subscriptions_v5';
+INSERT INTO sqlite_sequence (name, seq)
+  SELECT 'push_subscriptions_v5', seq FROM sqlite_sequence WHERE name = 'push_subscriptions';
+DROP TABLE push_subscriptions;
+ALTER TABLE push_subscriptions_v5 RENAME TO push_subscriptions;
+CREATE INDEX push_subscriptions_account ON push_subscriptions (account_id);
+`,
+  },
 ]);

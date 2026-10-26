@@ -81,6 +81,31 @@ function post(
 }
 
 describe("3.8 push", () => {
+  it("a late invalid-token answer and an old unsubscribe cannot remove a newer native binding", async () => {
+    const { app, service, owner, ada } = ownerWithAgents([]);
+    const first = {
+      transport: "apns",
+      token: "ab".repeat(32),
+      environment: "sandbox",
+      binding: "11111111-1111-4111-8111-111111111111",
+    } as const;
+    const next = { ...first, binding: "22222222-2222-4222-8222-222222222222" };
+    app.subscribePush(owner, first);
+    service.answer(first.token, "hang");
+    const timeline = dm(app, ada, owner);
+    post(app, ada, timeline, "first registration");
+    await service.received(1);
+    app.subscribePush(owner, next);
+    app.unsubscribePush(owner, first);
+    service.release(410);
+    await settled();
+    const sent = post(app, ada, timeline, "new registration");
+    await service.received(2);
+    expect(service.requests[1]?.subscription).toEqual(next);
+    expect(service.requests[1]?.notice.messageId).toBe(sent.messageId);
+    app.close();
+  });
+
   it("an Agent's DM to the owner pushes to every subscription, pointing at the message without its body", async () => {
     const { app, clock, service, owner, ada } = ownerWithAgents(["phone", "laptop"]);
     const timeline = dm(app, ada, owner);
@@ -93,6 +118,7 @@ describe("3.8 push", () => {
     );
     for (const { notice } of service.requests) {
       expect(notice, "where the message is, and who wrote it").toEqual({
+        accountId: owner,
         tag: expect.any(String),
         messageId: sent.messageId,
         conversationId: sent.conversationId,

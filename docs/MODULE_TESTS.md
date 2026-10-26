@@ -123,6 +123,8 @@
 
 ### 3.10 结构迁移
 
+原生传输扩展继续通过 `ChatApp.subscribePush` 与 `unsubscribePush` 驱动，不测试内部队列表。相同 APNs token 在另一账号或新的 binding 下登记后，旧通知与迟到的投递回答不能影响新登记。旧 binding 的取消不能删除新 binding。Web Push 的已有公开接口与存储夹具回归继续运行。
+
 用已发布版本的**存储夹具**（`tests/fixtures/stores/v0.1.0-alpha.2/`，生成方法见它的 README）。测试先把夹具复制到临时目录，从不改夹具本身。
 
 - 用 `ChatApp` 打开夹具里的 `chat.sqlite` 副本，账号、会话、消息、讨论串、任务都在，所有者的未读摘要和夹具生成时一致。
@@ -472,6 +474,14 @@
 - 退出或换地址后，旧登录与身份响应不能重新显示身份；再次登录前旧请求已结束、cookie 已清理。切回原地址也不恢复旧身份。
 
 **原生验证。** 使用独占的普通 iPhone iOS 27 模拟器和临时 HTTPS 控制面，驱动 app 界面验证正确与错误密码、正常使用后的重启恢复、前台重验、过期或撤销的 401、离线重试、在线与离线退出后重启，以及切换服务器的身份与凭据隔离。截图检查浅色、暗色、Dynamic Type 和键盘操作。该验证不作为永久 smoke 测试提交，也不承诺立即强杀进程后的 cookie 持久化。
+
+### 11.5 原生通知
+
+原生通知的模块边界由 `apps/mobile/test/notifications.test.ts` 的 `MobileNotifications` 公开操作和状态订阅覆盖。外部替身只替代 iOS 权限、token、设置存储、原生通知展示与网络。测试覆盖未配置、拒绝与撤回权限、token 轮换、离线取消、服务器与账号隔离、冷启动和重复点击、过期数据与任意 URL 拒绝，以及认证在在途登记之后取消订阅、再清 cookie 的屏障。
+
+`apps/control-plane/test/push.test.ts` 通过真实 HTTP 认证与订阅路由驱动控制面。APNs 是临时 TLS HTTP/2 服务，真实 `@parse/node-apn` 库连接它；只使用现场生成的测试 key，不访问 Apple。服务观察原生 payload、topic、expiry、collapse ID 和错误映射，验证暂时失败重试、失效 token 清理与 provider 错误保留。已有 Web Push、消息资格和存储夹具测试继续证明共用规则。真实凭据与设备投递不在这些替身测试的结论内。
+
+原生 UI 使用独占的普通 iPhone iOS 27 模拟器、正常 Expo/Xcode 构建和临时 HTTPS 后端。验证允许与拒绝权限、配置缺失、原生收取和点击响应、退出及换服务器隔离，检查浅色、暗色和放大字体。`simctl push` 只注入通知，不证明 APNs 远程投递。驱动脚本和截图只作本地开发证据，不提交为永久 smoke 测试；最终聊天页面须在 mobile 整体整合后验证。
 
 ## 12. 系统场景
 
