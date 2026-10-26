@@ -1,19 +1,11 @@
+import { TimelineRef } from "./contracts.ts";
+export { TimelineRef } from "./contracts.ts";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
 import { ChatError } from "./chat-error.ts";
 import { readableConversation, type Conversation } from "./conversations.ts";
 import type { ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
-
-/**
- * Where entries live: a conversation's top level, or the thread under one top-level message (named by that
- * message's ID).
- */
-export const TimelineRef = z.union([
-  z.object({ conversation: Id }).strict(),
-  z.object({ thread: Id }).strict(),
-]);
-export type TimelineRef = z.output<typeof TimelineRef>;
 
 const TimelineRow = z.object({
   id: Id,

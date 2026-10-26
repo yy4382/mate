@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
+import { Redirect } from "expo-router";
+import { useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
 import {
-  AppState,
   Keyboard,
   KeyboardAvoidingView,
   Pressable,
@@ -165,20 +165,14 @@ function Message({ text }: { text: string }) {
   ) : null;
 }
 
-export default function HomeScreen() {
+export default function HomeScreen({ account = false }: { account?: boolean }) {
   const colors = useTheme();
   const state = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
   const [editingServer, setEditingServer] = useState(false);
   const server = "server" in state ? state.server : "";
   const clearing = state.kind === "clearing";
 
-  useEffect(() => {
-    void auth.start();
-    const subscription = AppState.addEventListener("change", (value) => {
-      if (value === "active") void auth.revalidate();
-    });
-    return () => subscription.remove();
-  }, []);
+  if (state.kind === "signed-in" && !account && !editingServer) return <Redirect href="/chat" />;
 
   return (
     <SafeAreaView style={styles.screen} edges={["left", "right", "bottom"]}>

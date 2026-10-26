@@ -1,7 +1,9 @@
+import { AccountView, AccountKind } from "./contracts.ts";
 import { z } from "zod";
 import { ChatError } from "./chat-error.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
+export { AccountView, AccountKind } from "./contracts.ts";
 
 /** What an account is called: the one place the rules for display names and handles are written. */
 export const AccountNames = z.object({
@@ -11,10 +13,6 @@ export const AccountNames = z.object({
     .max(64)
     .regex(/^[\p{L}\p{N}][\p{L}\p{N}_.-]*$/u, "a handle is letters, digits, '_', '.' or '-'"),
 });
-
-/** A human reads every conversation and has the live view and push; an Agent reads what it is let into. */
-export const AccountKind = z.enum(["human", "agent"]);
-export type AccountKind = z.output<typeof AccountKind>;
 
 export const EnsureAccountInput = AccountNames.extend({
   /** The caller's stable identity for this account, such as an Agent ID. */
@@ -126,16 +124,6 @@ export function requireHuman(db: ChatDatabase, account: number): Actor {
   if (actor.kind !== "human") throw new ChatError("human-only", `account ${account} is not human`);
   return actor;
 }
-
-/** An account as a client renders it: the author of an entry, a member of a conversation. */
-export const AccountView = z.object({
-  accountId: Id,
-  handle: z.string(),
-  displayName: z.string(),
-  kind: AccountKind,
-  active: z.boolean(),
-});
-export type AccountView = z.output<typeof AccountView>;
 
 const AccountViewRow = z
   .object({

@@ -82,7 +82,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 | `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |
 | `apps/control-plane`（`@mate/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
 | `apps/web`（`@mate/web`） | Vite 网页客户端 |
-| `apps/mobile`（`@mate/mobile`） | Expo 原生移动客户端，当前只有启动页和导航入口 |
+| `apps/mobile`（`@mate/mobile`） | Expo 原生 iOS 客户端，包含 cookie 登录和原生聊天 |
 | `apps/node`（`@mate/node`） | node 进程和 `mate node` CLI |
 | `tests/system`（`@mate/system-tests`） | 起真实控制面和 node 进程的系统场景（MODULE_TESTS 第 12 节） |
 
@@ -538,13 +538,21 @@ interface Admin {
 
 网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑；API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
 
-移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前支持保存一个 HTTPS 服务器地址，用已有 handle 和密码登录、显示当前身份、恢复登录和退出。聊天、管理、分发与签名、原生推送仍未实现。
+移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前支持保存一个 HTTPS 服务器地址，用已有 handle 和密码登录、恢复登录和退出，以及频道、私信、讨论串、搜索、提及、消息任务和未读状态。管理、个人资料编辑、分发与签名、原生推送尚未实现。
 
 移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。启动和回到前台以 `GET /api/me` 验证 cookie；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
 
 退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问并清理全部 app cookie，切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
 
 `@mate/auth` 只拥有实际共享的认证契约 `Role`、`HumanView`、`LoginInput` 和 `LoginResult`。控制面、网页和移动端从同一处消费这些类型，移动端在网络边界用 schema 解析响应；控制面的 cookie、Origin 和路由行为保持不变。
+
+原生聊天由一个登录身份所属的 `MobileChat` 实例持有数据、草稿和未完成发送。频道与讨论串各有草稿；导航、短暂断线和前台重验保留实例，退出或换服务器立即关闭实例、取消请求并清空数据。草稿只在本次登录的内存中保存，不跨 app 重启。发送使用 Expo Crypto 生成请求 ID，响应丢失后的重试沿用同一个 ID；成功后只移除发送覆盖的文字。频道创建、成员操作和任务操作的失败重试也沿用原操作 ID。
+
+聊天复用现有 HTTP 路由和 SSE 协议。快照先建立游标，再加载时间线；历史加载期间收到的实时条目按序号合并。SSE 通过 `expo/fetch` 流式读取，帧解析使用不依赖平台的 `eventsource-parser`，凭据来自与认证相同的 Foundation cookie 存储；断线带最后一个已应用游标重连，40 秒没有数据或心跳时重新连接。`resnapshot` 重新拉取服务端数据并保留草稿。回到前台先验证登录，等旧流关闭后恢复事件流；后台不推进已读位置。在当前可见时间线底部阅读时，客户端使用现有 `read` 操作推进已读位置，失败提供重试。
+
+`@mate/chat/contracts` 是不依赖 SQLite 或 Node 的公开契约入口。账号、会话、条目、未读、读取、发送、任务和实时数据形状只在这里定义；后端继续消费同一份定义，原生端在网络边界解析它们。`@mate/clock` 同时提供原生入口，聊天重连和超时共用已有时钟接口。
+
+原生导航使用 Expo Router，消息虚拟列表使用 React Native `FlatList`，键盘避让使用 `KeyboardAvoidingView` 和导航栏实际高度。Markdown 由 `react-native-enriched-markdown` 渲染为原生文本，支持选择、代码块、表格、链接与 Dynamic Type；关闭数学、视频和语法高亮附加模块，不增加编辑或附件上传协议。搜索结果缺少会话位置、历史消息缺少完整回复数、任务没有独立列表接口的限制与网页相同。
 
 当前不做折叠屏 iPhone Duo 的专用适配，不增加折叠状态处理或专用布局。
 

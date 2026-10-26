@@ -6,6 +6,7 @@ const colors = {
     subtle: "#fafafa",
     foreground: "#171717",
     muted: "#666666",
+    accent: "#0068d6",
     border: "#eaeaea",
   },
   dark: {
@@ -13,6 +14,7 @@ const colors = {
     subtle: "#111111",
     foreground: "#ededed",
     muted: "#a1a1a1",
+    accent: "#52a8ff",
     border: "#262626",
   },
 };
