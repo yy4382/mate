@@ -14,8 +14,7 @@
     "test": "vitest run",
     "test:linux": "sh scripts/test-linux.sh",
     "build": "pnpm -r run build",
-    "bundle:node": "node deploy/node/build-bundle.ts",
-    "smoke:deploy": "node --conditions=mate-source deploy/smoke.ts"
+    "bundle:node": "node deploy/node/build-bundle.ts"
   },
   "devDependencies": {
     "@types/node": "24.13.6",
