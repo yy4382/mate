@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { build } from "esbuild";
+import { build } from "tsdown";
 import { packBundle } from "../../apps/node/src/bundle.ts";
 import { bundleLayouts } from "../../apps/node/src/platforms/bundle-layout.ts";
 import { nodeRuntimes, readNodeRuntime } from "./node-runtimes.ts";
@@ -45,20 +45,25 @@ const runtimes = nodeRuntimes.filter((runtime) => {
 });
 
 const script = await build({
-  entryPoints: [join(root, "apps/node/src/main.ts")],
-  bundle: true,
+  entry: [join(root, "apps/node/src/main.ts")],
+  config: false,
   platform: "node",
   format: "esm",
   target: "node24",
-  conditions: ["mate-source"],
+  dts: false,
+  deps: { alwaysBundle: [/.*/], onlyBundle: false },
+  inputOptions: { resolve: { conditionNames: ["mate-source"] } },
+  outputOptions: { codeSplitting: false },
   define: { __MATE_NODE_VERSION__: JSON.stringify(version) },
-  // Bundled CommonJS dependencies (ws) call require() for Node built-ins.
-  banner: {
-    js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
-  },
+  clean: false,
   write: false,
-  logLevel: "warning",
+  logLevel: "warn",
 });
+const chunks = script.bundles.flatMap((bundle) => bundle.chunks);
+const [chunk] = chunks;
+if (chunks.length !== 1 || chunk?.type !== "chunk") {
+  throw new Error("The node bundle must contain one JavaScript file");
+}
 
 mkdirSync(values.out, { recursive: true });
 for (const runtime of runtimes) {
@@ -70,7 +75,7 @@ for (const runtime of runtimes) {
     { path: "node/LICENSE", content: files.license, executable: false },
     {
       path: "lib/mate.mjs",
-      content: Buffer.from(script.outputFiles[0]!.contents),
+      content: Buffer.from(chunk.code),
       executable: false,
     },
   ]);

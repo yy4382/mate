@@ -128,11 +128,34 @@ jobs:
           MATE_TEST_UPDATE_BUNDLE_DIRECTORY: dist/node-update-bundles
           MATE_TEST_NATIVE_SERVICE: "1"
 
+  docker:
+    name: Docker smoke (${{ matrix.os }})
+    if: github.ref_type != 'tag'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm smoke:deploy
+
   # Runs even when a check fails, so that it fails too instead of being skipped.
   checks:
     name: checks
     if: github.ref_type != 'tag' && always()
-    needs: [types, test, test-linux, deploy-script, node-platforms]
+    needs: [types, test, test-linux, deploy-script, node-platforms, docker]
     runs-on: ubuntu-24.04
     steps:
       - env:
@@ -183,6 +206,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm bundle:node "${VERSION#v}"
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+        with:
+          platforms: arm64
       - name: Push the control-plane image
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

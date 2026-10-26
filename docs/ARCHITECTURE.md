@@ -590,8 +590,8 @@ data/
 
 ## 7. 部署
 
-- **控制面**：Docker 镜像加单服务 Compose，容器以一个专用的无登录系统账号的 UID/GID 运行，数据目录只属于它。node 账号（Agent 命令的身份）读不到模型凭据和对话库，也不在 docker 组里。
-- **node**：完整发布包，自带 Node 运行时和 `mate node` CLI，以宿主现有账号运行。Linux 用 systemd 用户服务，macOS 用当前图形登录账号的 LaunchAgent，Windows 用当前账号的登录计划任务。每个平台分别发布 x64 和 arm64 包，文件名的平台为 `linux`、`darwin`、`win`。发布包是 ustar 归档加旁边的 `.sha256`，装入已钉住官方校验和的 Node 24 二进制、esbuild 打包的程序、启动命令和清单。Windows 的官方 ZIP 只提取运行时与许可证；清单中的平台为 `win32`。CLI 校验平台和架构，不匹配就拒绝。包由管理员自行下载；自动部署仍只升级 Linux 的同机 node。
+- **控制面**：Docker 镜像加单服务 Compose。镜像用 `tsc` 编译 workspace 包，再用 `pnpm deploy --prod` 装入生产依赖；依赖在目标架构上安装，保留包内资源和原生模块。容器以一个专用的无登录系统账号的 UID/GID 运行，数据目录只属于它。node 账号（Agent 命令的身份）读不到模型凭据和对话库，也不在 docker 组里。
+- **node**：完整发布包，自带 Node 运行时和 `mate node` CLI，以宿主现有账号运行。Linux 用 systemd 用户服务，macOS 用当前图形登录账号的 LaunchAgent，Windows 用当前账号的登录计划任务。每个平台分别发布 x64 和 arm64 包，文件名的平台为 `linux`、`darwin`、`win`。发布包是 ustar 归档加旁边的 `.sha256`，装入已钉住官方校验和的 Node 24 二进制、tsdown 打包的程序、启动命令和清单。Windows 的官方 ZIP 只提取运行时与许可证；清单中的平台为 `win32`。CLI 校验平台和架构，不匹配就拒绝。包由管理员自行下载；自动部署仍只升级 Linux 的同机 node。
 - **`mate node` 不记"做到哪一步"**（第 11 节第 1 条）。程序目录（POSIX 的 `~/.local/lib/mate-node`、Windows 的 `%LOCALAPPDATA%\Mate\program`）由暂存目录改名放入、改名挪开再删，所以要么是完整的某个版本，要么不存在；`install`、`update`、`uninstall` 只看程序目录、`mate` 命令、服务定义和服务状态这几样现有状态决定做什么，配置、身份和工作区在程序目录之外，它们从不碰。清单同时说明程序目录里哪些文件是 Mate 的：有别的文件时 `update` 和 `uninstall` 拒绝，不删别人的东西。`install` 从不启动服务，`update` 只在服务完全停止时动手，之后也不启动。状态到动作的完整对照见 DEPLOYMENT §3.2。
 
 Mate 不创建用户、不切换身份、不安装系统软件、不配置 linger。Agent 自己在命令里写 `sudo` 的话，能不能成功由宿主的 sudo 策略决定。
@@ -652,7 +652,7 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 | 6 | 一个 Agent 的工作区在哪个 node？ | 创建时选定主 node，ID 记在 Agent 文件里，之后不变。工作区和 MEMORY.md 只在主 node；经授权访问其他 node 时使用那个 node 账号的主目录 | 4.4、4.5 |
 | 7 | 要不要 Web Push 和附件？ | 要推送；聊天接口接受附件元数据，但附件文件的上传和存储还没有实现 | 4.1 |
 | 8 | 数据库结构变了怎么升级？ | 原地向前迁移：每个存储的结构是一串按版本递增的迁移；比代码新、或版本不在列表里的存储拒绝启动；已发布版本的存储夹具证明升级可行 | 第 6 节、4.5 |
-| 9 | 要不要 CI？ | 要。GitHub Actions 对每个 PR 和 main 各检查一次：`pnpm check` 和 `pnpm test:linux` 的内容拆成几个并行任务（格式与类型、node 和系统场景以外的测试、两片 `test:linux`、`mate-deploy` 的测试），node 套件另在 macOS 和 Windows 原生 runner 上运行，并用本机实际发布包验证服务，汇总成一个 `checks` 结果；`v*` 标签不重跑，等这个提交在 main 上的 `checks` 通过后发布镜像和 node 发布包，设了部署主机时再自动部署（失败回退到原版本和部署前的数据备份） | `.github/workflows/ci.yml` |
+| 9 | 要不要 CI？ | 要。GitHub Actions 对每个 PR 和 main 各检查一次：`pnpm check` 和 `pnpm test:linux` 的内容拆成几个并行任务（格式与类型、node 和系统场景以外的测试、两片 `test:linux`、`mate-deploy` 的测试），node 套件另在 macOS 和 Windows 原生 runner 上运行，并用本机实际发布包验证服务；x64、arm64 Linux runner 构建镜像并运行部署冒烟，不发布产物。全部汇总成一个 `checks` 结果；`v*` 标签不重跑，等这个提交在 main 上的 `checks` 通过后发布镜像和 node 发布包，设了部署主机时再自动部署（失败回退到原版本和部署前的数据备份） | `.github/workflows/ci.yml` |
 | 10 | 几个人怎么共用？ | 每个人是一个人类账号，各有登录（handle 加密码）、名字、已读位置和推送。角色只有管理员和普通人类两种：角色和登录归外壳的 `humans` 表，名字和账号种类归聊天 app，两边靠 externalId 对上。任何时候至少有一个有效的管理员；第一个人类（管理员）由初始密码文件和初始 handle 在第一次启动时创建；原来的所有者升级后成为 handle 为 `owner` 的管理员 | 4.7、第 6 节 |
 | 11 | 怎样区分配对的机器，又不让改名影响身份？ | UUID 继续用于配对、认证、工具调用和 Agent 文件；网关保存唯一的 node 名字及 node 握手报告的系统信息，管理员只改名字。Agent 列表从网关现查名字 | 4.5、4.6、4.7、第 6 节 |
 | 12 | node 支持哪些平台，Windows 用什么 shell？ | Linux、macOS、Windows，分别支持 x64 和 arm64。平台表选择 shell、进程管理、服务、布局、权限和路径规则，公共安装与命令流程不复制。Windows 用自带的 PowerShell 5.1，进程树追踪范围见 4.5；macOS 和 Windows 由管理员手动安装，不加入 Linux 的自动部署 | 4.5、第 7 节、DEPLOYMENT §3.2 |
