@@ -11,6 +11,8 @@
 - Avoid spamming markdown files as documents, they often quickly become irrelevant or outdated.
   - Think twice before creating new project document (those that describe how to develop our project, e.g. `docs/ARCHITECTURE.md`, not those user-oriented documents that describe how to use our project), adding this kind of documentation requires user permission.
 - Be curious about WHY. Find out why we want this change and why the previous code has such logic. Not only get an idea on what the logic (more specifically, code's control flow) is, but also care about why we did that in the past. This can avoid unnecessary changes or anomalies in the project’s expected behavior.
+- Keep tests and CI fast. Avoid unnecessary sleeps in tests and duplicate checks across CI workflows.
+- Smoke tests are often unnecessary or even misleading. They may run in a slightly different environment or test a slightly different version of the code, making their results less representative and quick to become outdated. It is fine to use smoke tests during development, but do not commit them to Git as permanent tests that run on every change.
 
 ## Lessons from corrections
 
