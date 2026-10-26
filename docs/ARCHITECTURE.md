@@ -538,11 +538,11 @@ interface Admin {
 
 网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑；API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
 
-移动端最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前阶段只建立可运行的工程和启动页，尚未连接控制面。iOS 和 Android 都作为工程准备的工作假设，首发平台仍待确认。服务器选择、认证实现、分发与签名、原生推送方案也尚未确定。
+移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前阶段只建立可运行的工程和启动页，尚未连接控制面。服务器选择、认证实现、分发与签名、原生推送方案仍未确定。
 
 当前不做折叠屏 iPhone Duo 的专用适配，不增加折叠状态处理或专用布局。
 
-移动端依赖和 TypeScript 配置由 `@mate/mobile` 自己持有。它使用 Expo 的 TypeScript 基础配置和默认 Metro workspace 支持，保留 pnpm 的隔离安装；不继承服务端的 NodeNext 配置，也不改网页的 React 版本。根 `typecheck` 包含移动端；原生 bundle 检查走独立的 `bundle:check` 命令。移动端没有 `build` 脚本，因此根递归 `build`、控制面构建和 node 发布包都不要求 Xcode、Android SDK 或签名凭据。运行命令见 [开发机运行](DEPLOYMENT.md#6-在开发机上运行)。
+移动端依赖和 TypeScript 配置由 `@mate/mobile` 自己持有。它使用 Expo 的 TypeScript 基础配置和默认 Metro workspace 支持，保留 pnpm 的隔离安装；不继承服务端的 NodeNext 配置，也不改网页的 React 版本。根 `typecheck` 包含移动端；iOS bundle 检查走独立的 `bundle:check` 命令。移动端没有 `build` 脚本，因此根递归 `build`、控制面构建和 node 发布包都不要求 Xcode 或签名凭据。运行命令见 [开发机运行](DEPLOYMENT.md#6-在开发机上运行)。
 
 ## 5. 关键流程
 
