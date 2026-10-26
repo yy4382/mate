@@ -1,7 +1,7 @@
 import { router, Stack } from "expo-router";
-import { useHuman } from "../../../admin/session";
-import { Button, Copy, Screen } from "../../../admin/ui";
-import { useTheme } from "../../../theme";
+import { useHuman } from "../../../../admin/session";
+import { Button, Copy, Screen } from "../../../../admin/ui";
+import { useTheme } from "../../../../theme";
 
 export default function AdminLayout() {
   const human = useHuman();

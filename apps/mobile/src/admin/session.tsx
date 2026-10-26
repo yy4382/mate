@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { Keyboard, StyleSheet, View } from "react-native";
+import { Keyboard, View } from "react-native";
 import {
   QueryClient,
   QueryClientProvider,
@@ -17,12 +17,11 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { KeyboardProvider } from "react-native-keyboard-controller";
-import { Redirect, Stack, useFocusEffect } from "expo-router";
+import { useFocusEffect } from "expo-router";
 import { fetch as streamingFetch } from "expo/fetch";
 import { auth } from "../auth-native";
 import { ManagementClient } from "./client";
-import { Button, Screen, Copy, ErrorLine, ManagementPresentationAccess } from "./ui";
-import { useTheme } from "../theme";
+import { PresentationAccess } from "../ui";
 
 const Client = createContext<ManagementClient | null>(null);
 
@@ -58,24 +57,15 @@ function Session({ client, children }: { client: ManagementClient; children: Rea
       importantForAccessibility={suspended ? "no-hide-descendants" : "auto"}
     >
       <Client.Provider value={client}>
-        <ManagementPresentationAccess.Provider value={!suspended}>
+        <PresentationAccess.Provider value={!suspended}>
           <QueryClientProvider client={queries}>{children}</QueryClientProvider>
-        </ManagementPresentationAccess.Provider>
+        </PresentationAccess.Provider>
       </Client.Provider>
     </View>
   );
 }
 
-export function ManagementLayout() {
-  return (
-    <KeyboardProvider preload={false}>
-      <ManagementGate />
-    </KeyboardProvider>
-  );
-}
-
-function ManagementGate() {
-  const colors = useTheme();
+export function ManagementScope({ children }: { children: ReactNode }) {
   const state = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
   const [scope, setScope] = useState<{ client: ManagementClient; id: number } | null>(null);
   useEffect(() => {
@@ -87,42 +77,13 @@ function ManagementGate() {
   }, [state, scope]);
   useEffect(() => () => scope?.client.close(), [scope]);
   return (
-    <View style={{ flex: 1 }}>
+    <KeyboardProvider preload={false}>
       {scope && (
         <Session key={scope.id} client={scope.client}>
-          <Stack
-            screenOptions={{
-              headerStyle: { backgroundColor: colors.background },
-              headerTintColor: colors.foreground,
-              contentStyle: { backgroundColor: colors.background },
-              headerBackTitle: "返回",
-            }}
-          >
-            <Stack.Screen name="admin" options={{ headerShown: false }} />
-            <Stack.Screen name="profile" options={{ title: "个人资料" }} />
-          </Stack>
+          {children}
         </Session>
       )}
-      {state.kind !== "signed-in" && (
-        <View style={StyleSheet.absoluteFill}>
-          {state.kind === "unavailable" ? (
-            <Screen topInset>
-              <ErrorLine error={state.message} />
-              <Button title="重试连接" onPress={() => void auth.retry()} />
-              <Button title="返回登录" onPress={() => void auth.logout()} />
-            </Screen>
-          ) : state.kind === "starting" ||
-            state.kind === "checking" ||
-            state.kind === "clearing" ? (
-            <Screen topInset>
-              <Copy>正在验证登录…</Copy>
-            </Screen>
-          ) : (
-            <Redirect href="/" />
-          )}
-        </View>
-      )}
-    </View>
+    </KeyboardProvider>
   );
 }
 

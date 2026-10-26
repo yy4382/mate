@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { ScrollView, View } from "react-native";
 import type { Entry } from "@mate/chat/contracts";
-import { useChat, useChatState } from "../../session";
-import { accountName } from "../../chat";
-import { Button, Card, ErrorLine, Field, Label, styles } from "../../ui";
-import { MessageBody } from "../../message-body";
+import { useChat, useChatState } from "../../../session";
+import { accountName } from "../../../chat";
+import { Button, Card, ErrorLine, Field, Label, styles } from "../../../ui";
+import { MessageBody } from "../../../message-body";
 export default function Search() {
   const chat = useChat();
   const state = useChatState();

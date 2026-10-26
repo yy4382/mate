@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { Button, Card, Copy, Screen } from "../../../admin/ui";
+import { Button, Card, Copy, Screen } from "../../../../admin/ui";
 export default function AdminScreen() {
   return (
     <Screen>
