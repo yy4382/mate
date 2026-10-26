@@ -325,6 +325,9 @@ node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 
 
 ## 共用基础
 
+**移动客户端**（mobile client）
+`apps/mobile` 的 Expo 原生客户端，与 `apps/web` 的网页客户端面向同一个控制面。当前只有启动页与导航入口，尚未接入聊天、管理或通知。
+
 **时钟**（clock）
 `@mate/clock` 里的 `Clock`：读当前时间（`now`），以及睡到某个时长或某个 `AbortSignal` 中止为止（`sleep`）。所有需要时间或定时器的模块都通过它，而不是直接调用 `Date.now` 或 `setTimeout`；一个定时器就是一次带自己 signal 的 `sleep`，中止 signal 就是取消它。测试里换成**可控时钟**（`FakeClock`），由测试推进时间。
 避免：timer handle、setTimeout 包装。

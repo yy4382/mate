@@ -15,3 +15,9 @@ mate.local.json
 .pnpm-store/
 artifacts/
 decisions.tsv
+
+# Expo local state and generated native projects.
+apps/mobile/.expo/
+apps/mobile/expo-env.d.ts
+apps/mobile/ios/
+apps/mobile/android/
