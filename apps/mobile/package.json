@@ -6,12 +6,13 @@
   "scripts": {
     "start": "expo start",
     "ios": "expo run:ios",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p test/tsconfig.json --noEmit",
     "bundle:check": "expo export --platform ios"
   },
   "dependencies": {
     "@mate/admin": "workspace:*",
     "@mate/auth": "workspace:*",
+    "@mate/chat": "workspace:*",
     "@preeternal/react-native-cookie-manager": "7.0.0",
     "@tanstack/react-query": "5.104.3",
     "eventsource-parser": "4.1.3",
@@ -20,6 +21,7 @@
     "expo-constants": "58.0.13",
     "expo-crypto": "~58.0.7",
     "expo-linking": "58.0.14",
+    "expo-notifications": "~58.1.6",
     "expo-router": "58.0.26",
     "expo-sqlite": "~58.0.14",
     "expo-status-bar": "58.0.4",

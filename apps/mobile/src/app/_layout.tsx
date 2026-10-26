@@ -1,25 +1,17 @@
-import { useEffect } from "react";
-import { AppState } from "react-native";
-import { focusManager } from "@tanstack/react-query";
-import { auth } from "../auth-native";
 import { AgentCreationProvider } from "../admin/creation";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { AuthLifecycle } from "../lifecycle";
+import { NotificationIntegration } from "../notifications-root";
 import { useTheme } from "../theme";
 
 export default function RootLayout() {
   const colors = useTheme();
-  useEffect(() => {
-    void auth.start();
-    const subscription = AppState.addEventListener("change", (next) => {
-      focusManager.setFocused(next === "active");
-      if (next === "active") void auth.revalidate();
-    });
-    return () => subscription.remove();
-  }, []);
 
   return (
     <AgentCreationProvider>
+      <AuthLifecycle />
+      <NotificationIntegration />
       <StatusBar style="auto" />
       <Stack
         screenOptions={{
@@ -31,6 +23,7 @@ export default function RootLayout() {
       >
         <Stack.Screen name="index" options={{ title: "Mate" }} />
         <Stack.Screen name="(management)" options={{ headerShown: false }} />
+        <Stack.Screen name="notifications" options={{ title: "通知", headerBackTitle: "返回" }} />
       </Stack>
     </AgentCreationProvider>
   );

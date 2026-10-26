@@ -82,7 +82,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 | `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |
 | `apps/control-plane`（`@mate/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
 | `apps/web`（`@mate/web`） | Vite 网页客户端 |
-| `apps/mobile`（`@mate/mobile`） | Expo 原生 iOS 客户端，包含认证、管理、Agent 观察和个人资料 |
+| `apps/mobile`（`@mate/mobile`） | Expo 原生 iOS 客户端，包含认证、管理、Agent 观察、个人资料和原生通知 |
 | `apps/node`（`@mate/node`） | node 进程和 `mate node` CLI |
 | `tests/system`（`@mate/system-tests`） | 起真实控制面和 node 进程的系统场景（MODULE_TESTS 第 12 节） |
 
@@ -167,8 +167,8 @@ interface ChatApp {
   // 实时信号：每个提交后追加了实时事件的写操作触发一次，不带参数；触发时机和监听者出错的处理同 watchInbox
   watchLive(listener: () => void): () => void
   // 人类账号的推送订阅（规则 8），记在订阅它的账号名下。以 endpoint 幂等，再订阅一次更新密钥，由另一个人类账号再订阅则归到那个账号，并丢掉原账号在这个订阅上还在排队的推送；只接受 https 的 endpoint
-  subscribePush(account, { endpoint, keys: { p256dh, auth } })
-  unsubscribePush(account, { endpoint }) // 删除这个账号自己的订阅，连同它还在排队的推送；不认识的、或别的账号订阅的 endpoint 什么都不改，回答相同
+  subscribePush(account, { endpoint, keys: { p256dh, auth } } | { transport: "apns", token, environment, binding })
+  unsubscribePush(account, { endpoint } | { transport: "apns", token, environment, binding }) // 删除这个账号自己的订阅，连同它还在排队的推送；不认识的、或别的账号订阅的 endpoint 什么都不改，回答相同
 }
 ```
 
@@ -198,7 +198,7 @@ interface ChatApp {
      - 第 2 条的新鲜度检查同样覆盖任务操作：自上次读取以来，别人新建或认领了任务，你的任务操作或发言就会被拦下，并返回这些变化。
    - 任务条目不产生收件事件，也就是不会单独触发通知，但会出现在读取结果里，并参与新鲜度检查。
    - 已经不是任务主人的人迟到的"让出"，不会撤销别人新的认领。只有当前主人能转交。
-8. **推送（Web Push）只给人类账号，每个订阅只推它自己账号的通知。**
+8. **推送只给人类账号，每个订阅只推它自己账号的通知。**
    - **哪些消息推送：** 对一个订阅，通知了它的账号（产生了该账号的收件事件）、并且是发给该账号的私信或 @ 了该账号的消息，而且该账号仍然有效（已停用的账号的订阅什么也收不到：入队时不排，已经排着的也在发送前再查一次，停用了就丢弃）。推送是通知的一部分，"谁会被通知"仍只有一个定义：没加入的频道里 @ 某个人类账号的顶层消息不通知它，也就不推送；自己的消息不通知自己，也不推送；发给 A 的私信只推 A 的订阅，不推 B 的。提及只来自 `send` 的 `mentions`（账号 ID），正文里的文字不算，所以邮箱地址里的 `@owner` 不是提及。
    - **推送队列：** 在消息提交的同一个事务里，为每个推送订阅追加一条待投递记录。被拦下的发送、回滚、按回执返回的重复调用都不追加。
    - **投递：** 聊天 app 里的投递循环按到期时间逐条投递，经调用方给的 `PushSender` 发出（Web 外壳用 VAPID 密钥加密签名），用时钟等待。推送服务回 2xx 算送达；回 404 或 410 说明订阅已失效，删除这个订阅和它的待投递记录；连不上、408、429、5xx 是暂时失败，30 秒后重试，之后每次等待翻倍，一共失败 10 次就放弃；其他状态码不重试。重试时间存在队列里，重启后照原计划继续；关闭时正在发送的那条留在队列里，重启后以同一个 tag 重发。记录投递结果时存储出错，投递循环报告错误，30 秒后再试，不会就此停下。投递只改推送队列和订阅，永远不会影响已提交的消息。`PushSender` 必须在有限时间内返回（例如设请求超时），因为投递是一条一条进行的。
@@ -207,6 +207,10 @@ interface ChatApp {
    - 事件只记下它的对象（条目、会话、账号、已读位置所在的时间线），内容在读取时从对象现查：条目不可变，所以带全文；其他种类带对象现在的样子，旧的或重复的事件套用到客户端上，结果都一样。
    - 游标是一个不透明字符串，由**纪元**和事件 ID 组成，可以直接用作 SSE 的事件 ID。纪元在新建 `chat.sqlite` 时随机生成，之后不变：数据重置（换了新文件）后纪元不同，旧游标随之作废。
    - 事件保留一天，过期的在之后的写操作里删掉。游标的纪元不对、早于保留的事件、超前于库里最新的事件（例如恢复了旧备份）或者根本不是游标，`liveEvents` 都回答 `resnapshot`，客户端重新拉快照。恢复旧备份只在库里的事件追上客户端的游标之前能被发现；追上之后同一个纪元下的事件 ID 已经指向别的变化，所以恢复备份后应当让浏览器重新加载。
+
+**原生传输。** `@mate/chat/push` 公开不依赖 Node 的 Zod 契约。浏览器继续提交 endpoint 和 keys；iOS 提交 `transport: "apns"`、十六进制 token、`sandbox | production` 环境和本次登记的随机 `binding`。两者共用收件规则和每条消息的持久队列。订阅的自然键是浏览器 endpoint 或 APNs 环境与 token。换账号或换原生 binding 时删除旧订阅再新增，旧队列随之删除，迟到的投递回答不能影响新订阅。原生取消订阅同时匹配账号和 binding，旧的取消请求不能撤销新登记。迁移 6 只新增 `push_cancellations`，保留现有订阅与排队投递；取消原生登记时在同一事务里永久记录精确账号、传输地址与 binding，即使登记请求还未完成。该登记之后再订阅得到 `invalid-input`（HTTP 400），不能在退出后复活，也不能覆盖另一个账号的新 binding；重新开启或 token 轮换使用新 binding。取消记录不参与通知资格或投递队列。推送内容增加接收账号 ID，仍然不含消息正文。
+
+聊天库第 5 版把 Web Push 的 endpoint 和 keys 迁为 `subscription_key` 与 `subscription_json`，保留订阅 ID、账号、AUTOINCREMENT 计数和推送队列。升级验证继续使用已发布版本的存储夹具。
 
 **持久化：** `data/chat.sqlite`，包括推送订阅（带订阅它的账号）、推送队列和实时事件（带受众）。
 
@@ -523,6 +527,8 @@ interface Admin {
 - **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, cursor, unread }`），SSE 的 id 是这批读到的游标 `cursor`，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前、读聊天 app 之前都查一次登录会话；会话已过期、已退出登录或这个人类已被停用，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
 - **推送发送器。** VAPID 密钥对在第一次启动时生成，存在外壳的表里，之后不变：浏览器用公钥订阅，换了密钥所有订阅都会失效。`PushSender` 用 `web-push` 发出（加密、VAPID 签名、TTL 一天、请求超时 10 秒），推送服务的回答原样作为状态码交回聊天 app，连不上时抛错。VAPID 的联系地址来自 `MATE_VAPID_SUBJECT`，缺省为 `mailto:owner@mate.invalid`。
 
+**原生推送发送器。** `apns.ts` 用 `@parse/node-apn` 直接访问 APNs，不经过 Expo 推送服务。配置来自 `ControlPlaneOptions.apns` 或 DEPLOYMENT 6.2 的环境变量；不配置时 Web Push 照常运行。`GET /api/chat/push/native` 对已登录人类报告是否配置，并在配置时给出环境和公开 HTTPS origin。`POST push/subscribe` 接受两种传输；未配置的原生登记回 503，环境不匹配回 409。取消登记不要求 APNs 仍然开启。发送器持有 provider，单次总期限 10 秒，库内重试关闭。token 失效映射为队列的 gone，provider 配置错误保留订阅；APNs 的 BadPath 404 不能当成 token 失效。过期 provider token 是可重试失败。expiry 固定为消息时间加一天，重试不延长；已过期不再交给 APNs。collapse ID 沿用消息 tag。系统提示只有通用文案，数据带定位、server、accountId 与 binding，不含消息正文。
+
 **前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。样式用 Tailwind CSS v4，对话框、菜单、标签页等交互组件用 Base UI，界面原语集中在 `src/shell/ui.tsx`；外观和交互规则见 [界面规范](DESIGN.md)。页面在 `/login` 和 `/app` 下：聊天（`/app`、`/app/c/…`）、搜索、个人资料（`/app/profile`：改显示名和 handle、改密码、退出）、管理（`/app/admin/agents|providers|nodes|humans`，人类页让管理员添加人类、改角色、重置密码、停用）。当前人类来自 `GET /api/me`，导航据此显示名字和头像，普通人类不显示管理入口，直接打开管理地址显示"需要管理员权限"；当前人类自己的账号在实时流里变化时这份数据重新获取。`apps/web` 用 Vite 构建，`MATE_WEB_DIRECTORY` 指向构建产物（`apps/web/dist`）。
 
 - **管理操作按 node ID 提交，模型调用按名字选目标。** Node 页显示名字、在线状态和最近一次系统信息；没有报告时显示尚未收到。改名失败贴在名字字段下面，保存成功后同时刷新 node 和 Agent 查询。创建 Agent 的选择项显示名字，提交仍用 node ID；Agent 列表显示从网关读取的 `nodeName`。
@@ -538,11 +544,17 @@ interface Admin {
 
 网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑；API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
 
-移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前支持保存一个 HTTPS 服务器地址，用已有 handle 和密码登录、显示当前身份、恢复登录和退出，以及完整管理和个人资料。聊天、分发与签名、原生推送仍未实现。
+移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前支持保存一个 HTTPS 服务器地址，用已有 handle 和密码登录、显示当前身份、恢复登录和退出，以及完整管理和个人资料。原生通知支持权限、登记、清理与设置。聊天、分发与签名仍待接入。
 
-移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。根布局统一持有启动和前台监听，启动和回到前台以 `GET /api/me` 验证 cookie；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
+移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。根层 `lifecycle.tsx` 统一持有认证启动和唯一的 AppState 监听。仅真正进入 background 后回到 active 才以 `GET /api/me` 验证 cookie，权限弹窗等仅 inactive → active 的变化不重验或打断通知登记；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
 
 退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问并清理全部 app cookie，切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
+
+`MobileNotifications` 在 `notifications.ts` 持有系统权限、已验证的服务器与账号、本机登记和未确认的取消登记。`notifications-native.ts` 用 SDK 58 的 `expo-notifications` 获取 APNs token、监听 token 更新、收取通知和点击响应。根层 `NotificationIntegration` 在设置页关闭时仍监听原生响应和 token，并同步认证状态；它不另行启动认证或监听前台。后台暂停由统一生命周期处理，后台的身份更新也不能恢复通知访问。首页与个人资料提供通知设置入口，设置页返回时保留个人资料草稿。只有权限允许、服务器 origin 和环境匹配、订阅请求成功才显示已登记。拒绝或撤回权限会关闭本机推送并尝试取消服务器订阅；网络和签名失败显示未完成；同一 token 登记重试沿用 binding，token 轮换生成新 binding。当前登记与待取消登记分别保存；token 轮换前先持久化旧登记的取消责任，再发新登记。取消失败不丢失旧 token，刷新、重启恢复和退出都会重试。每条待取消记录保留精确服务器、账号、token、环境与 binding，只能用同一服务器和账号的已验证身份发送，确认成功后才移除；重新成为当前登记的相同记录不会再被取消。旧的单条登记设置格式仍可读取，不改变 SQLite 表结构。
+
+`MobileAuth` 的可选 `beforeClear` 屏障在取消登记结束后才允许退出请求和 cookie 清理。退出、更换服务器、401 都使旧请求和点击响应失效，并调用系统取消注册、移除已展示通知。认证验证中或网络不可用时暂停通知展示和导航。冷启动点击等待身份验证；通知必须匹配精确 origin、账号和 binding，且未超过一天。导航只产生 `/conversation?id=<会话>&thread=<讨论串>&seq=<序号>` 的站内参数，忽略 payload 中的 URL。目标页面由聊天导航任务提供，合入 mobile 时须接入同一个已登录导航组。
+
+离线取消不保证服务器停止发送，也不能收回已由 APNs 接受的通知。此时保留 cleanup 记录，在同一账号再次验证时重试；本机立即禁止旧通知导航并尝试向系统取消注册。重新注册后，旧服务器仍可能送来通用提示，所以界面明确说明取消未确认。真实 APNs 投递需要 Apple 凭据和具备推送能力的签名；simctl 注入只验证原生接收和点击，不证明远程投递。
 
 `@mate/auth` 只拥有实际共享的认证契约 `Role`、`HumanView`、`LoginInput` 和 `LoginResult`。控制面、网页和移动端从同一处消费这些类型，移动端在网络边界用 schema 解析响应；控制面的 cookie、Origin 和路由行为保持不变。
 

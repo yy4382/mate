@@ -222,6 +222,11 @@ export default function HomeScreen() {
                     <Text style={[styles.description, { color: colors.muted }]}>
                       账号 ID：{state.human.accountId} · {state.human.active ? "有效" : "已停用"}
                     </Text>
+                    <Button
+                      title="通知设置"
+                      secondary
+                      onPress={() => router.push("/notifications")}
+                    />
                     <Button title="重新验证登录" secondary onPress={() => void auth.revalidate()} />
                     <Button title="个人资料" onPress={() => router.push("/profile")} />
                     {state.human.role === "admin" && (

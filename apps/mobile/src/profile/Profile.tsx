@@ -17,6 +17,7 @@ export function Profile() {
   return (
     <Screen>
       <Button title="返回首页" onPress={() => router.replace("/")} />
+      <Button title="通知设置" onPress={() => router.push("/notifications")} />
       <Copy title>{human?.displayName}</Copy>
       <Copy muted>
         @{human?.handle} · {human?.role === "admin" ? "管理员" : "普通人类"}

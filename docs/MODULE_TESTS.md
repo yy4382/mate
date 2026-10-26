@@ -123,6 +123,8 @@
 
 ### 3.10 结构迁移
 
+原生传输扩展继续通过 `ChatApp.subscribePush` 与 `unsubscribePush` 驱动，不测试内部队列表。相同 APNs token 在另一账号或新的 binding 下登记后，旧通知与迟到的投递回答不能影响新登记。旧 binding 的取消不能删除新 binding。Web Push 的已有公开接口与存储夹具回归继续运行。
+
 用已发布版本的**存储夹具**（`tests/fixtures/stores/v0.1.0-alpha.2/`，生成方法见它的 README）。测试先把夹具复制到临时目录，从不改夹具本身。
 
 - 用 `ChatApp` 打开夹具里的 `chat.sqlite` 副本，账号、会话、消息、讨论串、任务都在，所有者的未读摘要和夹具生成时一致。
@@ -485,6 +487,16 @@
 - 观察接收分片 UTF-8 和 SSE 批次，支持工作助手参数，以 `ended` 结束；断线交出错误，已关闭的登录不再收到事件。
 
 原生界面验证使用独占的普通 iPhone iOS 27 模拟器、临时 HTTPS 控制面、公开的 FakeNode 和 ScriptedProvider。通过真实表单验证管理读写、角色限制、Agent 观察与工作区、个人资料和密码持久性，以及浅色、暗色、大字体与键盘。创建中断后通过原生 Back、重新打开和返回首页验证草稿与恢复 ID 保留，修复 Node 后从界面继续创建成功，再打开时草稿清空；退出或换账号后没有旧草稿。前台往返验证相同账号保留当前页面和未保存草稿，失效登录、退出、服务器和账号变化清除旧页面与数据。截图和执行日志留在临时目录，驱动脚本不作为永久 smoke 测试提交。
+
+生命周期整合由 `lifecycle.test.ts` 驱动 `startMobileLifecycle`、真实 `MobileAuth` 与 `MobileNotifications` 的公开接口，替换外部 AppState、权限与网络。权限决定等待时 inactive → active 不增加 `/api/me` 或取消操作；background → active 只验证一次，并在后台暂停通知。原生整合验证从个人资料打开通知设置，操作真实权限弹窗后返回原草稿、完成创建中断后的 Back/重试，并验证退出、401 和服务器切换仍先结束通知会话再改变 cookie。
+
+### 11.6 原生通知
+
+原生通知的模块边界由 `apps/mobile/test/notifications.test.ts` 的 `MobileNotifications` 公开操作和状态订阅覆盖。外部替身只替代 iOS 权限、token、设置存储、原生通知展示与网络。测试覆盖未配置、拒绝与撤回权限、token 轮换及取消失败后的重启恢复、多个旧 token 的退出清理、跨服务器与账号的取消责任、迟到取消不能删除新 binding、旧登记设置格式恢复、离线取消、服务器与账号隔离、冷启动和重复点击、过期数据与任意 URL 拒绝，以及认证在在途登记之后取消订阅、再清 cookie 的屏障。轮换恢复测试通过真实 `ChatApp` 的公开接口发送夹具私信，观察恢复后只有当前 token 收到，退出后没有 token 再收到新通知。原生源码和 Node 测试分别类型检查，避免将 Node 全局类型引入原生源码。
+
+`apps/control-plane/test/push.test.ts` 通过真实 HTTP 认证与订阅路由驱动控制面。APNs 是临时 TLS HTTP/2 服务，真实 `@parse/node-apn` 库连接它；只使用现场生成的测试 key，不访问 Apple。服务观察原生 payload、topic、expiry、collapse ID 和错误映射，验证暂时失败重试、失效 token 清理与 provider 错误保留。真实 HTTP 测试还挂起订阅正文的最后一字节，在取消登记并退出或换账号登记之后再完成正文，证明旧 binding 被拒绝且新账号登记仍能收到自己的通知。聊天模块测试证明取消在重启后仍生效，并且只约束精确账号、token、环境和 binding。已有 Web Push、消息资格和存储夹具测试继续证明共用规则。真实凭据与设备投递不在这些替身测试的结论内。
+
+原生 UI 使用独占的普通 iPhone iOS 27 模拟器、正常 Expo/Xcode 构建和临时 HTTPS 后端。验证允许与拒绝权限、配置缺失、原生收取和点击响应、退出及换服务器隔离，检查浅色、暗色和放大字体。`simctl push` 只注入通知，不证明 APNs 远程投递。驱动脚本和截图只作本地开发证据，不提交为永久 smoke 测试；最终聊天页面须在 mobile 整体整合后验证。
 
 ## 12. 系统场景
 
