@@ -14,12 +14,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Entry, TimelineRef } from "@mate/chat/contracts";
-import { accountName, conversationLabel, timelineKey } from "../../chat";
-import { ConversationActions, CreateTask, TaskActions } from "../../chat-actions";
-import { MessageBody } from "../../message-body";
-import { useChat, useChatState } from "../../session";
-import { Button, ErrorLine, Field, Label, styles } from "../../ui";
-import { useTheme } from "../../theme";
+import { accountName, conversationLabel, timelineKey } from "../../../chat";
+import { ConversationActions, CreateTask, TaskActions } from "../../../chat-actions";
+import { MessageBody } from "../../../message-body";
+import { useChat, useChatState } from "../../../session";
+import { Button, ErrorLine, Field, Label, styles } from "../../../ui";
+import { useTheme } from "../../../theme";
 
 const verbs = {
   created: "创建了任务",

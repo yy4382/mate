@@ -1,8 +1,8 @@
 import { useSyncExternalStore } from "react";
 import { Linking, Pressable, ScrollView, StyleSheet, Text } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { notifications } from "../notifications-native";
-import { useTheme } from "../theme";
+import { notifications } from "../../../notifications-native";
+import { useTheme } from "../../../theme";
 
 export default function NotificationSettings() {
   const colors = useTheme();

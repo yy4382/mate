@@ -1,9 +1,12 @@
-import { Redirect, Stack } from "expo-router";
+import { Redirect } from "expo-router";
 import { useSyncExternalStore } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { auth } from "../../auth-native";
 import { useSessionChat } from "../../session";
 import HomeScreen from "../index";
+import { ManagementScope } from "../../admin/session";
+import { NativeTabs } from "expo-router/native-tabs";
+import { useHuman } from "../../admin/session";
 import { useTheme } from "../../theme";
 export default function SignedInLayout() {
   const state = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
@@ -27,21 +30,9 @@ export default function SignedInLayout() {
         accessibilityElementsHidden={!ready}
         importantForAccessibility={ready ? "auto" : "no-hide-descendants"}
       >
-        <Stack
-          screenOptions={{
-            headerStyle: { backgroundColor: c.background },
-            headerTintColor: c.foreground,
-            contentStyle: { backgroundColor: c.background },
-            headerShadowVisible: false,
-            headerBackButtonDisplayMode: "minimal",
-          }}
-        >
-          <Stack.Screen name="chat" options={{ title: "聊天", headerBackVisible: false }} />
-          <Stack.Screen name="conversation" options={{ title: "会话" }} />
-          <Stack.Screen name="search" options={{ title: "搜索消息" }} />
-          <Stack.Screen name="new" options={{ title: "新建会话", presentation: "modal" }} />
-          <Stack.Screen name="account" options={{ title: "账号与服务器" }} />
-        </Stack>
+        <ManagementScope>
+          <Tabs />
+        </ManagementScope>
       </View>
       {!ready && (
         <View style={StyleSheet.absoluteFill}>
@@ -49,5 +40,31 @@ export default function SignedInLayout() {
         </View>
       )}
     </View>
+  );
+}
+
+function Tabs() {
+  const c = useTheme();
+  const human = useHuman();
+  return (
+    <NativeTabs tintColor={c.accent}>
+      <NativeTabs.Trigger name="(chat)">
+        <NativeTabs.Trigger.Label>聊天</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon
+          sf={{
+            default: "bubble.left.and.bubble.right",
+            selected: "bubble.left.and.bubble.right.fill",
+          }}
+        />
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="(agents)" hidden={human?.role !== "admin"}>
+        <NativeTabs.Trigger.Label>Agent</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf="person.2" />
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="(settings)">
+        <NativeTabs.Trigger.Label>设置</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf={{ default: "gearshape", selected: "gearshape.fill" }} />
+      </NativeTabs.Trigger>
+    </NativeTabs>
   );
 }

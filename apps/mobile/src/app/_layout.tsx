@@ -17,7 +17,6 @@ export default function RootLayout() {
         <StatusBar style="auto" />
         <Stack
           screenOptions={{
-            headerStyle: { backgroundColor: colors.background },
             headerTintColor: colors.foreground,
             headerShadowVisible: false,
             contentStyle: { backgroundColor: colors.background },
@@ -25,8 +24,6 @@ export default function RootLayout() {
         >
           <Stack.Screen name="index" options={{ title: "Mate" }} />
           <Stack.Screen name="(signed-in)" options={{ headerShown: false }} />
-          <Stack.Screen name="(management)" options={{ headerShown: false }} />
-          <Stack.Screen name="notifications" options={{ title: "通知", headerBackTitle: "返回" }} />
         </Stack>
       </AgentCreationProvider>
     </Session>
