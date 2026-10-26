@@ -1,4 +1,4 @@
-import { Redirect } from "expo-router";
+import { Redirect, usePathname } from "expo-router";
 import { useSyncExternalStore } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { auth } from "../../auth-native";
@@ -46,8 +46,9 @@ export default function SignedInLayout() {
 function Tabs() {
   const c = useTheme();
   const human = useHuman();
+  const pathname = usePathname();
   return (
-    <NativeTabs tintColor={c.accent}>
+    <NativeTabs tintColor={c.accent} hidden={!["/chat", "/agents", "/account"].includes(pathname)}>
       <NativeTabs.Trigger name="(chat)">
         <NativeTabs.Trigger.Label>聊天</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
