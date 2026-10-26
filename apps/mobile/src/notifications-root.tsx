@@ -9,7 +9,7 @@ export function NotificationIntegration() {
     const sync = () => {
       const state = auth.getSnapshot();
       void notifications.setSession(
-        state.kind === "signed-in"
+        state.kind === "signed-in" && AppState.currentState !== "background"
           ? {
               server: state.server,
               accountId: state.human.accountId,
@@ -18,22 +18,10 @@ export function NotificationIntegration() {
       );
     };
     const unsubscribe = auth.subscribe(sync);
-    let backgrounded = AppState.currentState === "background";
-    const foreground = AppState.addEventListener("change", (value) => {
-      if (value === "background") {
-        backgrounded = true;
-        void notifications.setSession(null);
-      } else if (value === "active" && backgrounded) {
-        backgrounded = false;
-        void auth.revalidate();
-      }
-    });
     sync();
-    void auth.start();
     return () => {
       stop();
       unsubscribe();
-      foreground.remove();
     };
   }, []);
   return null;
