@@ -39,6 +39,8 @@ export function vapidKeys(db: DatabaseSync): VapidKeys {
 export function webPushSender(keys: VapidKeys, subject: string): PushSender {
   const vapidDetails = { subject, ...keys };
   return async (subscription, notice) => {
+    if (subscription.transport === "apns")
+      throw new Error("Web Push requires a browser subscription");
     try {
       const response = await webPush.sendNotification(subscription, JSON.stringify(notice), {
         vapidDetails,

@@ -9,5 +9,5 @@
     "verbatimModuleSyntax": true,
     "types": ["react", "react-native"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }
