@@ -471,6 +471,38 @@ describe("native chat public interface", () => {
     await until(f.chat, () => f.expired === 1);
     expect(f.expired).toBe(1);
   });
+  it("makes snapshot history and sending available while the native event stream is still connecting", async () => {
+    const f = fixture();
+    f.server.send(f.other, f.ref, {
+      requestId: "before-stream",
+      body: "不等待实时连接的历史",
+      freshness: false,
+    });
+    const connection = deferred<void>();
+    const stream = f.platform.stream;
+    f.platform.stream = async (...args) => {
+      await connection.promise;
+      return stream(...args);
+    };
+    f.chat.start();
+    try {
+      await until(f.chat, (state) => state.connection === "connecting");
+      await f.chat.load(f.ref);
+      expect(f.chat.timeline(f.ref).entries).toMatchObject([{ body: "不等待实时连接的历史" }]);
+      expect(await f.chat.locate(f.ref, { seq: 1 }, new AbortController().signal)).toBe("found");
+      f.chat.edit(f.ref, "连接期间发送");
+      await f.chat.send(f.ref);
+      expect(
+        f.server
+          .readHistory(f.me, f.ref, {})
+          .filter((entry) => entry.kind === "message" && entry.body === "连接期间发送"),
+      ).toHaveLength(1);
+      expect(f.chat.getSnapshot().connection).toBe("connecting");
+    } finally {
+      connection.resolve();
+    }
+    await until(f.chat, (state) => state.connection === "live");
+  });
   it("stops failed history loads until an explicit retry", async () => {
     const f = fixture();
     await f.start();
@@ -598,6 +630,26 @@ describe("native chat public interface", () => {
       result.conversationId,
     );
     expect(f.operationRequests[2]?.requestId).not.toBe(f.operationRequests[3]?.requestId);
+  });
+  it("opens the selected Agent DM once after a lost acknowledgement and returns the same conversation later", async () => {
+    const f = fixture();
+    const agent = f.server.ensureAccount({
+      externalId: "disposable-agent",
+      displayName: "测试 Agent",
+      handle: "fixture_agent",
+      kind: "agent",
+    });
+    await f.start();
+    const input = { kind: "dm" as const, other: agent };
+    f.loseOperation("/api/chat/dms");
+    await expect(f.chat.create(input)).rejects.toThrow();
+    expect(f.chat.getSnapshot().operations.get("new-conversation")).toMatchObject({ input });
+    const result = await f.chat.create(input);
+    expect(result.members).toContain(agent);
+    expect(result.members).toContain(f.me);
+    expect(f.operationRequests[0]?.requestId).toBe(f.operationRequests[1]?.requestId);
+    expect((await f.chat.create(input)).conversationId).toBe(result.conversationId);
+    expect(f.server.listConversations(f.me).filter((c) => c.kind === "dm")).toHaveLength(1);
   });
   it("clears unresolved operations on identity close and rejects later retries", async () => {
     const f = fixture();

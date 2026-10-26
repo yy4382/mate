@@ -1,30 +1,21 @@
 import type { Clock } from "@mate/clock";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
+import { ChatError } from "./chat-error.ts";
 import { ConversationKind } from "./conversations.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
 import { timelineRefOf, type TimelineRef } from "./timelines.ts";
 
-const Base64Url = z
-  .string()
-  .max(512)
-  .regex(/^[A-Za-z0-9_-]+=*$/, "a key is base64url");
-
-/** A browser's Web Push subscription, in the shape `PushSubscription.toJSON()` gives it. Other fields are ignored. */
-export const PushSubscription = z.object({
-  endpoint: z.url({ protocol: /^https$/ }).max(2048),
-  keys: z.object({ p256dh: Base64Url, auth: Base64Url }),
-});
-export type PushSubscription = z.output<typeof PushSubscription>;
-
-export const PushEndpoint = z.object({ endpoint: z.string().min(1).max(2048) });
+import { PushSubscription, type PushAddress } from "./push-contract.ts";
+export { PushSubscription, PushAddress } from "./push-contract.ts";
 
 /**
  * What a push carries: who wrote where, and where to open it, but never the message body. `tag` is the same for every
  * delivery of one message, so a delivery that is repeated replaces the notification instead of adding a second one.
  */
 export type PushNotice = {
+  accountId: number;
   tag: string;
   messageId: number;
   conversationId: number;
@@ -54,37 +45,71 @@ const FIRST_RETRY_MS = 30_000;
 const MAX_FAILURES = 10;
 
 /**
- * Add the human's subscription, or bring an endpoint already subscribed up to date and give it to this human. An
- * endpoint is a browser, so one that moves to another human takes none of the previous human's queued pushes along.
+ * Refresh a transport address or give it to this human. Changing its owner or native binding drops its old queue.
  */
 export function subscribePush(
   db: ChatDatabase,
   human: Actor,
   subscription: PushSubscription,
 ): void {
+  const key = subscriptionKey(subscription);
+  if (
+    subscription.transport === "apns" &&
+    db.get(
+      z.object({ binding: z.string() }),
+      `SELECT binding FROM push_cancellations WHERE account_id = ? AND subscription_key = ? AND binding = ?`,
+      human.id,
+      key,
+      subscription.binding,
+    )
+  ) {
+    throw new ChatError(
+      "invalid-input",
+      "this native push binding was cancelled; enroll with a new binding",
+    );
+  }
+  const json = JSON.stringify(subscription);
+  // A new owner or native binding gets a new ID, so a late answer cannot remove its subscription.
   db.run(
-    `DELETE FROM push_deliveries WHERE subscription_id IN
-       (SELECT id FROM push_subscriptions WHERE endpoint = ? AND account_id != ?)`,
-    subscription.endpoint,
+    `DELETE FROM push_subscriptions WHERE subscription_key = ? AND
+      (account_id != ? OR (? = 1 AND subscription_json != ?))`,
+    key,
     human.id,
+    subscription.transport === "apns" ? 1 : 0,
+    json,
   );
   db.run(
-    `INSERT INTO push_subscriptions (account_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)
-     ON CONFLICT (endpoint) DO UPDATE SET
-       account_id = excluded.account_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+    `INSERT INTO push_subscriptions (account_id, subscription_key, subscription_json) VALUES (?, ?, ?)
+     ON CONFLICT (subscription_key) DO UPDATE SET subscription_json = excluded.subscription_json`,
     human.id,
-    subscription.endpoint,
-    subscription.keys.p256dh,
-    subscription.keys.auth,
+    key,
+    json,
   );
 }
 
-/** Remove the human's subscription and every delivery still queued for it. An endpoint of another human stays. */
-export function unsubscribePush(db: ChatDatabase, human: Actor, endpoint: string): void {
+function subscriptionKey(address: PushAddress): string {
+  return address.transport === "apns"
+    ? JSON.stringify(["apns", address.environment, address.token])
+    : JSON.stringify(["web", address.endpoint]);
+}
+
+/** Cancel this human's exact enrollment, including a subscribe request that has not committed yet. */
+export function unsubscribePush(db: ChatDatabase, human: Actor, address: PushAddress): void {
+  const key = subscriptionKey(address);
+  if (address.transport === "apns")
+    db.run(
+      `INSERT OR IGNORE INTO push_cancellations (account_id, subscription_key, binding) VALUES (?, ?, ?)`,
+      human.id,
+      key,
+      address.binding,
+    );
   db.run(
-    "DELETE FROM push_subscriptions WHERE endpoint = ? AND account_id = ?",
-    endpoint,
+    `DELETE FROM push_subscriptions WHERE subscription_key = ? AND account_id = ?
+      AND (? = 0 OR subscription_json = ?)`,
+    key,
     human.id,
+    address.transport === "apns" ? 1 : 0,
+    JSON.stringify(address),
   );
 }
 
@@ -115,10 +140,9 @@ const DueRow = z.object({
   subscription_id: Id,
   failures: z.number(),
   due_at: z.number(),
-  endpoint: z.string(),
+  account_id: Id,
+  subscription_json: z.string(),
   active: SqlBoolean,
-  p256dh: z.string(),
-  auth: z.string(),
   seq: z.number(),
   created_at: z.number(),
   conversation_id: Id,
@@ -134,7 +158,7 @@ type DueRow = z.output<typeof DueRow>;
 function nextDelivery(db: ChatDatabase): DueRow | undefined {
   return db.get(
     DueRow,
-    `SELECT d.entry_id, d.subscription_id, d.failures, d.due_at, s.endpoint, s.p256dh, s.auth,
+    `SELECT d.entry_id, d.subscription_id, d.failures, d.due_at, s.account_id, s.subscription_json,
        (SELECT o.active FROM accounts o WHERE o.id = s.account_id) AS active,
        e.seq, e.created_at, t.conversation_id, t.root_entry_id, c.kind, c.name, a.handle AS sender,
        EXISTS (SELECT 1 FROM mentions m
@@ -149,12 +173,11 @@ function nextDelivery(db: ChatDatabase): DueRow | undefined {
   );
 }
 
-const subscriptionOf = (row: DueRow): PushSubscription => ({
-  endpoint: row.endpoint,
-  keys: { p256dh: row.p256dh, auth: row.auth },
-});
+const subscriptionOf = (row: DueRow): PushSubscription =>
+  PushSubscription.parse(JSON.parse(row.subscription_json));
 
 const noticeOf = (row: DueRow): PushNotice => ({
+  accountId: row.account_id,
   tag: `message-${row.entry_id}`,
   messageId: row.entry_id,
   conversationId: row.conversation_id,

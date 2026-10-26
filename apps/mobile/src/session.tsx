@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { AppState } from "react-native";
+import { AppState, Keyboard } from "react-native";
 import { auth } from "./auth-native";
 import { MobileChat } from "./chat";
 
@@ -33,10 +33,12 @@ export function Session({ children }: { children: ReactNode }) {
           identity = next;
           setChat(current);
         }
-        if (AppState.currentState === "active") void current?.resume();
+        if (AppState.currentState !== "background") void current?.resume();
         else current?.pause();
-      } else if (state.kind === "checking" || state.kind === "unavailable") current?.pause();
-      else {
+      } else if (state.kind === "checking" || state.kind === "unavailable") {
+        Keyboard.dismiss();
+        current?.pause();
+      } else {
         current?.close();
         current = null;
         identity = "";
@@ -44,15 +46,9 @@ export function Session({ children }: { children: ReactNode }) {
       }
     };
     const unsubscribe = auth.subscribe(sync);
-    const foreground = AppState.addEventListener("change", (value) => {
-      if (value !== "active") current?.pause();
-      else void auth.revalidate();
-    });
     sync();
-    void auth.start();
     return () => {
       unsubscribe();
-      foreground.remove();
       current?.close();
     };
   }, []);

@@ -3,7 +3,8 @@
   "compilerOptions": {
     "types": ["node"],
     "customConditions": ["mate-source"],
-    "lib": ["ES2024", "DOM"]
+    "lib": ["ES2024", "DOM"],
+    "allowImportingTsExtensions": true
   },
   "include": ["."]
 }

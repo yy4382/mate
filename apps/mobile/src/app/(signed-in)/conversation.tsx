@@ -36,6 +36,11 @@ export default function ConversationScreen() {
   const thread = params.thread ? Number(params.thread) : null;
   const chat = useChat();
   const state = useChatState();
+  const ready =
+    state.me > 0 &&
+    (state.connection === "live" ||
+      state.connection === "connecting" ||
+      state.connection === "reconnecting");
   const c = useTheme();
   const ref: TimelineRef = thread === null ? { conversation: id } : { thread };
   const key = timelineKey(ref);
@@ -119,18 +124,12 @@ export default function ConversationScreen() {
     setReadError("");
   }, [key, seq]);
   useEffect(() => {
-    if (
-      focused &&
-      !timeline.loaded &&
-      !timeline.loading &&
-      !timeline.error &&
-      state.connection === "live"
-    )
+    if (focused && !timeline.loaded && !timeline.loading && !timeline.error && ready)
       void chat.load(ref);
-  }, [focused, timeline.loaded, timeline.loading, timeline.error, state.connection, key, chat]);
+  }, [focused, timeline.loaded, timeline.loading, timeline.error, ready, key, chat]);
   useEffect(() => {
     if (
-      state.connection !== "live" ||
+      !ready ||
       !focused ||
       !bottom ||
       destination !== "done" ||
@@ -149,7 +148,7 @@ export default function ConversationScreen() {
         setReadError("已读状态未同步，点此重试。");
       },
     );
-  }, [focused, bottom, count, newest, key, timeline.loaded, state.connection, destination]);
+  }, [focused, bottom, count, newest, key, timeline.loaded, ready, destination]);
   const root =
     thread === null
       ? undefined
@@ -168,7 +167,7 @@ export default function ConversationScreen() {
       setDestination("missing");
       return;
     }
-    if (!focused || state.connection !== "live") return;
+    if (!focused || !ready) return;
     if (timeline.error) {
       setDestination("failed");
       return;
@@ -203,12 +202,12 @@ export default function ConversationScreen() {
     focused,
     timeline.loaded,
     timeline.error,
-    state.connection,
+    ready,
     destinationRetry,
     schedulePosition,
   ]);
   useEffect(() => {
-    if (thread === null || !focused || state.connection !== "live") return;
+    if (thread === null || !focused || !ready) return;
     const cancel = new AbortController();
     setRootError("");
     void chat.locate({ conversation: id }, { messageId: thread }, cancel.signal).then((result) => {
@@ -216,7 +215,7 @@ export default function ConversationScreen() {
         setRootError(result === "failed" ? "根消息加载失败，请重试。" : "根消息已不可用。");
     });
     return () => cancel.abort();
-  }, [chat, id, thread, focused, state.connection, destinationRetry]);
+  }, [chat, id, thread, focused, ready, destinationRetry]);
   const tasks = new Map<number, Extract<Entry, { kind: "task" }>>();
   for (const entry of entries) if (entry.kind === "task") tasks.set(entry.taskId, entry);
   const visibleTasks = Array.from(tasks.values());
@@ -310,10 +309,20 @@ export default function ConversationScreen() {
     <SafeAreaView edges={["bottom", "left", "right"]} style={styles.fill}>
       <Stack.Screen
         options={{
+          headerBackVisible: false,
           title:
             thread === null ? conversationLabel(conversation, state.accounts, state.me) : "讨论串",
         }}
       />
+      <Stack.Toolbar placement="left">
+        <Stack.Toolbar.Button
+          icon="chevron.left"
+          accessibilityLabel="返回"
+          onPress={() => (router.canGoBack() ? router.back() : router.replace("/chat"))}
+        >
+          返回
+        </Stack.Toolbar.Button>
+      </Stack.Toolbar>
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button onPress={() => setMore(true)}>更多</Stack.Toolbar.Button>
       </Stack.Toolbar>
@@ -322,15 +331,6 @@ export default function ConversationScreen() {
         behavior="padding"
         keyboardVerticalOffset={headerHeight}
       >
-        {state.connection !== "live" && (
-          <View style={{ paddingHorizontal: 16, paddingVertical: 8, backgroundColor: c.subtle }}>
-            <Label muted>
-              {state.connection === "loading"
-                ? "正在连接…"
-                : "连接中断，正在自动重连。草稿会保留。"}
-            </Label>
-          </View>
-        )}
         {seq !== null && destination !== "done" && (
           <View style={{ padding: 12 }}>
             <Label>
@@ -413,6 +413,19 @@ export default function ConversationScreen() {
                     : "还没有消息，在下面说点什么。"}
               </Label>
             </View>
+          }
+          ListHeaderComponent={
+            state.connection !== "live" ? (
+              <View style={{ padding: 12, backgroundColor: c.subtle }}>
+                <Label muted>
+                  {state.connection === "loading"
+                    ? "正在连接…"
+                    : state.connection === "connecting"
+                      ? "正在连接实时消息…"
+                      : "连接中断，正在自动重连。草稿会保留。"}
+                </Label>
+              </View>
+            ) : undefined
           }
           ListFooterComponent={
             <View>

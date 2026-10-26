@@ -1,8 +1,10 @@
 import type { Admin } from "@mate/admin";
 import type { ChatApp } from "@mate/chat";
+import { PushSubscription } from "@mate/chat/push";
+import type { ApnsConfig } from "./apns.ts";
 import { streamAgent, streamLive, type EventStream } from "./event-stream.ts";
 import type { Role } from "./humans.ts";
-import { forwarded, HttpError } from "./http.ts";
+import { forwarded, parseBody, HttpError } from "./http.ts";
 
 /** The human a request acts as. */
 export type Requester = {
@@ -86,7 +88,7 @@ function numbersIn(query: URLSearchParams, ...names: string[]): Record<string, n
  * freshness check: the human watches the timeline live, and showing an entry is what advances their read position
  * (`read`).
  */
-export function chatRoutes(chat: ChatApp, vapidPublicKey: string): Route[] {
+export function chatRoutes(chat: ChatApp, vapidPublicKey: string, apns?: ApnsConfig): Route[] {
   const conversationAction =
     (action: "join" | "leave" | "archiveChannel") =>
     ({ human, params, body }: RouteInput) =>
@@ -206,13 +208,34 @@ export function chatRoutes(chat: ChatApp, vapidPublicKey: string): Route[] {
     },
     {
       method: "GET",
+      path: "/api/chat/push/native",
+      json: () =>
+        apns
+          ? { enabled: true, environment: apns.environment, server: apns.server }
+          : { enabled: false },
+    },
+    {
+      method: "GET",
       path: "/api/chat/push/key",
       json: () => ({ publicKey: vapidPublicKey }),
     },
     {
       method: "POST",
       path: "/api/chat/push/subscribe",
-      json: ({ human, body }) => chat.subscribePush(human.account, forwarded(body)),
+      json: ({ human, body }) => {
+        const subscription = parseBody(PushSubscription, body);
+        if (subscription.transport === "apns") {
+          if (!apns)
+            throw new HttpError(
+              503,
+              "native-push-disabled",
+              "APNs is not configured on this server",
+            );
+          if (subscription.environment !== apns.environment)
+            throw new HttpError(409, "apns-environment-mismatch");
+        }
+        chat.subscribePush(human.account, subscription);
+      },
     },
     {
       method: "POST",

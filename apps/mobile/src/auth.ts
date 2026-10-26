@@ -15,6 +15,7 @@ export type AuthPlatform = {
   read(): Preferences | null;
   write(preferences: Preferences): void;
   clearCookies(): Promise<unknown>;
+  beforeClear?(): Promise<string>;
   fetch: typeof fetch;
 };
 
@@ -58,6 +59,12 @@ export class MobileAuth {
     };
   };
 
+  /** Accept a profile response only for the login that submitted it. */
+  updateHuman(previous: Extract<AuthState, { kind: "signed-in" }>, human: HumanView): void {
+    if (this.state !== previous || human.accountId !== previous.human.accountId) return;
+    this.publish({ ...previous, human });
+  }
+
   private publish(state: AuthState) {
     this.state = state;
     this.listeners.forEach((listener) => listener());
@@ -73,8 +80,9 @@ export class MobileAuth {
       } else if (this.preferences.restore) {
         await this.revalidate();
       } else {
+        const message = (await this.platform.beforeClear?.()) ?? "";
         await this.platform.clearCookies();
-        this.publish({ kind: "signed-out", server: this.preferences.server, message: "" });
+        this.publish({ kind: "signed-out", server: this.preferences.server, message });
       }
     } catch {
       this.publish({ kind: "server", message: "无法读取本机登录设置，请重新保存服务器地址。" });
@@ -128,9 +136,11 @@ export class MobileAuth {
       } catch (error) {
         if (generation !== this.generation) return;
         if (error instanceof Refusal && error.status === 401) {
+          let notificationMessage = "";
           try {
             this.platform.write({ server, restore: false });
             this.preferences = { server, restore: false };
+            notificationMessage = (await this.platform.beforeClear?.()) ?? "";
             await this.platform.clearCookies();
           } catch {
             if (generation === this.generation)
@@ -145,7 +155,8 @@ export class MobileAuth {
             this.publish({
               kind: "signed-out",
               server,
-              message: input ? "Handle 或密码不对。" : "登录已失效，请重新登录。",
+              message:
+                (input ? "Handle 或密码不对。" : "登录已失效，请重新登录。") + notificationMessage,
             });
         } else if (input) {
           this.publish({
@@ -208,6 +219,7 @@ export class MobileAuth {
       this.platform.write({ server, restore: false });
       this.preferences = { server, restore: false };
       await pending;
+      const notificationMessage = (await this.platform.beforeClear?.()) ?? "";
       let revoked = !revoke;
       if (revoke) {
         const request = new AbortController();
@@ -232,11 +244,9 @@ export class MobileAuth {
       this.publish({
         kind: "signed-out",
         server,
-        message: revoked
-          ? revoke
-            ? "已退出登录。"
-            : ""
-          : "已在本机退出；未能确认服务器撤销会话。",
+        message:
+          (revoked ? (revoke ? "已退出登录。" : "") : "已在本机退出；未能确认服务器撤销会话。") +
+          notificationMessage,
       });
     } catch {
       this.publish({

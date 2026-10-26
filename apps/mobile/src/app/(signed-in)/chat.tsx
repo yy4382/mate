@@ -27,12 +27,13 @@ export default function Conversations() {
           <Button title="新建会话" primary onPress={() => router.push("/new")} />
         </View>
         <Label muted>
-          {state.connection === "live"
+          {state.connection === "live" || state.connection === "connecting"
             ? `全部未读 ${state.unread.total} · 提及 ${state.unread.mentions}`
             : state.connection === "loading"
               ? "正在加载聊天…"
               : "连接已中断，正在重连…"}
         </Label>
+        {state.connection === "connecting" && <Label muted>正在连接实时消息…</Label>}
         {state.error ? <Button title="重试连接" onPress={() => void chat.resume()} /> : null}
         {state.unread.timelines
           .filter((t) => t.inThread && t.unread > 0)

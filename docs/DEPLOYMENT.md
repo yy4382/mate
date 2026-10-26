@@ -320,7 +320,7 @@ curl -i -X POST localhost:8787/api/login -H 'content-type: application/json' -d 
 
 ### 6.1 原生移动客户端
 
-`apps/mobile` 是自用的 iOS 27+ Expo app，当前在 app 内输入一个 HTTPS 服务器地址，用已有 handle 和密码登录，显示 `/api/me` 返回的身份。所有依赖从仓库根安装，只有一个 `pnpm-lock.yaml`。SDK 58 使用 React Native 0.88、React 19.3 和 app 自己的 TypeScript 6.0；版本依据 [Expo SDK 参考](https://docs.expo.dev/versions/latest/)、[官方 TypeScript 指南](https://docs.expo.dev/guides/typescript/) 和 SDK 58 模板。网页继续使用自己的 React 版本。
+`apps/mobile` 是自用的 iOS 27+ Expo app，在 app 内保存一个 HTTPS 服务器地址，用已有 handle 和密码登录，进入聊天、管理、个人资料与通知设置。所有依赖从仓库根安装，只有一个 `pnpm-lock.yaml`。SDK 58 使用 React Native 0.88、React 19.3 和 app 自己的 TypeScript 6.0；版本依据 [Expo SDK 参考](https://docs.expo.dev/versions/latest/)、[官方 TypeScript 指南](https://docs.expo.dev/guides/typescript/) 和 SDK 58 模板。网页继续使用自己的 React 版本。
 
 从仓库根运行：
 
@@ -340,12 +340,39 @@ Metro 使用 [Expo 默认的 monorepo 支持](https://docs.expo.dev/guides/monor
 pnpm --filter @mate/mobile ios --device --port 8087
 ```
 
-iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模拟器或设备，工具安装见 [Expo 环境设置](https://docs.expo.dev/get-started/set-up-your-environment/)。共享机器先确认设备未被其他 session 占用，再选择设备。生成的 `ios/` 和 `.expo/` 只留在本地，由 app config 和依赖重新生成。
+iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模拟器或设备，工具安装见 [Expo 环境设置](https://docs.expo.dev/get-started/set-up-your-environment/)。共享机器先确认设备未被其他 session 占用，再选择设备。生成的 `ios/` 和 `.expo/` 只留在本地，由 app config 和依赖重新生成。合入原生插件或修改 app config 后，先运行 `pnpm --filter @mate/mobile exec expo prebuild --platform ios --no-install` 再构建；已有 `ios/` 目录不能保证新插件配置已应用。通知构建应确认生成的 `Mate.entitlements` 含所选环境的 `aps-environment`。
 
 最低版本通过 Expo 内置的 [`ios.deploymentTarget`](https://docs.expo.dev/versions/v58.0.0/config/app/#deploymenttarget) 配置为 `27.0`，不需要额外的构建属性插件。`pnpm --filter @mate/mobile exec expo prebuild --platform ios --no-install` 生成的 `ios/Podfile.properties.json` 含 `ios.deploymentTarget: "27.0"`；Xcode 工程的应用 target 在 Debug 和 Release 配置中均为 `IPHONEOS_DEPLOYMENT_TARGET = 27.0`。原生编译和运行验证使用自己的开发版；Expo Go 的宿主部署目标不能证明 Mate 自身的最低版本。
 
-认证沿用控制面的 Secure HttpOnly cookie，无需 bearer API 或 CORS 配置。启动和回到前台重新验证登录；连接失败可重试，401 需要重新登录。退出与换服务器会清理 app 的原生 cookie；离线退出仅保证关闭本机访问，并提示远端撤销未确认。地址与恢复标记存在 Expo SQLite 键值设置中，不保存密码。正常使用后的重启恢复依赖原生 cookie 存储，不保证登录后立即强杀的持久化。`expo-sqlite` 和 `@preeternal/react-native-cookie-manager` 需要用上述 `ios` 命令构建开发版或 Release 包，Expo Go 不能验证这个 app 的 cookie 清理集成。
+认证沿用控制面的 Secure HttpOnly cookie，无需 bearer API 或 CORS 配置。启动和从后台回到前台重新验证登录，权限弹窗的 inactive → active 不触发重验；连接失败可重试，401 需要重新登录。退出与换服务器会清理 app 的原生 cookie；离线退出仅保证关闭本机访问，并提示远端撤销未确认。地址与恢复标记存在 Expo SQLite 键值设置中，不保存密码。正常使用后的重启恢复依赖原生 cookie 存储，不保证登录后立即强杀的持久化。`expo-sqlite` 和 `@preeternal/react-native-cookie-manager` 需要用上述 `ios` 命令构建开发版或 Release 包，Expo Go 不能验证这个 app 的 cookie 清理集成。
 
 `com.yy4382.mate` 是当前开发用的 iOS bundle identifier；签名与自用分发方式仍待确认，本阶段不添加公开应用商店发布自动化。根 `pnpm build` 只构建已有网页和服务端包，移动端不参与控制面镜像或 node 发布包的构建。
 
-移动任务 PR 以长期集成分支 `mobile` 为 base，依赖任务可在其上堆叠。合入任务 PR 不发布移动 app，也不触发 `v*` 发布。整体 `mobile` 到 `main` 的集成另等用户批准；本阶段不合并、不打 tag、不发布、不部署。原生推送在后续阶段决定。
+移动任务 PR 以长期集成分支 `mobile` 为 base，依赖任务可在其上堆叠。合入任务 PR 不发布移动 app，也不触发 `v*` 发布。整体 `mobile` 到 `main` 的集成另等用户批准；本阶段不合并、不打 tag、不发布、不部署。
+
+### 6.2 原生 iOS 通知
+
+原生登记的随机 binding 使用 SDK 58 的 [expo-crypto.randomUUID](https://docs.expo.dev/versions/v58.0.0/sdk/crypto/)，不依赖浏览器的 Web Crypto 全局对象。
+
+移动端使用 [expo-notifications SDK 58](https://docs.expo.dev/versions/v58.0.0/sdk/notifications/) 的原生 APNs token。SDK 58 的[官方依赖表](https://github.com/expo/expo/blob/sdk-58/packages/expo/bundledNativeModules.json) 推荐 `~58.1.6`。服务端使用维护中的 [@parse/node-apn 8.1.0](https://github.com/parse-community/node-apn)，其 Node 范围包含 24。选择直接 APNs，是因为已有后端可以持有 provider，避免另加 Expo 托管推送服务与账号。[Expo 官方说明](https://docs.expo.dev/push-notifications/sending-notifications-custom/)允许直接 APNs；Expo 推送服务还需要 Expo token、服务与凭据管理，本项目不使用它。库负责 HTTP/2 与 JWT，Mate 只适配现有队列。
+
+未配置时 Web Push 照常运行，`GET /api/chat/push/native` 返回 `{ enabled: false }`，原生订阅回 503 `native-push-disabled`。系统权限允许也不会显示已登记。配置 APNs 时，控制面需要同时提供以下环境变量；只提供一部分或 key 无法加载时拒绝启动。
+
+| 变量 | 内容 |
+| --- | --- |
+| `MATE_APNS_KEY_FILE` | 由操作者提供的 APNs `.p8` key 文件路径，控制面可读；容器中可只读挂载，不提交到仓库 |
+| `MATE_APNS_KEY_ID` | Apple 签发的 10 位 key ID |
+| `MATE_APNS_TEAM_ID` | 10 位 team ID |
+| `MATE_APNS_TOPIC` | 签名 app 的 bundle identifier，当前为 `com.yy4382.mate` |
+| `MATE_APNS_ENVIRONMENT` | `sandbox` 或 `production`，不从 `NODE_ENV` 猜测 |
+| `MATE_PUBLIC_ORIGIN` | 与 app 保存地址完全相同的 HTTPS origin，不含末尾 `/` 或路径 |
+
+app config 的输入 `MATE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`。它同时设置 Expo 通知插件的 entitlement mode 和 app 订阅的环境。正式签名包使用 `production`；Xcode archive 也会把 entitlement 改为 production，构建输入必须与之匹配。改变输入后重新 prebuild 并正常构建，不修改生成的二进制。服务器拒绝环境不匹配的登记；app 拒绝服务器公布的 origin 或环境与自己不一致。
+
+`apns.ts` 的 provider 连接由进程持有，关闭时释放。单次投递总期限 10 秒，库内重试关闭。暂时失败仍按聊天队列的退避计划重试，过期 provider token 也重试。只有 token 失效相关的拒绝才删除设备订阅，provider 配置错误不清理 token。APNs 的 expiry 固定为消息时间加一天；队列重试不延长它。已过期的消息不再交给 APNs。collapse ID 沿用消息 tag，通知数据不含消息正文。系统提示使用通用文案，点击数据带精确 server、accountId 和随机登记 binding，避免在错误身份下打开旧通知。
+
+关闭通知、退出、换服务器和登录失效会尝试取消服务器登记，再清 cookie，并向 iOS 取消本机注册、清除已展示通知。离线时无法保证旧服务器立即停止或撤回已交给 APNs 的通知；界面说明取消未确认。聊天存储迁移 6 新增原生取消记录，不改动已有订阅或投递队列。已确认取消的账号/token/环境/binding 不可复用，迟到订阅回 400；重新开启和 token 轮换使用新 binding。未确认的旧 token 取消记录独立于当前登记保存，token 轮换和新登记不会覆盖它们；下次同一服务器和账号恢复验证、刷新或退出时重试，只有服务端确认后才删除。重新允许注册之后仍可能收到旧服务器的通用提示；旧数据不会打开当前其他账号或服务器的会话。
+
+实际远程投递仍需操作者确认付费 Apple Developer 资格，提供 APNs 凭据，并生成具有 Push Notifications capability 的签名 app。本任务不创建或修改 Apple Developer、EAS 账号或资源，不接触真实 key 内容，不向真实账号发送测试通知。普通 iOS 27 模拟器的正常构建、系统权限界面和 `simctl push` 注入可验证本机行为；模拟注入不是 APNs 或真机投递证明。没有凭据和签名之前，真实 APNs 投递保持未验证。
+
+合入聊天任务时保留根层的 `NotificationIntegration`，并在账号或资料入口链接 `/notifications`。点击目标是 `/conversation`，参数为 `id`、可选 `thread` 和 `seq`；聊天任务的已登录路由组持有该页面，通知任务不创建另一套聊天导航。需在整体 mobile 合入后验证最终页面与序号定位。

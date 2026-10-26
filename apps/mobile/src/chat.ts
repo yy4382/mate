@@ -64,7 +64,7 @@ export type PendingOperation = {
   error: string;
 };
 export type ChatState = {
-  connection: "loading" | "live" | "reconnecting" | "paused" | "closed";
+  connection: "loading" | "connecting" | "live" | "reconnecting" | "paused" | "closed";
   error: string;
   me: number;
   accounts: AccountView[];
@@ -251,6 +251,7 @@ export class MobileChat {
           if (signal.aborted) return;
           this.cursor = snapshot.cursor;
           this.publish({
+            connection: "connecting",
             me: snapshot.me,
             accounts: snapshot.accounts,
             conversations: snapshot.conversations,
