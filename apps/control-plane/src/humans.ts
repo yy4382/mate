@@ -1,3 +1,4 @@
+import { Role } from "@mate/auth";
 import { createHash, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
@@ -11,8 +12,7 @@ import { HttpError } from "./http.ts";
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** What a human may do: an admin manages Agents, providers, nodes and other humans; a member only chats. */
-export const Role = z.enum(["admin", "member"]);
-export type Role = z.output<typeof Role>;
+export { Role } from "@mate/auth";
 
 /** The chat account the first human is created under. Fixed, so a start that crashed half way converges on restart. */
 export const INITIAL_HUMAN = "human:initial";
