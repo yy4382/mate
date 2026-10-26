@@ -1,6 +1,7 @@
 import type { Clock } from "@mate/clock";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
+import { ChatError } from "./chat-error.ts";
 import { ConversationKind } from "./conversations.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
@@ -52,6 +53,21 @@ export function subscribePush(
   subscription: PushSubscription,
 ): void {
   const key = subscriptionKey(subscription);
+  if (
+    subscription.transport === "apns" &&
+    db.get(
+      z.object({ binding: z.string() }),
+      `SELECT binding FROM push_cancellations WHERE account_id = ? AND subscription_key = ? AND binding = ?`,
+      human.id,
+      key,
+      subscription.binding,
+    )
+  ) {
+    throw new ChatError(
+      "invalid-input",
+      "this native push binding was cancelled; enroll with a new binding",
+    );
+  }
   const json = JSON.stringify(subscription);
   // A new owner or native binding gets a new ID, so a late answer cannot remove its subscription.
   db.run(
@@ -77,12 +93,20 @@ function subscriptionKey(address: PushAddress): string {
     : JSON.stringify(["web", address.endpoint]);
 }
 
-/** An unknown address or a subscription belonging to another human changes nothing. */
+/** Cancel this human's exact enrollment, including a subscribe request that has not committed yet. */
 export function unsubscribePush(db: ChatDatabase, human: Actor, address: PushAddress): void {
+  const key = subscriptionKey(address);
+  if (address.transport === "apns")
+    db.run(
+      `INSERT OR IGNORE INTO push_cancellations (account_id, subscription_key, binding) VALUES (?, ?, ?)`,
+      human.id,
+      key,
+      address.binding,
+    );
   db.run(
     `DELETE FROM push_subscriptions WHERE subscription_key = ? AND account_id = ?
       AND (? = 0 OR subscription_json = ?)`,
-    subscriptionKey(address),
+    key,
     human.id,
     address.transport === "apns" ? 1 : 0,
     JSON.stringify(address),

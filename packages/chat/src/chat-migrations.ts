@@ -318,4 +318,15 @@ ALTER TABLE push_subscriptions_v5 RENAME TO push_subscriptions;
 CREATE INDEX push_subscriptions_account ON push_subscriptions (account_id);
 `,
   },
+  {
+    version: 6,
+    sql: `
+CREATE TABLE push_cancellations (
+  account_id INTEGER NOT NULL REFERENCES accounts (id),
+  subscription_key TEXT NOT NULL,
+  binding TEXT NOT NULL,
+  PRIMARY KEY (account_id, subscription_key, binding)
+) STRICT;
+`,
+  },
 ]);

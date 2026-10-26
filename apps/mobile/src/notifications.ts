@@ -5,19 +5,23 @@ export type NotificationSession = { server: string; accountId: number };
 export type NotificationPermission = "undetermined" | "denied" | "allowed" | "quiet";
 export type NotificationDestination = Pick<NativePushNotice, "conversationId" | "threadId" | "seq">;
 const Registration = z.object({
-  kind: z.enum(["subscribed", "cleanup"]),
   server: z.string(),
   accountId: z.number().int().positive(),
   subscription: ApnsSubscription,
 });
 type Registration = z.output<typeof Registration>;
+const Registrations = z.object({
+  current: Registration.nullable(),
+  cleanup: z.array(Registration),
+});
+type Registrations = z.output<typeof Registrations>;
 export type NotificationState = {
   kind: "signed-out" | "checking" | "disabled" | "enabled" | "denied" | "unavailable";
   message: string;
 };
 export type NotificationsPlatform = {
   read(): unknown;
-  write(value: Registration | null): void;
+  write(value: Registrations | null): void;
   permission(request: boolean): Promise<NotificationPermission>;
   token(): Promise<string>;
   unregister(): Promise<void>;
@@ -33,13 +37,22 @@ function same(a: NotificationSession | null, b: NotificationSession | null): boo
   return a?.server === b?.server && a?.accountId === b?.accountId;
 }
 
-/** Owns one native registration. An auth transition invalidates work before cookies can change. */
+function sameRegistration(a: Registration, b: Registration): boolean {
+  return (
+    same(a, b) &&
+    a.subscription.token === b.subscription.token &&
+    a.subscription.environment === b.subscription.environment &&
+    a.subscription.binding === b.subscription.binding
+  );
+}
+
+/** Owns the active registration and every unconfirmed cancellation across auth transitions. */
 export class MobileNotifications {
   private state: NotificationState = { kind: "signed-out", message: "请先登录。" };
   private listeners = new Set<() => void>();
   private session: NotificationSession | null = null;
   private verified: NotificationSession | null = null;
-  private registration: Registration | null;
+  private registrations: Registrations;
   private pending: Promise<void> = Promise.resolve();
   private generation = 0;
   private request: AbortController | undefined;
@@ -47,8 +60,19 @@ export class MobileNotifications {
   private opened = new Set<string>();
 
   constructor(private platform: NotificationsPlatform) {
-    const parsed = Registration.nullable().safeParse(platform.read());
-    this.registration = parsed.success ? parsed.data : null;
+    const stored = platform.read();
+    const parsed = Registrations.safeParse(stored);
+    const legacy = Registration.extend({ kind: z.enum(["subscribed", "cleanup"]) }).safeParse(
+      stored,
+    );
+    this.registrations = parsed.success
+      ? parsed.data
+      : legacy.success
+        ? {
+            current: legacy.data.kind === "subscribed" ? legacy.data : null,
+            cleanup: legacy.data.kind === "cleanup" ? [legacy.data] : [],
+          }
+        : { current: null, cleanup: [] };
   }
 
   getSnapshot = () => this.state;
@@ -64,9 +88,9 @@ export class MobileNotifications {
     this.listeners.forEach((listener) => listener());
   }
 
-  private save(value: Registration | null) {
-    this.platform.write(value);
-    this.registration = value;
+  private save(value: Registrations) {
+    this.platform.write(value.current || value.cleanup.length ? value : null);
+    this.registrations = value;
   }
 
   /** null suspends presentation/taps during auth validation without forgetting the registration. */
@@ -136,15 +160,15 @@ export class MobileNotifications {
           this.publish("denied", "系统已关闭通知。请在 iOS 设置中允许通知，再回来开启。" + message);
         return;
       }
-      if (this.registration?.kind === "cleanup" && same(session, this.registration))
-        await this.remove(session);
+      const cleanupMessage = await this.retire(session);
       if (!current()) return;
       const capability = NativePushCapability.parse(await this.http(session, "native"));
       if (!current()) return;
       if (!capability.enabled) {
         this.publish(
           "unavailable",
-          "此服务器尚未配置 Apple 推送。允许系统通知后，仍需服务器配置完成才能接收远程通知。",
+          "此服务器尚未配置 Apple 推送。允许系统通知后，仍需服务器配置完成才能接收远程通知。" +
+            cleanupMessage,
         );
         return;
       }
@@ -152,19 +176,25 @@ export class MobileNotifications {
         capability.server !== session.server ||
         capability.environment !== this.platform.environment
       ) {
-        this.publish("unavailable", "服务器的推送地址或环境与此 app 不一致，请检查推送配置。");
+        this.publish(
+          "unavailable",
+          "服务器的推送地址或环境与此 app 不一致，请检查推送配置。" + cleanupMessage,
+        );
         return;
       }
-      const registration = this.registration;
-      if (!registration || registration.kind !== "subscribed" || !same(session, registration)) {
-        this.publish("disabled", "通知尚未开启。只通知发给你的私信和提及，不显示消息正文。");
+      const registration = this.registrations.current;
+      if (!registration || !same(session, registration)) {
+        this.publish(
+          "disabled",
+          "通知尚未开启。只通知发给你的私信和提及，不显示消息正文。" + cleanupMessage,
+        );
         return;
       }
       if (permission !== "allowed" && permission !== "quiet") {
-        this.publish("disabled", "请允许系统通知后开启。");
+        this.publish("disabled", "请允许系统通知后开启。" + cleanupMessage);
         return;
       }
-      await this.register(session, registration.subscription.binding, current);
+      await this.register(session, current);
     });
   }
 
@@ -195,59 +225,92 @@ export class MobileNotifications {
         this.publish("unavailable", "服务器的推送地址或环境与此 app 不一致，请检查推送配置。");
         return;
       }
-      const binding =
-        this.registration?.kind === "subscribed" && same(session, this.registration)
-          ? this.registration.subscription.binding
-          : this.platform.binding();
-      await this.register(session, binding, current);
+      await this.register(session, current);
     });
   }
 
   tokenChanged(token: string): Promise<void> {
     return this.run(async (session, current) => {
-      const registration = this.registration;
+      const registration = this.registrations.current;
       if (
-        registration?.kind !== "subscribed" ||
+        !registration ||
         !same(session, registration) ||
         registration.subscription.token === token
       )
         return;
-      await this.register(session, registration.subscription.binding, current, token);
+      await this.register(session, current, token);
     });
   }
 
   private async register(
     session: NotificationSession,
-    binding: string,
     current: () => boolean,
     providedToken?: string,
   ) {
     const token = providedToken ?? (await this.platform.token());
     if (!current()) return;
+    const previous = this.registrations.current;
     const subscription = ApnsSubscription.parse({
       transport: "apns",
       token,
       environment: this.platform.environment,
-      binding,
+      binding:
+        previous &&
+        same(previous, session) &&
+        previous.subscription.token === token &&
+        previous.subscription.environment === this.platform.environment
+          ? previous.subscription.binding
+          : this.platform.binding(),
     });
-    const previous = this.registration;
-    // Persist before the request, so a lost acknowledgement can still be unsubscribed.
-    this.save({ kind: "subscribed", ...session, subscription });
+    const registration = { ...session, subscription };
+    const cleanup = [...this.registrations.cleanup];
+    if (
+      previous &&
+      !sameRegistration(previous, registration) &&
+      !cleanup.some((entry) => sameRegistration(entry, previous))
+    )
+      cleanup.push(previous);
+    // Persist both obligations before the request, including a potentially lost acknowledgement.
+    this.save({
+      current: registration,
+      cleanup: cleanup.filter((entry) => !sameRegistration(entry, registration)),
+    });
     await this.http(session, "subscribe", subscription);
     if (!current()) return;
-    if (previous && same(previous, session) && previous.subscription.token !== token)
-      await this.http(session, "unsubscribe", previous.subscription);
+    const message = await this.retire(session);
     if (!current()) return;
     this.publish(
       "enabled",
-      "已向服务器登记通知。只通知私信和提及，不含消息正文；实际送达由 Apple 和系统设置决定。",
+      "已向服务器登记通知。只通知私信和提及，不含消息正文；实际送达由 Apple 和系统设置决定。" +
+        message,
     );
     this.consumeTap();
   }
 
+  private async retire(session: NotificationSession | null): Promise<string> {
+    for (const registration of this.registrations.cleanup) {
+      if (!session || !same(session, registration)) continue;
+      try {
+        await this.http(session, "unsubscribe", registration.subscription);
+        this.save({
+          ...this.registrations,
+          cleanup: this.registrations.cleanup.filter(
+            (entry) => !sameRegistration(entry, registration),
+          ),
+        });
+      } catch {
+        /* Keep the scoped cancellation until the server acknowledges it. */
+      }
+    }
+    return this.registrations.cleanup.length
+      ? " 未能确认服务器取消订阅；旧登记已保留，回到对应服务器和账号后重试。重新允许推送后仍可能收到旧服务器的通知。"
+      : "";
+  }
+
   private async remove(session: NotificationSession | null): Promise<string> {
-    const registration = this.registration;
-    if (registration) this.save({ ...registration, kind: "cleanup" });
+    const registration = this.registrations.current;
+    if (registration)
+      this.save({ current: null, cleanup: [...this.registrations.cleanup, registration] });
     let message = "通知已在本机关闭。";
     try {
       await this.platform.unregister();
@@ -255,17 +318,7 @@ export class MobileNotifications {
     } catch {
       message = "本机通知清理未确认，请在 iOS 设置中关闭通知。";
     }
-    if (registration) {
-      if (same(session, registration) && session) {
-        try {
-          await this.http(session, "unsubscribe", registration.subscription);
-          this.save(null);
-        } catch {
-          message += " 未能确认服务器取消订阅；重新允许推送后仍可能收到旧服务器的通知。";
-        }
-      } else message += " 旧服务器的取消订阅尚未确认。";
-    }
-    return message;
+    return message + (await this.retire(session));
   }
 
   disable(): Promise<void> {
@@ -292,8 +345,8 @@ export class MobileNotifications {
 
   private matching(data: unknown): NativePushNotice | null {
     const parsed = NativePushNotice.safeParse(data);
-    const registration = this.registration;
-    if (!parsed.success || !this.session || registration?.kind !== "subscribed") return null;
+    const registration = this.registrations.current;
+    if (!parsed.success || !this.session || !registration) return null;
     const notice = parsed.data;
     if (
       !same(notice, this.session) ||

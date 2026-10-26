@@ -208,7 +208,7 @@ interface ChatApp {
    - 游标是一个不透明字符串，由**纪元**和事件 ID 组成，可以直接用作 SSE 的事件 ID。纪元在新建 `chat.sqlite` 时随机生成，之后不变：数据重置（换了新文件）后纪元不同，旧游标随之作废。
    - 事件保留一天，过期的在之后的写操作里删掉。游标的纪元不对、早于保留的事件、超前于库里最新的事件（例如恢复了旧备份）或者根本不是游标，`liveEvents` 都回答 `resnapshot`，客户端重新拉快照。恢复旧备份只在库里的事件追上客户端的游标之前能被发现；追上之后同一个纪元下的事件 ID 已经指向别的变化，所以恢复备份后应当让浏览器重新加载。
 
-**原生传输。** `@mate/chat/push` 公开不依赖 Node 的 Zod 契约。浏览器继续提交 endpoint 和 keys；iOS 提交 `transport: "apns"`、十六进制 token、`sandbox | production` 环境和本次登记的随机 `binding`。两者共用收件规则和每条消息的持久队列。订阅的自然键是浏览器 endpoint 或 APNs 环境与 token。换账号或换原生 binding 时删除旧订阅再新增，旧队列随之删除，迟到的投递回答不能影响新订阅。原生取消订阅同时匹配账号和 binding，旧的取消请求不能撤销新登记。推送内容增加接收账号 ID，仍然不含消息正文。
+**原生传输。** `@mate/chat/push` 公开不依赖 Node 的 Zod 契约。浏览器继续提交 endpoint 和 keys；iOS 提交 `transport: "apns"`、十六进制 token、`sandbox | production` 环境和本次登记的随机 `binding`。两者共用收件规则和每条消息的持久队列。订阅的自然键是浏览器 endpoint 或 APNs 环境与 token。换账号或换原生 binding 时删除旧订阅再新增，旧队列随之删除，迟到的投递回答不能影响新订阅。原生取消订阅同时匹配账号和 binding，旧的取消请求不能撤销新登记。迁移 6 只新增 `push_cancellations`，保留现有订阅与排队投递；取消原生登记时在同一事务里永久记录精确账号、传输地址与 binding，即使登记请求还未完成。该登记之后再订阅得到 `invalid-input`（HTTP 400），不能在退出后复活，也不能覆盖另一个账号的新 binding；重新开启或 token 轮换使用新 binding。取消记录不参与通知资格或投递队列。推送内容增加接收账号 ID，仍然不含消息正文。
 
 聊天库第 5 版把 Web Push 的 endpoint 和 keys 迁为 `subscription_key` 与 `subscription_json`，保留订阅 ID、账号、AUTOINCREMENT 计数和推送队列。升级验证继续使用已发布版本的存储夹具。
 
@@ -550,7 +550,7 @@ interface Admin {
 
 退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问并清理全部 app cookie，切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
 
-`MobileNotifications` 在 `notifications.ts` 持有系统权限、已验证的服务器与账号、本机登记和未确认的取消登记。`notifications-native.ts` 用 SDK 58 的 `expo-notifications` 获取 APNs token、监听 token 更新、收取通知和点击响应。根层 `NotificationIntegration` 在设置页关闭时仍监听。只有权限允许、服务器 origin 和环境匹配、订阅请求成功才显示已登记。拒绝或撤回权限会关闭本机推送并尝试取消服务器订阅；网络和签名失败显示未完成，重试沿用 binding。
+`MobileNotifications` 在 `notifications.ts` 持有系统权限、已验证的服务器与账号、本机登记和未确认的取消登记。`notifications-native.ts` 用 SDK 58 的 `expo-notifications` 获取 APNs token、监听 token 更新、收取通知和点击响应。根层 `NotificationIntegration` 在设置页关闭时仍监听。只有权限允许、服务器 origin 和环境匹配、订阅请求成功才显示已登记。拒绝或撤回权限会关闭本机推送并尝试取消服务器订阅；网络和签名失败显示未完成；同一 token 登记重试沿用 binding，token 轮换生成新 binding。当前登记与待取消登记分别保存；token 轮换前先持久化旧登记的取消责任，再发新登记。取消失败不丢失旧 token，刷新、重启恢复和退出都会重试。每条待取消记录保留精确服务器、账号、token、环境与 binding，只能用同一服务器和账号的已验证身份发送，确认成功后才移除；重新成为当前登记的相同记录不会再被取消。旧的单条登记设置格式仍可读取，不改变 SQLite 表结构。
 
 `MobileAuth` 的可选 `beforeClear` 屏障在取消登记结束后才允许退出请求和 cookie 清理。退出、更换服务器、401 都使旧请求和点击响应失效，并调用系统取消注册、移除已展示通知。认证验证中或网络不可用时暂停通知展示和导航。冷启动点击等待身份验证；通知必须匹配精确 origin、账号和 binding，且未超过一天。导航只产生 `/conversation?id=<会话>&thread=<讨论串>&seq=<序号>` 的站内参数，忽略 payload 中的 URL。目标页面由聊天导航任务提供，合入 mobile 时须接入同一个已登录导航组。
 

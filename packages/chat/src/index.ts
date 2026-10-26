@@ -470,8 +470,8 @@ export class ChatApp {
   }
 
   /**
-   * Remove this human's own subscription and its queued pushes. Another human's subscription or an old native
-   * binding changes nothing and is answered the same way.
+   * Remove this human's own subscription and its queued pushes. Native cancellation permanently retires this exact
+   * account/address/binding, even before subscribe arrives. Another human's or a newer binding stays intact.
    */
   unsubscribePush(account: number, request: z.input<typeof PushAddress>): void {
     const human = requireHuman(this.#db, account);

@@ -1,5 +1,10 @@
 const randomUUID = () => globalThis.crypto.randomUUID();
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ChatApp } from "@mate/chat";
+import { ApnsSubscription } from "@mate/chat/push";
+import { describe, expect, it, onTestFinished } from "vitest";
 import {
   MobileNotifications,
   type NotificationsPlatform,
@@ -48,7 +53,7 @@ function fixture() {
       return reply(
         path.endsWith("native")
           ? configured
-            ? { enabled: true, environment: "sandbox", server: session.server }
+            ? { enabled: true, environment: "sandbox", server: new URL(path).origin }
             : { enabled: false }
           : {},
       );
@@ -62,7 +67,7 @@ function fixture() {
   const notice = (overrides: object = {}) => ({
     version: 1,
     ...session,
-    binding: saved?.subscription.binding,
+    binding: saved?.current?.subscription.binding,
     conversationId: 11,
     threadId: null,
     seq: 3,
@@ -95,11 +100,82 @@ function fixture() {
     token: (value: string) => {
       token = value;
     },
-    offline: () => {
-      offline = true;
+    offline: (value = true) => {
+      offline = value;
     },
     disabled: () => {
       configured = false;
+    },
+  };
+}
+
+function deliveryFixture() {
+  const f = fixture();
+  const directory = mkdtempSync(join(tmpdir(), "mate-notification-retirement-"));
+  const deliveries: string[] = [];
+  const chat = new ChatApp(join(directory, "chat.sqlite"), {
+    push: async (subscription) => {
+      if (subscription.transport === "apns") deliveries.push(subscription.token);
+      return 200;
+    },
+  });
+  onTestFinished(() => {
+    chat.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const human = chat.ensureAccount({
+    externalId: "human",
+    handle: "human",
+    displayName: "Human",
+    kind: "human",
+  });
+  const agent = chat.ensureAccount({
+    externalId: "agent",
+    handle: "agent",
+    displayName: "Agent",
+    kind: "agent",
+  });
+  const conversation = chat.openDm(agent, { other: human, requestId: randomUUID() }).conversationId;
+  const failures = new Set<string>();
+  const lostAcknowledgements = new Set<string>();
+  const fetch = f.platform.fetch;
+  f.platform.fetch = async (url, options) => {
+    const response = await fetch(url, options);
+    if (String(url).endsWith("/native")) return response;
+    const subscription = ApnsSubscription.parse(JSON.parse(String(options?.body)));
+    if (String(url).endsWith("/unsubscribe")) {
+      if (failures.has(subscription.token)) throw new Error("cancellation unavailable");
+      chat.unsubscribePush(human, subscription);
+    } else {
+      chat.subscribePush(human, subscription);
+      if (lostAcknowledgements.has(subscription.token)) throw new Error("response lost");
+    }
+    return response;
+  };
+  return {
+    app: f.app,
+    platform: f.platform,
+    token: f.token,
+    scope: { ...session, accountId: human },
+    failures,
+    lostAcknowledgements,
+    deliveries,
+    replace: (binding: string) =>
+      chat.subscribePush(human, {
+        transport: "apns",
+        token: "ab".repeat(32),
+        environment: "sandbox",
+        binding,
+      }),
+    post: async () => {
+      deliveries.length = 0;
+      chat.send(
+        agent,
+        { conversation },
+        { requestId: randomUUID(), body: "fixture", freshness: false },
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return [...deliveries];
     },
   };
 }
@@ -112,9 +188,10 @@ describe("native notification lifecycle public interface", () => {
     await f.app.enable();
     expect(f.app.getSnapshot().kind).toBe("enabled");
     expect(f.saved).toMatchObject({
-      kind: "subscribed",
-      ...session,
-      subscription: { transport: "apns", token: "ab".repeat(32), environment: "sandbox" },
+      current: {
+        ...session,
+        subscription: { transport: "apns", token: "ab".repeat(32), environment: "sandbox" },
+      },
     });
     expect(f.calls.at(-1)).toMatchObject({ path: session.server + "/api/chat/push/subscribe" });
     await f.app.disable();
@@ -159,7 +236,8 @@ describe("native notification lifecycle public interface", () => {
     f.offline();
     const message = await f.app.endSession();
     expect(message).toContain("未能确认服务器取消订阅");
-    expect(f.saved?.kind).toBe("cleanup");
+    expect(f.saved?.current).toBeNull();
+    expect(f.saved?.cleanup).toHaveLength(1);
     expect(f.unregistered).toBe(1);
     f.app.response(old);
     expect(f.opened).toEqual([]);
@@ -171,7 +249,7 @@ describe("native notification lifecycle public interface", () => {
     await f.app.setSession(session);
     await f.app.enable();
     await f.app.tokenChanged("cd".repeat(32));
-    expect(f.saved?.subscription.token).toBe("cd".repeat(32));
+    expect(f.saved?.current?.subscription.token).toBe("cd".repeat(32));
     const last = f.calls.slice(-2);
     expect(last.map((call) => call.path.split("/").at(-1))).toEqual(["subscribe", "unsubscribe"]);
     expect(JSON.parse(String(last[1]?.body)).token).toBe("ab".repeat(32));
@@ -180,6 +258,158 @@ describe("native notification lifecycle public interface", () => {
     await f.app.tokenChanged("cd".repeat(32));
     expect(f.calls).toHaveLength(calls);
   });
+
+  it("retries failed token retirement after restart so logout stops delivery to every registration", async () => {
+    const f = deliveryFixture();
+    await f.app.setSession(f.scope);
+    await f.app.enable();
+    expect(await f.post()).toEqual(["ab".repeat(32)]);
+    f.failures.add("ab".repeat(32));
+    f.token("cd".repeat(32));
+    await f.app.tokenChanged("cd".repeat(32));
+    expect((await f.post()).sort()).toEqual(["ab".repeat(32), "cd".repeat(32)]);
+    const restored = new MobileNotifications(f.platform);
+    f.failures.clear();
+    await restored.setSession(f.scope);
+    expect(await f.post()).toEqual(["cd".repeat(32)]);
+    await restored.endSession();
+    expect(await f.post(), "logout cancels both old and rotated tokens").toEqual([]);
+  });
+
+  it("logout retries all failed token retirements even without a refresh", async () => {
+    const f = deliveryFixture();
+    await f.app.setSession(f.scope);
+    await f.app.enable();
+    f.failures.add("ab".repeat(32));
+    await f.app.tokenChanged("cd".repeat(32));
+    await f.app.tokenChanged("ef".repeat(32));
+    f.failures.clear();
+    await f.app.endSession();
+    expect(await f.post()).toEqual([]);
+  });
+
+  it("retains both registrations when the rotated subscription acknowledgement is lost", async () => {
+    const f = deliveryFixture();
+    await f.app.setSession(f.scope);
+    await f.app.enable();
+    f.lostAcknowledgements.add("cd".repeat(32));
+    await f.app.tokenChanged("cd".repeat(32));
+    expect(f.app.getSnapshot().kind).toBe("unavailable");
+    expect((await f.post()).sort()).toEqual(["ab".repeat(32), "cd".repeat(32)]);
+    const restored = new MobileNotifications(f.platform);
+    await restored.setSession(f.scope);
+    await restored.endSession();
+    expect(await f.post()).toEqual([]);
+  });
+
+  it("keeps the cancellation warning visible after restart while the server still rejects cleanup", async () => {
+    const f = deliveryFixture();
+    await f.app.setSession(f.scope);
+    await f.app.enable();
+    f.failures.add("ab".repeat(32));
+    await f.app.endSession();
+    const restored = new MobileNotifications(f.platform);
+    await restored.setSession(f.scope);
+    expect(restored.getSnapshot()).toMatchObject({
+      kind: "disabled",
+      message: expect.stringContaining("未能确认服务器取消订阅"),
+    });
+    expect(await f.post()).toEqual(["ab".repeat(32)]);
+    f.failures.clear();
+    await restored.refresh();
+    expect(await f.post()).toEqual([]);
+  });
+
+  it("a recovered cancellation cannot delete a newer binding for the same token", async () => {
+    const f = deliveryFixture();
+    await f.app.setSession(f.scope);
+    await f.app.enable();
+    f.failures.add("ab".repeat(32));
+    await f.app.endSession();
+    f.replace(randomUUID());
+    f.failures.clear();
+    const restored = new MobileNotifications(f.platform);
+    await restored.setSession(f.scope);
+    expect(await f.post()).toEqual(["ab".repeat(32)]);
+    expect(restored.getSnapshot().kind).toBe("disabled");
+  });
+
+  it("does not cancel the active token when rotation returns to a pending retirement", async () => {
+    const f = deliveryFixture();
+    await f.app.setSession(f.scope);
+    await f.app.enable();
+    f.failures.add("ab".repeat(32));
+    await f.app.tokenChanged("cd".repeat(32));
+    f.failures.clear();
+    await f.app.tokenChanged("ab".repeat(32));
+    expect(await f.post()).toEqual(["ab".repeat(32)]);
+    await f.app.endSession();
+    expect(await f.post()).toEqual([]);
+  });
+
+  it.each([
+    { ...session, accountId: 8 },
+    { ...session, server: "https://other.example" },
+  ])(
+    "retains cancellation ownership across a different signed-in context $server/$accountId",
+    async (other) => {
+      const f = fixture();
+      await f.app.setSession(session);
+      await f.app.enable();
+      const old = f.notice();
+      const oldBinding = ApnsSubscription.parse(f.saved?.current?.subscription).binding;
+      f.offline();
+      await f.app.endSession();
+      f.offline(false);
+      const start = f.calls.length;
+      await f.app.setSession(other);
+      await f.app.enable();
+      expect(f.calls.slice(start).filter((call) => call.path.endsWith("unsubscribe"))).toEqual([]);
+      expect(f.saved?.cleanup).toMatchObject([
+        { ...session, subscription: { binding: old.binding } },
+      ]);
+      expect(f.app.shouldPresent(old)).toBe(false);
+      expect(f.saved?.current?.subscription.binding).not.toBe(old.binding);
+      await f.app.endSession();
+      expect(f.saved?.cleanup).toHaveLength(1);
+      const restored = new MobileNotifications(f.platform);
+      await restored.setSession(session);
+      expect(f.calls.at(-2)).toMatchObject({
+        path: session.server + "/api/chat/push/unsubscribe",
+        body: expect.stringContaining(oldBinding),
+      });
+      expect(f.saved).toBeNull();
+    },
+  );
+
+  it.each(["subscribed", "cleanup"])(
+    "restores the previous %s persistence format without losing its binding",
+    async (kind) => {
+      const f = fixture();
+      const binding = randomUUID();
+      const legacy = {
+        kind,
+        ...session,
+        subscription: {
+          transport: "apns",
+          token: "ab".repeat(32),
+          environment: "sandbox",
+          binding,
+        },
+      };
+      f.platform.read = () => legacy;
+      const restored = new MobileNotifications(f.platform);
+      await restored.setSession(session);
+      expect(restored.getSnapshot().kind).toBe(kind === "subscribed" ? "enabled" : "disabled");
+      expect(f.calls.at(-1 - (kind === "cleanup" ? 1 : 0))).toMatchObject({
+        path:
+          session.server +
+          "/api/chat/push/" +
+          (kind === "subscribed" ? "subscribe" : "unsubscribe"),
+        body: expect.stringContaining(binding),
+      });
+    },
+  );
 
   it("restores a registration only after validating the same server and signed-in account", async () => {
     const f = fixture();
@@ -301,11 +531,12 @@ describe("native notification lifecycle public interface", () => {
     await auth.start();
     expect(auth.getSnapshot().kind).toBe("signed-out");
     expect(f.unregistered).toBe(1);
-    expect(f.saved?.kind).toBe("cleanup");
+    expect(f.saved?.current).toBeNull();
+    expect(f.saved?.cleanup).toHaveLength(1);
     expect(restarted.shouldPresent(previous)).toBe(false);
     expect(f.events.indexOf("unregister")).toBeLessThan(f.events.indexOf("clear-cookies"));
     expect(auth.getSnapshot()).toMatchObject({
-      message: expect.stringContaining("旧服务器的取消订阅尚未确认"),
+      message: expect.stringContaining("未能确认服务器取消订阅"),
     });
   });
 });
