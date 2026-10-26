@@ -206,12 +206,29 @@ export function App() {
       }),
   );
   const route = useRoute();
-  if (route.page === "login") return <Login next={route.next} />;
   return (
-    <QueryClientProvider client={client}>
-      <ChatLive>
-        <Pages />
-      </ChatLive>
-    </QueryClientProvider>
+    <div
+      className="contents"
+      onPointerDownCapture={(event) => {
+        event.currentTarget.ownerDocument.documentElement.dataset.input = "pointer";
+      }}
+      onKeyDownCapture={(event) => {
+        event.currentTarget.ownerDocument.documentElement.dataset.input = "keyboard";
+      }}
+      onClickCapture={(event) => {
+        if (event.detail === 0)
+          event.currentTarget.ownerDocument.documentElement.dataset.input = "keyboard";
+      }}
+    >
+      {route.page === "login" ? (
+        <Login next={route.next} />
+      ) : (
+        <QueryClientProvider client={client}>
+          <ChatLive>
+            <Pages />
+          </ChatLive>
+        </QueryClientProvider>
+      )}
+    </div>
   );
 }

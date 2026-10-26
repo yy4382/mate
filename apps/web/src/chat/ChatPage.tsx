@@ -260,7 +260,7 @@ function ConversationPanel(props: { id: number; thread: number | null; seq: numb
       {props.thread === null ? null : (
         <aside
           aria-label="讨论串"
-          className="absolute inset-0 z-10 flex flex-col bg-background md:static md:inset-auto md:w-[400px] md:shrink-0 md:border-l md:border-border"
+          className="absolute inset-0 z-10 flex flex-col bg-background transition-[opacity,translate] duration-[240ms] ease-out-expo starting:opacity-0 motion-safe:starting:translate-x-10 motion-safe:md:starting:translate-x-6 motion-reduce:transition-opacity motion-reduce:duration-[120ms] md:static md:inset-auto md:w-[400px] md:shrink-0 md:duration-[220ms] md:border-l md:border-border [html[data-input=keyboard]_&]:transition-none"
         >
           <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4 md:justify-between">
             <Link

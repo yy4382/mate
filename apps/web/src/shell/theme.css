@@ -6,6 +6,8 @@
   --font-sans: "Geist Variable", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --font-mono: "Geist Mono Variable", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", monospace;
 
+  --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
+
   --color-background: #ffffff;
   --color-subtle: #fafafa;
   --color-foreground: #171717;

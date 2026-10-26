@@ -15,6 +15,8 @@ import {
   TabPanel,
   Tabs,
   buttonClass,
+  cx,
+  feedbackClass,
 } from "../shell/ui.tsx";
 import { AgentActions } from "./AgentActions.tsx";
 import { AgentStateBadge, SettingsFields, settingsBody } from "./Agents.tsx";
@@ -163,7 +165,10 @@ export function AgentDetail({ agentId }: { agentId: string }) {
               </CardBody>
               <CardFooter>
                 {saved ? (
-                  <p role="status" className="flex items-center gap-1.5 text-sm text-success">
+                  <p
+                    role="status"
+                    className={cx("flex items-center gap-1.5 text-sm text-success", feedbackClass)}
+                  >
                     <Check aria-hidden className="size-4" />
                     已保存，从下一次请求起生效。
                   </p>

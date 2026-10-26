@@ -1,7 +1,16 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { AgentView } from "@mate/admin";
 import { del, put } from "../shell/api.ts";
-import { Badge, Button, Card, CardBody, ErrorLine, StatusDot } from "../shell/ui.tsx";
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  ErrorLine,
+  StatusDot,
+  cx,
+  feedbackClass,
+} from "../shell/ui.tsx";
 import { adminKeys, useNodes, type NodeView } from "./data.ts";
 
 type ReadableAgent = Exclude<AgentView, { state: "unreadable" }>;
@@ -41,7 +50,7 @@ function NodeAccessRow({ agent, node }: { agent: ReadableAgent; node: NodeView }
         <p className="text-xs text-muted">工作区和 MEMORY.md 在这里，始终可以访问。</p>
       ) : null}
       {change.isSuccess ? (
-        <p role="status" className="text-xs text-success">
+        <p role="status" className={cx("text-xs text-success", feedbackClass)}>
           {change.variables
             ? "已授权，从下一次调用起可以访问。"
             : "已收回授权，已启动的命令继续运行。"}

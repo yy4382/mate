@@ -25,7 +25,7 @@ function Line(props: { role: string; streaming?: boolean; text: string }) {
           <span
             role="img"
             aria-label="正在写"
-            className="size-1.5 animate-pulse rounded-full bg-accent"
+            className="size-1.5 rounded-full bg-accent motion-safe:animate-pulse"
           />
         ) : null}
       </span>
