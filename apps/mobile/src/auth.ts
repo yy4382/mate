@@ -46,6 +46,7 @@ export class MobileAuth {
   private request: AbortController | undefined;
   private pending: Promise<void> = Promise.resolve();
   private preferences: Preferences | null = null;
+  private cleanup: { server: string; revoke: boolean } | undefined;
 
   constructor(private platform: AuthPlatform) {}
 
@@ -102,8 +103,7 @@ export class MobileAuth {
   }
 
   revalidate(): Promise<void> {
-    if (!this.preferences?.restore || this.request || this.state.kind === "clearing")
-      return Promise.resolve();
+    if (!this.preferences?.restore || this.request || this.cleanup) return Promise.resolve();
     return this.authenticate();
   }
 
@@ -192,10 +192,13 @@ export class MobileAuth {
   }
 
   retry(): Promise<void> {
+    if (this.state.kind === "clearing") return Promise.resolve();
+    if (this.cleanup) return this.clearLocal(this.cleanup.server, this.cleanup.revoke);
     return this.preferences?.restore ? this.revalidate() : this.logout();
   }
 
   private async clearLocal(server: string, revoke: boolean): Promise<void> {
+    this.cleanup = { server, revoke };
     ++this.generation;
     this.request?.abort();
     const pending = this.pending;
@@ -225,6 +228,7 @@ export class MobileAuth {
         }
       }
       await this.platform.clearCookies();
+      this.cleanup = undefined;
       this.publish({
         kind: "signed-out",
         server,

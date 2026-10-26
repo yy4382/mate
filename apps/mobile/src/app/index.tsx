@@ -53,12 +53,12 @@ function Button({
 function ServerForm({
   initial,
   message,
-  onSaved,
+  onClose,
   onCancel,
 }: {
   initial: string;
   message: string;
-  onSaved(): void;
+  onClose(): void;
   onCancel?: () => void;
 }) {
   const colors = useTheme();
@@ -66,7 +66,7 @@ function ServerForm({
   const save = async () => {
     Keyboard.dismiss();
     await auth.changeServer(address);
-    if (auth.getSnapshot().kind === "signed-out") onSaved();
+    if (auth.getSnapshot().kind !== "server") onClose();
   };
   return (
     <>
@@ -195,7 +195,7 @@ export default function HomeScreen() {
               <ServerForm
                 initial={server}
                 message={state.kind === "server" ? state.message : ""}
-                onSaved={() => setEditingServer(false)}
+                onClose={() => setEditingServer(false)}
                 {...(server ? { onCancel: () => setEditingServer(false) } : {})}
               />
             ) : (

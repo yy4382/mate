@@ -180,6 +180,65 @@ describe("mobile authentication public interface", () => {
     expect(p.cookiesCleared).toBe(2);
   });
 
+  it.each(["foreground", "retry"])(
+    "a failed logout settings write keeps access closed on %s and retries revocation on the original server",
+    async (action) => {
+      const p = platform({ server, restore: true });
+      const auth = new MobileAuth(p.port);
+      await auth.start();
+      const write = p.port.write;
+      p.port.write = () => {
+        throw new Error("settings unavailable");
+      };
+      await auth.logout();
+      expect(auth.getSnapshot().kind).toBe("unavailable");
+      expect(p.preferences).toEqual({ server, restore: true });
+      expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me"]);
+      await auth.retry();
+      expect(auth.getSnapshot().kind).toBe("unavailable");
+      p.port.write = write;
+      if (action === "foreground") {
+        await auth.revalidate();
+        expect(auth.getSnapshot().kind).toBe("unavailable");
+        expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me"]);
+      }
+      await auth.retry();
+      expect(auth.getSnapshot()).toEqual({ kind: "signed-out", server, message: "已退出登录。" });
+      expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me", server + "/api/logout"]);
+      expect(p.preferences).toEqual({ server, restore: false });
+      expect(p.cookiesCleared).toBe(1);
+      await auth.revalidate();
+      expect(auth.getSnapshot().kind).toBe("signed-out");
+    },
+  );
+
+  it("a failed server-change settings write blocks foreground restoration and retries the selected address without sending credentials to it", async () => {
+    const p = platform({ server, restore: true });
+    const auth = new MobileAuth(p.port);
+    await auth.start();
+    const write = p.port.write;
+    const next = "https://mate.example.com:8443";
+    p.port.write = () => {
+      throw new Error("settings unavailable");
+    };
+    await auth.changeServer(next);
+    expect(auth.getSnapshot().kind).toBe("unavailable");
+    expect(p.preferences).toEqual({ server, restore: true });
+    await auth.retry();
+    expect(auth.getSnapshot().kind).toBe("unavailable");
+    p.port.write = write;
+    await auth.revalidate();
+    expect(auth.getSnapshot().kind).toBe("unavailable");
+    await auth.retry();
+    expect(auth.getSnapshot()).toEqual({ kind: "signed-out", server: next, message: "" });
+    expect(p.preferences).toEqual({ server: next, restore: false });
+    expect(p.cookiesCleared).toBe(1);
+    expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me"]);
+    const restarted = new MobileAuth(p.port);
+    await restarted.start();
+    expect(restarted.getSnapshot()).toEqual({ kind: "signed-out", server: next, message: "" });
+  });
+
   it("never publishes a delayed identity after logout even if the external request ignores cancellation", async () => {
     const p = platform({ server, restore: true });
     const auth = new MobileAuth(p.port);
