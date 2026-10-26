@@ -14,13 +14,12 @@
     "test": "vitest run",
     "test:linux": "sh scripts/test-linux.sh",
     "build": "pnpm -r run build",
-    "bundle:node": "node deploy/node/build-bundle.ts",
-    "smoke:deploy": "node --conditions=mate-source deploy/smoke.ts"
+    "bundle:node": "node deploy/node/build-bundle.ts"
   },
   "devDependencies": {
     "@types/node": "24.13.6",
-    "esbuild": "0.28.2",
     "prettier": "3.9.9",
+    "tsdown": "0.23.2",
     "typescript": "7.0.2",
     "vitest": "5.0.1"
   }

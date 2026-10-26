@@ -486,21 +486,7 @@
 - 不依赖 Linux 的行为，macOS 和 `pnpm test:linux` 都跑；每个场景在独立临时目录里起一套进程。
 - 变异检查（临时改接线，确认场景失败，已还原）：把 `bash` 改成可重做，场景 4 失败；把聊天发送的 `freshness` 改成 `false`，场景 3 失败；把连接断开的结果从"未知"改成"离线"，场景 5 失败。
 
-## 13. 部署冒烟
-
-**边界：** 发布的东西本身：控制面镜像、`deploy/control-plane/` 的两个 Compose 文件、node 发布包。`pnpm smoke:deploy`（`deploy/smoke.ts`）需要 Docker，不在 `pnpm check` 里，发布前手动跑，或对已构建的镜像设 `MATE_SMOKE_IMAGE` 跑。
-
-**替身：** 脚本化模型提供商跑在宿主上，容器经 `host.docker.internal` 和一个监听 `0.0.0.0` 的中继到达它。其余都是真的：用宿主账号的 UID/GID 起 Compose 项目，node 在普通的 Debian 13 容器里由发布包安装（systemctl 是只回答"未运行"的替身，同 §9），管理员的操作通过 HTTP 发出。
-
-- 镜像非 root 运行，用 `compose.yaml` 加 `compose.initialize.yaml` 在 0700 的绑定挂载目录上起来，健康检查转为 healthy。
-- 先用 `sha256sum -c` 校验发布包，再用包里的 CLI 安装、配置，`node run` 用配对令牌连上，网页接口看到它在线。
-- 管理员保存提供商凭据，在这个 node 上创建 Agent，私信它，Agent 读取并回复。
-- `docker compose stop` 在 Compose 的 10 秒期限内以退出码 0 结束，日志里有 SIGTERM 的收尾。
-- 只用 `compose.yaml` 重新启动：存下的密码仍能登录，Agent 重新打开，私信还在，node 重新连上。
-
-冒烟默认跑 Docker 宿主的架构；`MATE_SMOKE_ARCH=x64` 或 `arm64` 改跑另一种，靠宿主的仿真。冒烟不覆盖：前端（镜像里的页面目录没被访问）、反向代理和 HTTPS。
-
-### 13.1 自动部署
+## 13. 自动部署
 
 **边界：** `deploy/auto-update/mate-deploy`（DEPLOYMENT 5.5），从它的命令行和标准输入驱动，只看部署后机器上的状态：`.env` 里的镜像、node 装的版本、数据目录的内容、node 服务是否在运行、备份和留下的发布包。`deploy/auto-update/test.sh` 在干净的 x86_64 Debian 13 容器里以 root 跑，CI 里是单独的 `mate-deploy` 任务。等待健康和等待 node 连上（`MATE_HEALTH_WAIT`、`MATE_NODE_CONNECT_WAIT`）的秒数在测试里调到 2 秒。
 

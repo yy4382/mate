@@ -320,9 +320,6 @@ node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 
 管理员在管理界面里只读地看 Agent 工作区里的一个路径：管理模块的 `browseWorkspace` 调网关的 `browse`，网关发 `gateway.browse`，node 回 `node.browse.result`。回答是一个**浏览结果**（`WorkspaceListing`：目录的条目、文件开头的文字，或者不是文字的文件的大小，各有上限并标明截断），或者一个拒绝（`outside-workspace`、`not-found`、`unreadable`，网关再加上 `node-offline`）。不经过 runtime，暂停的 Agent 也能看。
 避免：把它当成工具调用（它不是 `runTool`，没有输出流，也没有停止）。
 
-**部署冒烟**（deploy smoke）
-`pnpm smoke:deploy`：在 Docker 里用发布的镜像、Compose 文件和 node 发布包起一套控制面加 node，并以第一个管理员的身份走一遍登录、配对、创建 Agent、私信回复和重启（MODULE_TESTS 第 13 节）。
-
 **MEMORY.md**
 主工作区里的记忆入口约定，由 Agent 自己维护和选择读取。Mate 只在显式准备主工作区时创建缺失的空文件，执行工具不检查它，runtime 恢复也不自动读取它。远端工作区不预置这个文件。
 
