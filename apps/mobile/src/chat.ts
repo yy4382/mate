@@ -27,8 +27,42 @@ type Pending = {
 };
 export type Draft = { text: string; pending: Pending | null; error: string };
 const emptyDraft: Draft = { text: "", pending: null, error: "" };
-export type Timeline = { entries: Entry[]; loading: boolean; error: string; loaded: boolean };
-const emptyTimeline: Timeline = { entries: [], loading: false, error: "", loaded: false };
+export type Timeline = {
+  entries: Entry[];
+  loading: boolean;
+  error: string;
+  loaded: boolean;
+  exhausted: boolean;
+};
+const emptyTimeline: Timeline = {
+  entries: [],
+  loading: false,
+  error: "",
+  loaded: false,
+  exhausted: false,
+};
+export type ConversationInput =
+  | { kind: "channel"; name: string; visibility: "public" | "private" }
+  | { kind: "dm"; other: number };
+type TaskChange = { kind: "claim" | "yield" | "complete" } | { kind: "transfer"; to: number };
+type TaskInput = { messageId: number; title: string } | { taskId: number; change: TaskChange };
+type ConversationAction = "join" | "leave" | "archive" | "invite";
+export type OperationInput =
+  | ConversationInput
+  | { kind: "task-create"; messageId: number; title: string }
+  | { kind: "task-change"; taskId: number; change: TaskChange }
+  | {
+      kind: "conversation-action";
+      conversationId: number;
+      action: ConversationAction;
+      invitee?: number;
+    };
+export type PendingOperation = {
+  input: OperationInput;
+  requestId: string;
+  status: "sending" | "failed";
+  error: string;
+};
 export type ChatState = {
   connection: "loading" | "live" | "reconnecting" | "paused" | "closed";
   error: string;
@@ -38,6 +72,7 @@ export type ChatState = {
   unread: UnreadSummary;
   timelines: ReadonlyMap<string, Timeline>;
   drafts: ReadonlyMap<string, Draft>;
+  operations: ReadonlyMap<string, PendingOperation>;
 };
 export type ChatPlatform = {
   fetch: typeof fetch;
@@ -79,6 +114,7 @@ export class MobileChat {
     unread: { total: 0, mentions: 0, timelines: [] },
     timelines: new Map(),
     drafts: new Map(),
+    operations: new Map(),
   };
   private listeners = new Set<() => void>();
   private lifetime = new AbortController();
@@ -86,6 +122,7 @@ export class MobileChat {
   private cursor: string | undefined;
   private snapshotVersion = 0;
   private running: Promise<void> | undefined;
+  private loads = new Map<string, Promise<void>>();
   private clock: Clock;
   constructor(
     readonly server: string,
@@ -105,10 +142,19 @@ export class MobileChat {
     this.state = { ...this.state, ...change };
     this.listeners.forEach((listener) => listener());
   }
-  private async request<T>(path: string, schema: z.ZodType<T>, body?: unknown): Promise<T> {
+  private async request<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    body?: unknown,
+    cancel?: AbortSignal,
+  ): Promise<T> {
     if (this.lifetime.signal.aborted) throw new Error("closed");
     const timeout = new AbortController();
-    const signal = AbortSignal.any([this.lifetime.signal, timeout.signal]);
+    const signal = AbortSignal.any([
+      this.lifetime.signal,
+      timeout.signal,
+      ...(cancel ? [cancel] : []),
+    ]);
     void this.clock.sleep(15_000, signal).then(() => timeout.abort());
     try {
       const response = await this.platform.fetch(this.server + path, {
@@ -119,10 +165,10 @@ export class MobileChat {
           ? {}
           : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
       });
-      if (this.lifetime.signal.aborted) throw new Error("closed");
+      if (signal.aborted) throw new Error("cancelled");
       await this.check(response);
       const value: unknown = response.status === 204 ? undefined : await response.json();
-      if (this.lifetime.signal.aborted) throw new Error("closed");
+      if (signal.aborted) throw new Error("cancelled");
       return schema.parse(value);
     } catch (error) {
       if (error instanceof Refusal) throw error;
@@ -177,10 +223,12 @@ export class MobileChat {
       conversations: [],
       timelines: new Map(),
       drafts: new Map(),
+      operations: new Map(),
       unread: { total: 0, mentions: 0, timelines: [] },
     };
     this.listeners.forEach((listener) => listener());
     this.listeners.clear();
+    this.loads.clear();
   }
   private async follow(signal: AbortSignal) {
     let failures = 0;
@@ -310,17 +358,41 @@ export class MobileChat {
   private setTimeline(ref: TimelineRef, value: Timeline) {
     this.publish({ timelines: new Map(this.state.timelines).set(timelineKey(ref), value) });
   }
-  async load(ref: TimelineRef, older = false): Promise<void> {
-    if (this.cursor === undefined) return;
+  async load(ref: TimelineRef, older = false, cancel?: AbortSignal): Promise<void> {
+    if (this.cursor === undefined || this.lifetime.signal.aborted || cancel?.aborted) return;
+    const key = timelineKey(ref);
+    const active = this.loads.get(key);
+    if (active) {
+      await active;
+      if (!this.timeline(ref).loaded && !this.timeline(ref).error)
+        await this.load(ref, older, cancel);
+      return;
+    }
+    const old = this.timeline(ref);
+    if (old.error || (!older && old.loaded) || (older && old.exhausted)) return;
+    const pending = this.loadPage(ref, older, cancel);
+    this.loads.set(key, pending);
+    try {
+      await pending;
+    } finally {
+      if (this.loads.get(key) === pending) this.loads.delete(key);
+    }
+  }
+  async retryLoad(ref: TimelineRef, older = false): Promise<void> {
+    this.setTimeline(ref, { ...this.timeline(ref), error: "" });
+    await this.load(ref, older);
+  }
+  private async loadPage(ref: TimelineRef, older: boolean, cancel?: AbortSignal): Promise<void> {
     const version = this.snapshotVersion;
     const old = this.timeline(ref);
-    if (old.loading || (!older && old.loaded)) return;
     this.setTimeline(ref, { ...old, loading: true, error: "" });
     try {
       const before = older ? old.entries[0]?.seq : undefined;
       const entries = await this.request(
         `/api/chat/history?${query(ref)}&limit=50${before === undefined ? "" : `&before=${before - 1}`}`,
         z.array(Entry),
+        undefined,
+        cancel,
       );
       if (version !== this.snapshotVersion) return;
       this.setTimeline(ref, {
@@ -328,10 +400,90 @@ export class MobileChat {
         loading: false,
         loaded: true,
         error: "",
+        exhausted: entries.length < 50,
       });
     } catch (error) {
       if (version !== this.snapshotVersion) return;
-      this.setTimeline(ref, { ...this.timeline(ref), loading: false, error: errorText(error) });
+      this.setTimeline(ref, {
+        ...this.timeline(ref),
+        loading: false,
+        error: cancel?.aborted ? "" : errorText(error),
+      });
+    }
+  }
+  async locate(
+    ref: TimelineRef,
+    target: { seq: number } | { messageId: number },
+    cancel: AbortSignal,
+  ): Promise<"found" | "missing" | "failed" | "cancelled"> {
+    const version = this.snapshotVersion;
+    await this.load(ref, false, cancel);
+    for (;;) {
+      if (cancel.aborted || this.lifetime.signal.aborted || version !== this.snapshotVersion)
+        return "cancelled";
+      const page = this.timeline(ref);
+      if (page.error) return "failed";
+      if (
+        page.entries.some((entry) =>
+          "seq" in target
+            ? entry.seq === target.seq
+            : entry.kind === "message" && entry.messageId === target.messageId,
+        )
+      )
+        return "found";
+      const first = page.entries[0]?.seq;
+      if (
+        !page.loaded ||
+        page.exhausted ||
+        first === undefined ||
+        ("seq" in target && first < target.seq)
+      )
+        return "missing";
+      await this.load(ref, true, cancel);
+      if (
+        !cancel.aborted &&
+        !this.timeline(ref).error &&
+        this.timeline(ref).entries[0]?.seq === first
+      )
+        return "missing";
+    }
+  }
+  private async operate<T>(
+    key: string,
+    input: OperationInput,
+    action: (requestId: string) => Promise<T>,
+  ): Promise<T> {
+    if (this.lifetime.signal.aborted) throw new Error("登录已结束。");
+    const old = this.state.operations.get(key);
+    if (old?.status === "sending") throw new Error("操作正在进行，请稍候。");
+    if (old && JSON.stringify(old.input) !== JSON.stringify(input))
+      throw new Error("上次操作尚未确认，请先重试。");
+    const operation: PendingOperation = {
+      input,
+      requestId: old?.requestId ?? this.platform.requestId(),
+      status: "sending",
+      error: "",
+    };
+    const update = (value?: PendingOperation) => {
+      const operations = new Map(this.state.operations);
+      if (value) operations.set(key, value);
+      else operations.delete(key);
+      this.publish({ operations });
+    };
+    update(operation);
+    try {
+      const result = await action(operation.requestId);
+      update();
+      return result;
+    } catch (error) {
+      if (error instanceof Refusal && error.status >= 400 && error.status < 500) update();
+      else
+        update({
+          ...operation,
+          status: "failed",
+          error: error instanceof Error ? error.message : "操作失败，请重试。",
+        });
+      throw error;
     }
   }
   async markRead(ref: TimelineRef): Promise<void> {
@@ -400,16 +552,13 @@ export class MobileChat {
   async search(text: string) {
     return this.request(`/api/chat/search?q=${encodeURIComponent(text)}`, z.array(Entry));
   }
-  async create(
-    input:
-      | { kind: "channel"; name: string; visibility: "public" | "private" }
-      | { kind: "dm"; other: number },
-    requestId: string,
-  ) {
-    const conversation = await this.request(
-      input.kind === "channel" ? "/api/chat/channels" : "/api/chat/dms",
-      ConversationView,
-      { ...input, requestId },
+  async create(input: ConversationInput) {
+    const conversation = await this.operate("new-conversation", input, (requestId) =>
+      this.request(
+        input.kind === "channel" ? "/api/chat/channels" : "/api/chat/dms",
+        ConversationView,
+        { ...input, requestId },
+      ),
     );
     this.publish({
       conversations: [
@@ -419,40 +568,46 @@ export class MobileChat {
     });
     return conversation;
   }
-  async conversationAction(
-    id: number,
-    action: "join" | "leave" | "archive" | "invite",
-    requestId: string,
-    invitee?: number,
-  ) {
-    await this.request(`/api/chat/conversations/${id}/${action}`, z.unknown(), {
-      requestId,
+  async conversationAction(id: number, action: ConversationAction, invitee?: number) {
+    const input: OperationInput = {
+      kind: "conversation-action",
+      conversationId: id,
+      action,
       ...(invitee === undefined ? {} : { invitee }),
-    });
-  }
-  async task(
-    input:
-      | { messageId: number; title: string }
-      | {
-          taskId: number;
-          change: { kind: "claim" | "yield" | "complete" } | { kind: "transfer"; to: number };
-        },
-    requestId: string,
-  ) {
-    const result = await this.request(
-      "taskId" in input ? `/api/chat/tasks/${input.taskId}/change` : "/api/chat/tasks",
-      TaskResult,
-      { ...input, requestId },
+    };
+    await this.operate(`conversation/${id}`, input, (requestId) =>
+      this.request(`/api/chat/conversations/${id}/${action}`, z.unknown(), {
+        requestId,
+        ...(invitee === undefined ? {} : { invitee }),
+      }),
     );
-    if (result.status === "refused")
-      throw new Error(
-        {
-          claimed: "任务已被认领。",
-          "not-owner": "任务已转交给其他人。",
-          completed: "任务已完成。",
-        }[result.reason],
-      );
-    return result;
+  }
+  async task(input: TaskInput) {
+    const changing = "taskId" in input;
+    const operation: OperationInput = changing
+      ? { kind: "task-change", ...input }
+      : { kind: "task-create", ...input };
+    return this.operate(
+      changing ? `task-change/${input.taskId}` : `task-create/${input.messageId}`,
+      operation,
+      async (requestId) => {
+        const result = await this.request(
+          "taskId" in input ? `/api/chat/tasks/${input.taskId}/change` : "/api/chat/tasks",
+          TaskResult,
+          { ...input, requestId },
+        );
+        if (result.status === "refused")
+          throw new Refusal(
+            409,
+            {
+              claimed: "任务已被认领。",
+              "not-owner": "任务已转交给其他人。",
+              completed: "任务已完成。",
+            }[result.reason],
+          );
+        return result;
+      },
+    );
   }
 }
 

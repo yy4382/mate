@@ -10,6 +10,7 @@ export default function SignedInLayout() {
   const chat = useSessionChat();
   const c = useTheme();
   if (!chat) {
+    if (state.kind === "starting" || state.kind === "checking") return <HomeScreen />;
     if (state.kind !== "signed-in") return <Redirect href="/" />;
     return (
       <View style={{ flex: 1, padding: 16 }}>

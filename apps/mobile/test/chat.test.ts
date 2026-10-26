@@ -55,6 +55,19 @@ function fixture(clock?: Clock) {
   const urls: string[] = [];
   const writes: { requestId: string; body: string; mentions?: number[] }[] = [];
   let failSend = false;
+  let historyUnavailable = false;
+  let historyRequests = 0;
+  let lostOperation = "";
+  let refuseOperation = false;
+  const operationRequests: { path: string; requestId: string }[] = [];
+  const operationResponse = (path: string, requestId: string, value: unknown) => {
+    operationRequests.push({ path, requestId });
+    if (lostOperation === path) {
+      lostOperation = "";
+      throw new TypeError("acknowledgement lost");
+    }
+    return respond(value);
+  };
   let heldHistory: ReturnType<typeof deferred<Response>> | undefined;
   let snapshotGate: ReturnType<typeof deferred<Response>> | undefined;
   let lastCursor = "";
@@ -69,7 +82,14 @@ function fixture(clock?: Clock) {
       return respond(server.liveSnapshot(me, {}));
     }
     if (url.pathname.endsWith("/history")) {
-      if (heldHistory) return heldHistory.promise;
+      historyRequests++;
+      if (historyUnavailable)
+        return new Response(JSON.stringify({ error: "unavailable" }), { status: 503 });
+      if (heldHistory) {
+        const held = heldHistory;
+        heldHistory = undefined;
+        return held.promise;
+      }
       const thread = url.searchParams.get("thread");
       const timeline =
         thread === null
@@ -92,6 +112,29 @@ function fixture(clock?: Clock) {
       }
       return respond(result);
     }
+    if (url.pathname === "/api/chat/channels") {
+      if (refuseOperation) {
+        refuseOperation = false;
+        operationRequests.push({ path: url.pathname, requestId: body.requestId });
+        return new Response(JSON.stringify({ error: "invalid-input" }), { status: 400 });
+      }
+      return operationResponse(url.pathname, body.requestId, server.createChannel(me, body));
+    }
+    if (url.pathname === "/api/chat/dms")
+      return operationResponse(url.pathname, body.requestId, server.openDm(me, body));
+    if (url.pathname === "/api/chat/tasks")
+      return operationResponse(
+        url.pathname,
+        body.requestId,
+        server.createTask(me, { ...body, freshness: false }),
+      );
+    const changingTask = url.pathname.match(/^\/api\/chat\/tasks\/(\d+)\/change$/);
+    if (changingTask)
+      return operationResponse(
+        url.pathname,
+        body.requestId,
+        server.changeTask(me, { ...body, taskId: Number(changingTask[1]), freshness: false }),
+      );
     if (url.pathname.endsWith("/read")) return respond(server.readUnread(me, body.timeline, body));
     if (url.pathname.endsWith("/search"))
       return respond(server.search(me, url.searchParams.get("q") ?? ""));
@@ -139,6 +182,19 @@ function fixture(clock?: Clock) {
     writes,
     urls,
     platform,
+    operationRequests,
+    get historyRequests() {
+      return historyRequests;
+    },
+    historyUnavailable: (value: boolean) => {
+      historyUnavailable = value;
+    },
+    loseOperation: (path: string) => {
+      lostOperation = path;
+    },
+    refuseNextOperation: () => {
+      refuseOperation = true;
+    },
     get expired() {
       return expired;
     },
@@ -414,5 +470,145 @@ describe("native chat public interface", () => {
     f.emit("login", {});
     await until(f.chat, () => f.expired === 1);
     expect(f.expired).toBe(1);
+  });
+  it("stops failed history loads until an explicit retry", async () => {
+    const f = fixture();
+    await f.start();
+    f.historyUnavailable(true);
+    await f.chat.load(f.ref);
+    expect(f.chat.timeline(f.ref).error).not.toBe("");
+    for (let attempt = 0; attempt < 125; attempt++) await f.chat.load(f.ref);
+    expect(f.historyRequests).toBe(1);
+    f.historyUnavailable(false);
+    await f.chat.load(f.ref);
+    expect(f.historyRequests).toBe(1);
+    await f.chat.retryLoad(f.ref);
+    expect(f.historyRequests).toBe(2);
+    expect(f.chat.timeline(f.ref)).toMatchObject({ loaded: true, error: "" });
+  });
+  it("locates older channel and thread entries and reports unavailable destinations", async () => {
+    const f = fixture();
+    const root = f.server.send(f.other, f.ref, {
+      requestId: "destination-root",
+      body: "目标根消息",
+      freshness: false,
+    });
+    if (root.status !== "sent") throw new Error("expected sent");
+    const thread = { thread: root.messageId };
+    for (let i = 0; i < 75; i++) {
+      f.server.send(f.other, f.ref, {
+        requestId: `channel-${i}`,
+        body: `频道 ${i}`,
+        freshness: false,
+      });
+      f.server.send(f.other, thread, {
+        requestId: `thread-${i}`,
+        body: `回复 ${i}`,
+        freshness: false,
+      });
+    }
+    await f.start();
+    const cancel = new AbortController();
+    expect(await f.chat.locate(f.ref, { seq: 1 }, cancel.signal)).toBe("found");
+    expect(f.chat.timeline(f.ref).entries.find((e) => e.seq === 1)).toMatchObject({
+      body: "目标根消息",
+    });
+    expect(await f.chat.locate(thread, { seq: 2 }, cancel.signal)).toBe("found");
+    expect(f.chat.timeline(thread).entries.find((e) => e.seq === 2)).toMatchObject({
+      body: "回复 1",
+    });
+    expect(await f.chat.locate(f.ref, { messageId: root.messageId }, cancel.signal)).toBe("found");
+    expect(await f.chat.locate(thread, { seq: 900 }, cancel.signal)).toBe("missing");
+    expect(await f.chat.locate(f.ref, { messageId: 9999 }, cancel.signal)).toBe("missing");
+  });
+  it("cancels an old destination without blocking a new destination on the same timeline", async () => {
+    const f = fixture();
+    await f.start();
+    const held = f.holdHistory();
+    const cancel = new AbortController();
+    const locating = f.chat.locate(f.ref, { seq: 1 }, cancel.signal);
+    cancel.abort();
+    f.server.send(f.other, f.ref, { requestId: "new-target", body: "新目标", freshness: false });
+    const next = f.chat.locate(f.ref, { seq: 1 }, new AbortController().signal);
+    held.resolve(new Response(JSON.stringify([])));
+    expect(await locating).toBe("cancelled");
+    expect(await next).toBe("found");
+    expect(f.historyRequests).toBe(2);
+    expect(f.chat.timeline(f.ref).entries).toMatchObject([{ body: "新目标" }]);
+  });
+  it("does not reveal a late destination after the authenticated identity closes", async () => {
+    const f = fixture();
+    f.server.send(f.other, f.ref, {
+      requestId: "private-target",
+      body: "旧身份消息",
+      freshness: false,
+    });
+    await f.start();
+    const held = f.holdHistory();
+    const locating = f.chat.locate(f.ref, { seq: 1 }, new AbortController().signal);
+    f.chat.close();
+    held.resolve(new Response(JSON.stringify(f.server.readHistory(f.me, f.ref, {}))));
+    expect(await locating).toBe("cancelled");
+    expect(f.chat.getSnapshot().timelines.size).toBe(0);
+    expect(f.chat.getSnapshot().me).toBe(0);
+  });
+  it("retains task creation input and request identity across consumer dismissal and reopen", async () => {
+    const f = fixture();
+    const message = f.server.send(f.me, f.ref, {
+      requestId: "task-root",
+      body: "可重试任务",
+      freshness: false,
+    });
+    if (message.status !== "sent") throw new Error("expected sent");
+    await f.start();
+    const input = { messageId: message.messageId, title: "保留任务" };
+    f.loseOperation("/api/chat/tasks");
+    await expect(f.chat.task(input)).rejects.toThrow();
+    const reopened = f.chat.getSnapshot().operations.get(`task-create/${message.messageId}`);
+    expect(reopened).toMatchObject({ status: "failed", input: { kind: "task-create", ...input } });
+    await expect(f.chat.task({ ...input, title: "不能替换未确认操作" })).rejects.toThrow(
+      "上次操作尚未确认",
+    );
+    const result = await f.chat.task(input);
+    expect(result.status).toBe("applied");
+    expect(f.operationRequests).toHaveLength(2);
+    expect(f.operationRequests[0]?.requestId).toBe(f.operationRequests[1]?.requestId);
+    expect(f.chat.getSnapshot().operations.size).toBe(0);
+    const entries = f.server.readHistory(f.me, f.ref, {}).filter((e) => e.kind === "task");
+    expect(entries).toHaveLength(1);
+  });
+  it("retains channel creation across reopen and releases it only after acknowledgement or refusal", async () => {
+    const f = fixture();
+    await f.start();
+    const input = { kind: "channel" as const, name: "只创建一次", visibility: "private" as const };
+    f.loseOperation("/api/chat/channels");
+    await expect(f.chat.create(input)).rejects.toThrow();
+    expect(f.chat.getSnapshot().operations.get("new-conversation")).toMatchObject({
+      input,
+      status: "failed",
+    });
+    const result = await f.chat.create(input);
+    expect(f.server.listConversations(f.me).filter((c) => c.name === input.name)).toHaveLength(1);
+    expect(f.operationRequests[0]?.requestId).toBe(f.operationRequests[1]?.requestId);
+    expect(f.chat.getSnapshot().operations.size).toBe(0);
+    f.refuseNextOperation();
+    await expect(f.chat.create({ ...input, name: "被拒绝" })).rejects.toThrow();
+    expect(f.chat.getSnapshot().operations.size).toBe(0);
+    expect((await f.chat.create({ ...input, name: "修改后创建" })).conversationId).not.toBe(
+      result.conversationId,
+    );
+    expect(f.operationRequests[2]?.requestId).not.toBe(f.operationRequests[3]?.requestId);
+  });
+  it("clears unresolved operations on identity close and rejects later retries", async () => {
+    const f = fixture();
+    await f.start();
+    const input = { kind: "channel" as const, name: "不泄漏操作", visibility: "public" as const };
+    f.loseOperation("/api/chat/channels");
+    await expect(f.chat.create(input)).rejects.toThrow();
+    expect(f.chat.getSnapshot().operations.size).toBe(1);
+    f.chat.close();
+    expect(f.chat.getSnapshot().operations.size).toBe(0);
+    await expect(f.chat.create(input)).rejects.toThrow("登录已结束");
+    expect(f.operationRequests).toHaveLength(1);
   });
 });

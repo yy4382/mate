@@ -1,6 +1,5 @@
 import { useHeaderHeight } from "@react-navigation/elements";
-import { randomUUID } from "expo-crypto";
-import { router } from "expo-router";
+import { router, Stack } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { KeyboardAvoidingView, ScrollView, View } from "react-native";
 import { useChat, useChatState } from "../../session";
@@ -9,36 +8,34 @@ export default function NewConversation() {
   const headerHeight = useHeaderHeight();
   const chat = useChat();
   const state = useChatState();
-  const [mode, setMode] = useState<"channel" | "dm">("channel");
-  const [visibility, setVisibility] = useState<"public" | "private">("public");
-  const [name, setName] = useState("");
-  const [other, setOther] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
+  const pending = state.operations.get("new-conversation");
+  const saved = pending?.input;
+  const [mode, setMode] = useState<"channel" | "dm">(saved?.kind === "dm" ? "dm" : "channel");
+  const [visibility, setVisibility] = useState<"public" | "private">(
+    saved?.kind === "channel" ? saved.visibility : "public",
+  );
+  const [name, setName] = useState(saved?.kind === "channel" ? saved.name : "");
+  const [other, setOther] = useState<number | null>(saved?.kind === "dm" ? saved.other : null);
+  const busy = pending?.status === "sending";
   const [error, setError] = useState("");
   const mounted = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
       mounted.current = false;
-    },
-    [],
-  );
-  const request = useRef<{ key: string; id: string } | null>(null);
+    };
+  }, []);
   async function submit() {
     const input =
       mode === "channel" ? { kind: mode, name, visibility } : { kind: mode, other: other ?? 0 };
-    const key = JSON.stringify(input);
-    if (request.current?.key !== key) request.current = { key, id: randomUUID() };
-    setBusy(true);
     setError("");
     try {
-      const result = await chat.create(input, request.current.id);
+      const result = await chat.create(input);
       if (!mounted.current) return;
       router.dismiss();
       router.push({ pathname: "/conversation", params: { id: result.conversationId } });
     } catch (e) {
       setError(e instanceof Error ? e.message : "无法创建会话，请重试。");
-    } finally {
-      setBusy(false);
     }
   }
   return (
@@ -47,10 +44,23 @@ export default function NewConversation() {
       style={styles.fill}
       keyboardVerticalOffset={headerHeight}
     >
+      <Stack.Toolbar placement="right">
+        <Stack.Toolbar.Button onPress={() => router.back()}>关闭</Stack.Toolbar.Button>
+      </Stack.Toolbar>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.page}>
         <View style={styles.row}>
-          <Button title="频道" primary={mode === "channel"} onPress={() => setMode("channel")} />
-          <Button title="私信" primary={mode === "dm"} onPress={() => setMode("dm")} />
+          <Button
+            disabled={!!pending}
+            title="频道"
+            primary={mode === "channel"}
+            onPress={() => setMode("channel")}
+          />
+          <Button
+            disabled={!!pending}
+            title="私信"
+            primary={mode === "dm"}
+            onPress={() => setMode("dm")}
+          />
         </View>
         {mode === "channel" ? (
           <>
@@ -58,16 +68,19 @@ export default function NewConversation() {
             <Field
               testID="channel-name"
               accessibilityLabel="频道名称"
+              editable={!pending}
               value={name}
               onChangeText={setName}
             />
             <View style={styles.row}>
               <Button
+                disabled={!!pending}
                 title="公开"
                 primary={visibility === "public"}
                 onPress={() => setVisibility("public")}
               />
               <Button
+                disabled={!!pending}
                 title="私有"
                 primary={visibility === "private"}
                 onPress={() => setVisibility("private")}
@@ -82,15 +95,25 @@ export default function NewConversation() {
               .map((a) => (
                 <Button
                   key={a.accountId}
+                  disabled={!!pending}
                   title={`${other === a.accountId ? "已选 · " : ""}${a.displayName}（@${a.handle}）`}
                   onPress={() => setOther(a.accountId)}
                 />
               ))}
           </>
         )}
-        <ErrorLine text={error} />
+        {pending && <Label>上次操作结果尚未确认，重试将使用原请求。</Label>}
+        <ErrorLine text={pending?.error || error} />
         <Button
-          title={busy ? "正在打开…" : mode === "channel" ? "创建频道" : "打开私信"}
+          title={
+            busy
+              ? "正在打开…"
+              : pending
+                ? "重试打开会话"
+                : mode === "channel"
+                  ? "创建频道"
+                  : "打开私信"
+          }
           primary
           disabled={busy || (mode === "channel" ? !name.trim() : other === null)}
           onPress={() => void submit()}
