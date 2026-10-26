@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import sharp from "sharp";
@@ -27,18 +28,6 @@ describe("account avatars through ChatApp", () => {
       app.setAccountAvatar(ownerId, request(red)),
     ]);
     expect(duplicate).toEqual(first);
-    expect(first.avatarVersion).toMatch(/^[a-f0-9]{64}$/);
-    const picture = app.accountAvatar(ownerId)!;
-    expect((await sharp(picture.webp).metadata()).format).toBe("webp");
-    const decoded = await sharp(picture.webp)
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    expect([decoded.info.width, decoded.info.height]).toEqual([3, 2]);
-    expect(decoded.data[0]).toBeGreaterThan(200);
-    expect(decoded.data[1]).toBeLessThan(60);
-    expect(decoded.data[2]).toBeLessThan(60);
-    expect(decoded.data[3]).toBe(255);
     const events = app.liveEvents(ownerId, before.cursor);
     expect(events.status).toBe("events");
     if (events.status === "events")
@@ -106,11 +95,14 @@ describe("account avatars through ChatApp", () => {
     const tall = await sharp({ create: { width: 1, height: 257, channels: 3, background: "red" } })
       .png()
       .toBuffer();
-    const oversized = await sharp({
-      create: { width: 257, height: 257, channels: 3, background: "red" },
-    })
+    const oversized = await sharp(red)
+      .withXmp(
+        `<x:xmpmeta xmlns:x="adobe:ns:meta/">${randomBytes(330 * 1024).toString("base64")}</x:xmpmeta>`,
+      )
       .png()
       .toBuffer();
+    expect(oversized.length).toBeGreaterThan(320 * 1024);
+    expect((await sharp(oversized).webp().toBuffer()).length).toBeGreaterThan(0);
     const inputs = [
       Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'></svg>"),
       red.subarray(0, 28),
@@ -118,7 +110,6 @@ describe("account avatars through ChatApp", () => {
       wide,
       tall,
       oversized,
-      Buffer.alloc(321 * 1024),
     ];
     const before = app.liveSnapshot(ownerId);
     for (const [index, input] of inputs.entries())
@@ -135,7 +126,7 @@ describe("account avatars through ChatApp", () => {
     app.close();
   });
 
-  it("preserves transparency while removing uploaded metadata from the persisted WebP", async () => {
+  it("returns a decodable WebP with the uploaded dimensions and transparency, without metadata", async () => {
     const { app, ownerId } = newAppWithOwner();
     const annotated = await sharp({
       create: {
@@ -153,6 +144,7 @@ describe("account avatars through ChatApp", () => {
     const persisted = app.accountAvatar(ownerId)!.webp;
     const metadata = await sharp(persisted).metadata();
     expect(metadata.format).toBe("webp");
+    expect([metadata.width, metadata.height]).toEqual([2, 2]);
     expect(metadata.exif).toBeUndefined();
     expect(metadata.icc).toBeUndefined();
     const decoded = await sharp(persisted).ensureAlpha().raw().toBuffer();

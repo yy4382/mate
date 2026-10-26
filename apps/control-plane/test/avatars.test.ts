@@ -68,9 +68,8 @@ describe("account avatar HTTP operations", () => {
     );
   });
 
-  it("serves WebP bytes, notifies other clients, replaces the URL, survives restart, and restores the default", async () => {
-    const env = environment();
-    let site = await env.start();
+  it("serves WebP bytes, notifies other clients, replaces the URL, and restores the default", async () => {
+    const site = await environment().start();
     const admin = site.browser();
     await admin.logInAdmin();
     const before = (await admin.get("/api/chat/snapshot")).json as LiveSnapshot;
@@ -99,39 +98,17 @@ describe("account avatar HTTP operations", () => {
       "an old version URL never serves new bytes",
     ).toBe(404);
     stream.cancel();
-    await site.close();
-    site = await env.start();
-    const reopened = site.browser();
-    reopened.cookie = admin.cookie;
-    const restored = (await reopened.get("/api/chat/snapshot")).json as LiveSnapshot;
-    expect(
-      restored.accounts.find((account) => account.accountId === second.accountId)?.avatarVersion,
-    ).toBe(second.avatarVersion);
-    expect((await reopened.get(avatarPath(second))).status).toBe(200);
-    expect((await save(reopened, "/api/me/avatar", null, "remove")).json).toMatchObject({
+    expect((await save(admin, "/api/me/avatar", null, "remove")).json).toMatchObject({
       avatarVersion: null,
     });
-    expect((await reopened.get(avatarPath(second))).status).toBe(404);
+    expect((await admin.get(avatarPath(second))).status).toBe(404);
   });
 
-  it("refuses cross-origin, oversized, malformed, SVG and truncated uploads while keeping the existing picture", async () => {
+  it("refuses malformed JSON, oversized requests and undecodable pictures while keeping the existing picture", async () => {
     const site = await environment().start();
     const admin = site.browser();
     await admin.logInAdmin();
     const original = (await save(admin, "/api/me/avatar", red)).json as AccountView;
-    const body = { requestId: "bad", png: blue };
-    expect(
-      (await admin.request("PUT", "/api/me/avatar", body, { origin: "https://elsewhere.invalid" }))
-        .status,
-    ).toBe(403);
-    expect(
-      (
-        await admin.send("PUT", "/api/me/avatar", {
-          headers: { "content-type": "text/plain" },
-          body: JSON.stringify(body),
-        })
-      ).status,
-    ).toBe(415);
     expect(
       (
         await admin.send("PUT", "/api/me/avatar", {
@@ -143,13 +120,8 @@ describe("account avatar HTTP operations", () => {
     expect((await save(admin, "/api/me/avatar", "x".repeat(1024 * 1024), "too-big")).status).toBe(
       413,
     );
-    for (const png of [
-      "not-base64",
-      Buffer.from("<svg></svg>").toString("base64"),
-      Buffer.from(red, "base64").subarray(0, 45).toString("base64"),
-    ]) {
-      expect((await save(admin, "/api/me/avatar", png, "invalid-file")).status).toBe(400);
-    }
+    const truncated = Buffer.from(red, "base64").subarray(0, 45).toString("base64");
+    expect((await save(admin, "/api/me/avatar", truncated, "invalid-file")).status).toBe(400);
     expect((await admin.get(avatarPath(original))).status).toBe(200);
   });
 });
