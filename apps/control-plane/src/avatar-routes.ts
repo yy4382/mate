@@ -22,7 +22,11 @@ export function avatarRoutes(chat: ChatApp): Route[] {
         const avatar = chat.accountAvatar(Number(params.accountId));
         if (avatar === undefined || query.get("v") !== avatar.version)
           throw new HttpError(404, "not-found");
-        return { bytes: avatar.png, contentType: "image/png" };
+        return {
+          bytes: avatar.png,
+          contentType: "image/png",
+          cacheControl: "private, max-age=31536000, immutable",
+        };
       },
     },
   ];

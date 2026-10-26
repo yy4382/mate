@@ -88,7 +88,7 @@ describe("account avatar HTTP operations", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/png");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
     const bytes = Buffer.from(await response.arrayBuffer());
     expect([...bytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
     const second = (await save(admin, "/api/me/avatar", blue, "replace")).json as AccountView;

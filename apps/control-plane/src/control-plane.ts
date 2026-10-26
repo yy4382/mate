@@ -147,12 +147,12 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
       };
       if ("json" in route) return sendJson(response, 200, await route.json(input));
       if ("binary" in route) {
-        const { bytes, contentType } = route.binary(input);
+        const { bytes, contentType, cacheControl } = route.binary(input);
         response
           .writeHead(200, {
             "content-type": contentType,
             "content-length": bytes.byteLength,
-            "cache-control": "private, no-store",
+            "cache-control": cacheControl,
             "x-content-type-options": "nosniff",
           })
           .end(bytes);

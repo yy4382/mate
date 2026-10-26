@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
-import { describe, expect, it } from "vitest";
-import { openApp, startSite } from "./support.ts";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { newPage, openApp, signIn, startSite } from "./support.ts";
 
 const red = readFileSync(new URL("../../../tests/fixtures/avatars/red.png", import.meta.url));
 const blue = readFileSync(new URL("../../../tests/fixtures/avatars/blue.png", import.meta.url));
@@ -41,6 +41,38 @@ async function renderedAvatar(scope: Page | Locator, accountId: number): Promise
 }
 
 describe("uploading account avatars in the browser", () => {
+  it("reuses cached pictures across pages and downloads a replacement at its new URL", async () => {
+    const site = await startSite();
+    const { accountId } = await site.owner.get<{ accountId: number }>("/api/me");
+    const { context: routedContext } = await newPage(site);
+    // Playwright routing disables HTTP caching, including routes for unrelated hosts.
+    const context = await routedContext.browser()!.newContext();
+    onTestFinished(() => context.close());
+    const page = await context.newPage();
+    page.setDefaultTimeout(8000);
+    await signIn(page, site, "/app/profile");
+    await upload(page, image(red));
+    const first = await renderedAvatar(page, accountId);
+    await page.goto(`${site.origin}/app/admin/humans`);
+    expect(await renderedAvatar(page, accountId)).toBe(first);
+    const cached = await page.evaluate((path) => {
+      const entries = performance.getEntriesByName(new URL(path, location.href).href);
+      const resource = entries[0] as PerformanceResourceTiming;
+      return { transferred: resource.transferSize, decoded: resource.decodedBodySize };
+    }, first);
+    expect(cached.transferred).toBe(0);
+    expect(cached.decoded).toBeGreaterThan(0);
+    await page.goto(`${site.origin}/app/profile`);
+    const downloaded = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/accounts/${accountId}/avatar?`) &&
+        !response.url().endsWith(first),
+    );
+    await upload(page, image(blue));
+    expect((await downloaded).ok()).toBe(true);
+    expect(await renderedAvatar(page, accountId)).not.toBe(first);
+  });
+
   it("a human uploads and replaces their picture, sees it in other pages live and after reload, and restores the default", async () => {
     const site = await startSite();
     const { accountId } = await site.owner.get<{ accountId: number }>("/api/me");
