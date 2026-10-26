@@ -1,0 +1,20 @@
+{
+  "name": "@mate/auth",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "react-native": "./src/index.ts",
+      "mate-source": "./src/index.ts",
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  }
+}

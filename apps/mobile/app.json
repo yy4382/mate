@@ -10,6 +10,6 @@
       "bundleIdentifier": "com.yy4382.mate",
       "deploymentTarget": "27.0"
     },
-    "plugins": ["expo-router", "expo-system-ui"]
+    "plugins": ["expo-router", "expo-system-ui", "expo-sqlite"]
   }
 }

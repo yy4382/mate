@@ -5,7 +5,7 @@ import { openAdmin } from "@mate/admin";
 import { ChatApp, type PushSender } from "@mate/chat";
 import { systemClock, type Clock } from "@mate/clock";
 import { createNodeGateway } from "@mate/gateway";
-import { z } from "zod";
+import { LoginInput, type LoginResult } from "@mate/auth";
 import { EventStream } from "./event-stream.ts";
 import { Frontend } from "./frontend.ts";
 import { humanRoutes } from "./human-routes.ts";
@@ -47,12 +47,6 @@ export type ControlPlane = {
   /** Stop serving, then close the admin module (and every Agent), the gateway and the chat app, in that order. */
   close(): Promise<void>;
 };
-
-const LoginInput = z.object({
-  handle: z.string().max(256),
-  password: z.string().max(1024),
-  next: z.string().optional(),
-});
 
 /**
  * Start the control plane on `dataDirectory`: the chat app with a human account for everyone who may log in, the node
@@ -110,12 +104,9 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
         if (result.status === "limited")
           return sendJson(response, 429, { error: "too-many-attempts" }, { "retry-after": "1" });
         if (result.status === "wrong") return sendJson(response, 401, { error: "wrong-password" });
-        return sendJson(
-          response,
-          200,
-          { next: appPathOr(input.next) },
-          { "set-cookie": sessionCookie(result.session) },
-        );
+        return sendJson(response, 200, { next: appPathOr(input.next) } satisfies LoginResult, {
+          "set-cookie": sessionCookie(result.session),
+        });
       }
       if (method === "POST" && url.pathname === "/api/logout") {
         if (token !== undefined) humans.logOut(token);
