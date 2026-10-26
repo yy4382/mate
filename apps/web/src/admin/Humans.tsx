@@ -1,5 +1,7 @@
+import { AccountAvatar } from "../shell/AccountAvatar.tsx";
+import { AvatarEditor } from "../shell/AvatarEditor.tsx";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleUser, KeyRound, Plus, ShieldCheck, ShieldOff, UserX } from "lucide-react";
+import { CircleUser, ImagePlus, KeyRound, Plus, ShieldCheck, ShieldOff, UserX } from "lucide-react";
 import { useState } from "react";
 import { ApiError, post } from "../shell/api.ts";
 import { navigate } from "../shell/router.tsx";
@@ -14,7 +16,6 @@ import {
   type Role,
 } from "../shell/humans.ts";
 import {
-  Avatar,
   Badge,
   Button,
   ConfirmDialog,
@@ -173,6 +174,7 @@ function HumanRow({
 }) {
   const qc = useQueryClient();
   const [resetting, setResetting] = useState(false);
+  const [editingAvatar, setEditingAvatar] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const run = async (work: () => Promise<unknown>) => {
     try {
@@ -187,7 +189,7 @@ function HumanRow({
   const other: Role = human.role === "admin" ? "member" : "admin";
   return (
     <li className="flex items-center gap-3 p-4" data-human={human.handle}>
-      <Avatar name={human.displayName} size="md" />
+      <AccountAvatar accountId={human.accountId} name={human.displayName} size="md" />
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
         <span className="truncate text-sm font-medium">{human.displayName}</span>
         <span className="text-sm text-muted">@{human.handle}</span>
@@ -207,6 +209,9 @@ function HumanRow({
               编辑个人资料
             </MenuItem>
           ) : null}
+          <MenuItem icon={<ImagePlus aria-hidden />} onClick={() => setEditingAvatar(true)}>
+            更换头像
+          </MenuItem>
           <MenuItem
             icon={other === "admin" ? <ShieldCheck aria-hidden /> : <ShieldOff aria-hidden />}
             onClick={() => run(() => post(`/api/humans/${human.accountId}/role`, { role: other }))}
@@ -230,6 +235,15 @@ function HumanRow({
         </Menu>
       ) : null}
       {resetting ? <ResetPassword human={human} onClose={() => setResetting(false)} /> : null}
+      {editingAvatar ? (
+        <Dialog title={`更换 ${human.displayName} 的头像`} onClose={() => setEditingAvatar(false)}>
+          <AvatarEditor
+            accountId={human.accountId}
+            name={human.displayName}
+            endpoint={`/api/accounts/${human.accountId}/avatar`}
+          />
+        </Dialog>
+      ) : null}
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}

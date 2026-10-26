@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { it } from "vitest";
 import { newPage, signIn, startSite } from "./support.ts";
@@ -22,6 +22,18 @@ it.runIf(out !== undefined)(
     const general = await site.owner.channel("general");
     await site.owner.channel("random");
     const ada = await site.agent("ada");
+    const picture = (color: string) =>
+      readFileSync(
+        new URL(`../../../tests/fixtures/avatars/${color}.png`, import.meta.url),
+      ).toString("base64");
+    await site.owner.put("/api/me/avatar", {
+      requestId: "screen-human-avatar",
+      png: picture("red"),
+    });
+    await site.owner.put(`/api/accounts/${ada.accountId}/avatar`, {
+      requestId: "screen-agent-avatar",
+      png: picture("blue"),
+    });
     await site.owner.put(`/api/admin/nodes/${ada.nodeId}`, { name: "legacy-server" });
     const nodeId = await site.pairNode({
       system: {

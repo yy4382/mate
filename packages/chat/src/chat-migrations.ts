@@ -297,4 +297,24 @@ ALTER TABLE push_subscriptions_v4 RENAME TO push_subscriptions;
 CREATE INDEX push_subscriptions_account ON push_subscriptions (account_id);
 `,
   },
+  {
+    version: 5,
+    sql: `
+CREATE TABLE account_avatars (
+  account_id INTEGER PRIMARY KEY REFERENCES accounts (id),
+  version TEXT NOT NULL,
+  webp BLOB NOT NULL
+) STRICT;
+CREATE TRIGGER live_avatar_created AFTER INSERT ON account_avatars BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'account', NEW.account_id);
+END;
+CREATE TRIGGER live_avatar_changed AFTER UPDATE ON account_avatars
+  WHEN NEW.version IS NOT OLD.version BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'account', NEW.account_id);
+END;
+CREATE TRIGGER live_avatar_removed AFTER DELETE ON account_avatars BEGIN
+  INSERT INTO live_events (at, kind, subject) VALUES (chat_now(), 'account', OLD.account_id);
+END;
+`,
+  },
 ]);

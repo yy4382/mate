@@ -1,10 +1,11 @@
+import { AccountAvatar } from "../shell/AccountAvatar.tsx";
+import { AvatarEditor } from "../shell/AvatarEditor.tsx";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, MessageSquare } from "lucide-react";
 import { useState } from "react";
 import { put } from "../shell/api.ts";
 import { Link, navigate } from "../shell/router.tsx";
 import {
-  Avatar,
   Button,
   Card,
   CardBody,
@@ -97,13 +98,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
         <Breadcrumb name={name} />
         <PageHeader
           title={name}
-          leading={
-            <Avatar
-              name={name}
-              size="lg"
-              {...(agent.accountId === undefined ? {} : { agentAccount: agent.accountId })}
-            />
-          }
+          leading={<AccountAvatar name={name} size="lg" accountId={agent.accountId} />}
           badge={
             <>
               {agent.handle === undefined ? null : (
@@ -132,6 +127,14 @@ export function AgentDetail({ agentId }: { agentId: string }) {
       </div>
       <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} items={TABS}>
         <TabPanel value="settings">
+          <section className="mb-6 grid gap-4" aria-label="头像">
+            <h2 className="text-base font-semibold">头像</h2>
+            <AvatarEditor
+              accountId={agent.accountId}
+              name={name}
+              endpoint={`/api/accounts/${agent.accountId}/avatar`}
+            />
+          </section>
           <form
             className="mb-6"
             aria-label="Agent 设置"

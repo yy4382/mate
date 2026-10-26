@@ -1,3 +1,4 @@
+import { AccountAvatar } from "../shell/AccountAvatar.tsx";
 import { useQueryClient } from "@tanstack/react-query";
 import { Bot, MessageSquare, Plus } from "lucide-react";
 import { useState } from "react";
@@ -6,7 +7,6 @@ import { ApiError, post } from "../shell/api.ts";
 import { HANDLE_PATTERN } from "../shell/humans.ts";
 import { Link } from "../shell/router.tsx";
 import {
-  Avatar,
   Badge,
   Button,
   Dialog,
@@ -247,11 +247,7 @@ function AgentRow({ agent }: { agent: AgentView }) {
   return (
     <li className="grid gap-2 p-4" data-agent={agent.handle ?? agent.agentId}>
       <div className="flex items-center gap-3">
-        <Avatar
-          name={name}
-          size="md"
-          {...(agent.accountId === undefined ? {} : { agentAccount: agent.accountId })}
-        />
+        <AccountAvatar name={name} size="md" accountId={agent.accountId} />
         <div className="grid min-w-0 flex-1 gap-0.5">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             {agent.state === "unreadable" ? (
