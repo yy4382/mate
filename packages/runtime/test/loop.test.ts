@@ -56,9 +56,7 @@ describe("agent loop", () => {
 
     await (await runtime.submit("what is here?", { requestId: "m1" })).settled();
 
-    expect(agent.workspace.calls).toEqual([
-      { tool: "bash", arguments: expect.objectContaining({ command: "ls" }) },
-    ]);
+    expect(agent.workspace.calls).toMatchObject([{ tool: "bash", arguments: { command: "ls" } }]);
     agent.provider.assertComplete();
   });
 

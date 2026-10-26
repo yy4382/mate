@@ -9,7 +9,7 @@ import {
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
 import type { BashArguments } from "@mate/node-protocol";
-import { deliverInput } from "./assistants.ts";
+import { conversationRole, deliverInput } from "./assistants.ts";
 import type { WorkspacePort, WorkspaceToolResult } from "./workspace-tools.ts";
 
 type CommandState =
@@ -50,8 +50,14 @@ export function backgroundCommands(
         );
         const signal = AbortSignal.any([closing, runtime.signal]);
         const { node: target, ...args } = command.input;
+        const role = await conversationRole(runtime, runtime.conversationId, context);
         const result = await node.run(
-          { tool: "bash", arguments: args, ...(target === undefined ? {} : { node: target }) },
+          {
+            tool: "bash",
+            arguments: args,
+            conversationRole: role,
+            ...(target === undefined ? {} : { node: target }),
+          },
           () => undefined,
           signal,
         );

@@ -62,6 +62,7 @@ describe("workspace targets", () => {
         },
       ]);
       for (const call of agent.workspace.calls) {
+        expect(call.conversationRole).toBe("main");
         if (node === undefined) expect(call).not.toHaveProperty("node");
         else expect(call.node).toBe("laptop");
         expect(call.arguments).not.toHaveProperty("node");
@@ -99,6 +100,7 @@ describe("workspace targets", () => {
 
   it("offers node_list to work assistants", async () => {
     const agent = await testAgent();
+    agent.workspace.answerAll(() => text("workspace reached"));
     const primaryReady = Promise.withResolvers<void>();
     const finished = Promise.withResolvers<void>();
     agent.provider
@@ -123,6 +125,14 @@ describe("workspace targets", () => {
       .step("assistant can list nodes", async (request) => {
         await primaryReady.promise;
         expect(request.toolNames()).toContain("node_list");
+        request.call([
+          {
+            name: "bash",
+            arguments: { command: "pwd", workdir: "/tmp", conversationRole: "main" },
+          },
+        ]);
+      })
+      .step("assistant gets its workspace result", (request) => {
         request.text("I can list the available nodes");
       });
     const { runtime } = await agent.open();
@@ -130,6 +140,12 @@ describe("workspace targets", () => {
     await runtime.submit("delegate the check", { requestId: "m1" });
     await finished.promise;
     await runtime.idle();
+    expect(agent.workspace.calls).toHaveLength(1);
+    expect(agent.workspace.calls[0]).toMatchObject({
+      conversationRole: "assistant",
+      arguments: { workdir: "/tmp" },
+    });
+    expect(agent.workspace.calls[0]?.arguments).not.toHaveProperty("conversationRole");
 
     agent.provider.assertComplete();
   });

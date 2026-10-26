@@ -61,11 +61,15 @@ it("9. an authorized visit uses its Agent workspace for commands and file tools"
       ]);
     })
     .step("revoke access and try again", async (request) => {
-      expect(output(request, calls[0]).trim()).toBe(`${realpathSync(workspace)}\nlaptop notes`);
+      expect(output(request, calls[0]).split("\n").slice(0, 2)).toEqual([
+        realpathSync(workspace),
+        "laptop notes",
+      ]);
       expect(output(request, calls[1])).toBe("laptop notes\n");
-      expect(output(request, calls[2]).trim()).toBe(
-        `${realpathSync(ada.workspace)}\nserver workspace`,
-      );
+      expect(output(request, calls[2]).split("\n").slice(0, 2)).toEqual([
+        realpathSync(ada.workspace),
+        "server workspace",
+      ]);
       await system.api("DELETE", grantPath, undefined, 204);
       calls = request.call([visit]);
     })
@@ -120,7 +124,7 @@ it("9. an offline grant prepares its workspace on first use and preserves files 
       ]);
     })
     .step("reconnect and repeat the grant", async (request) => {
-      expect(output(request, calls[0]).trim()).toBe(realpathSync(workspace));
+      expect(output(request, calls[0]).split("\n")[0]).toBe(realpathSync(workspace));
       system.proxy!.setMode("disconnect");
       await until(async () => expect(await online()).toBe(false));
       system.proxy!.setMode("forward");

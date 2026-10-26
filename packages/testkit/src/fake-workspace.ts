@@ -9,6 +9,7 @@ export type WorkspaceToolRequest = {
   readonly tool: ToolName;
   readonly arguments: Readonly<Record<string, unknown>>;
   readonly node?: string;
+  readonly conversationRole: "main" | "assistant";
 };
 type WorkspaceToolResult = ToolResult;
 

@@ -136,6 +136,7 @@ describe("node gateway limits (MODULE_TESTS 7)", () => {
       requestId: "r1",
       nodeId: paired.nodeId,
       signature: paired.sign(connection.received[0]!.nonce!),
+      shellContext: true,
     });
     connection.socket.send(authenticate);
     await eventually(() => under.gateway.status(paired.nodeId).online, "authenticated");

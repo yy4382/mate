@@ -1,18 +1,32 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
+import { Readable, Writable } from "node:stream";
 import { PosixProcessGroup } from "./posix-processes.ts";
 import type { CommandProcess, ShellRequest } from "./types.ts";
 
 export const posixCommands = {
   start(request: ShellRequest): CommandProcess {
-    const child = spawn("/bin/sh", ["-c", request.command], {
-      cwd: request.cwd,
-      env: request.env,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      request.launch?.executable ?? "/bin/sh",
+      request.launch?.args ?? ["-c", request.command],
+      {
+        cwd: request.cwd,
+        env: request.env,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
+      },
+    );
+    if (!hasCommandPipes(child)) throw new Error("Command output pipes were not created");
+    const metadata = child.stdio[3];
+    const input = child.stdio[4];
+    if (input instanceof Writable) {
+      input.on("error", () => {});
+      input.end(request.launch?.input);
+    }
     const group = child.pid === undefined ? undefined : new PosixProcessGroup(child.pid);
     return {
       child,
+      ...(metadata instanceof Readable ? { metadata } : {}),
+      ...(input instanceof Writable ? { input } : {}),
       kill() {
         group?.kill();
         return { ok: true };
@@ -23,6 +37,14 @@ export const posixCommands = {
     };
   },
 };
+
+function hasCommandPipes(
+  child: ChildProcess,
+): child is ChildProcessByStdio<null, Readable, Readable> {
+  return (
+    child.stdin === null && child.stdout instanceof Readable && child.stderr instanceof Readable
+  );
+}
 
 export const windowsCommands = {
   start(request: ShellRequest): CommandProcess {

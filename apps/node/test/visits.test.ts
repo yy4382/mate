@@ -15,7 +15,7 @@ import {
 } from "./support.ts";
 
 describe("node visits (MODULE_TESTS 8)", () => {
-  it("prepares an Agent workspace and uses its actual directory and HOME for visits", async () => {
+  it("prepares an Agent workspace and uses its actual directory and platform HOME for visits", async () => {
     const node = await connectedNode();
     const agentId = `visitor-${randomUUID()}`;
     const workspace = join(node.workspacesRoot, agentId);
@@ -34,7 +34,7 @@ describe("node visits (MODULE_TESTS 8)", () => {
     expect(result.isError, textOf(result)).toBe(false);
     const [cwd, home, shellHome] = textOf(result).split(/\r?\n/);
     expect(realpathSync.native(cwd!)).toBe(realpathSync.native(workspace));
-    expect(home).toBe(workspace);
+    expect(home).toBe(windows ? workspace : node.home);
     expect(realpathSync.native(shellHome!)).toBe(realpathSync.native(workspace));
     expect(chunks.join("")).toContain(workspace);
     expect(existsSync(workspace)).toBe(true);
@@ -76,7 +76,7 @@ describe("node visits (MODULE_TESTS 8)", () => {
       "visit",
     );
     expect(command.isError, textOf(command)).toBe(false);
-    expect(textOf(command).trim()).toBe("first\nupdated");
+    expect(command.content[0]?.text.trim()).toBe("first\nupdated");
 
     const outside = temporaryDirectory();
     const secret = join(outside, "secret.txt");

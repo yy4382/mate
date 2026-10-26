@@ -1,7 +1,7 @@
 import type { Clock } from "@mate/clock";
 import { BASH_KEPT_OUTPUT_BYTES, type ToolResult } from "@mate/node-protocol";
 import { currentPlatform } from "./platforms/index.ts";
-import type { Background, CommandProcess } from "./platforms/types.ts";
+import type { Background, CommandProcess, ShellRequest } from "./platforms/types.ts";
 
 /** Bytes streamed to the gateway per call; past this only the result's tail is sent, so `yes` cannot flood the link. */
 const STREAMED_OUTPUT_BYTES = 1024 * 1024;
@@ -15,10 +15,11 @@ export type CommandRequest = {
   directory: string;
   env: NodeJS.ProcessEnv;
   timeoutSeconds: number | undefined;
+  launch?: ShellRequest["launch"];
 };
 
 /** How a command ended, as the shell process reports it, or why it never ran. */
-type Ending =
+export type Ending =
   | { kind: "exited"; code: number }
   | { kind: "signaled"; signal: string }
   | { kind: "timed-out" }
@@ -26,7 +27,7 @@ type Ending =
   | { kind: "stop-failed"; reason: string }
   | { kind: "not-started"; reason: string };
 
-type Execution = { ending: Ending; pipesHeld: boolean; background: Background };
+type Execution = { ending: Ending; pipesHeld: boolean; background: Background; metadata?: Buffer };
 
 /** Keeps each platform's handle while it can still identify and stop a command's running processes. */
 export class Commands {
@@ -42,10 +43,18 @@ export class Commands {
     request: CommandRequest,
     onOutput: (chunk: string) => void,
     signal: AbortSignal,
-  ): Promise<ToolResult> {
+  ): Promise<{ result: ToolResult; ending: Ending; metadata?: Buffer }> {
     const output = new Output(onOutput);
-    const { ending, pipesHeld, background } = await this.#execute(request, output, signal);
-    return render(ending, output, pipesHeld, background, request.timeoutSeconds);
+    const { ending, pipesHeld, background, metadata } = await this.#execute(
+      request,
+      output,
+      signal,
+    );
+    return {
+      result: render(ending, output, pipesHeld, background, request.timeoutSeconds),
+      ending,
+      ...(metadata === undefined ? {} : { metadata }),
+    };
   }
 
   /** Kill every group this node started that may still run anything. For the node's own shutdown. */
@@ -59,6 +68,8 @@ export class Commands {
         failures.push(stopped.reason);
         group.child.stdout.destroy();
         group.child.stderr.destroy();
+        group.input?.destroy();
+        group.metadata?.destroy();
         group.child.unref();
       }
     }
@@ -76,12 +87,18 @@ export class Commands {
         command: request.command,
         cwd: request.directory,
         env: request.env,
+        ...(request.launch === undefined ? {} : { launch: request.launch }),
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return { ending: { kind: "not-started", reason }, pipesHeld: false, background: "finished" };
     }
     const shell = group.child;
+    const metadata =
+      request.launch === undefined ? undefined : new FramedMetadata(request.launch.metadata);
+    group.metadata?.on("data", (chunk: Buffer) => metadata?.push(chunk));
+    group.metadata?.on("error", () => {});
+    group.metadata?.once("close", () => metadata?.close());
     const exit = new Promise<Ending>((resolve) => {
       shell.once("error", (error) => resolve({ kind: "not-started", reason: error.message }));
       shell.once("exit", (code, exitSignal) =>
@@ -99,7 +116,10 @@ export class Commands {
       stream.once("close", () => open--);
     }
     if (shell.pid === undefined) {
-      return { ending: await exit, pipesHeld: false, background: "finished" };
+      const ending = await exit;
+      group.input?.destroy();
+      group.metadata?.destroy();
+      return { ending, pipesHeld: false, background: "finished" };
     }
     this.#groups.add(group);
 
@@ -146,7 +166,7 @@ export class Commands {
     const waitSignal = killed ? new AbortController().signal : signal;
     const deadline = this.#clock.now() + EXIT_GRACE_MS;
     while (
-      (open > 0 || group.background() === "running") &&
+      (open > 0 || group.background() === "running" || metadata?.pending === true) &&
       this.#clock.now() < deadline &&
       !waitSignal.aborted
     ) {
@@ -160,9 +180,46 @@ export class Commands {
     const pipesHeld = open > 0;
     shell.stdout.destroy();
     shell.stderr.destroy();
+    group.input?.destroy();
+    group.metadata?.destroy();
     const background = group.background();
     if (background !== "running") this.#groups.delete(group);
-    return { ending, pipesHeld, background };
+    const record = metadata?.record;
+    return { ending, pipesHeld, background, ...(record === undefined ? {} : { metadata: record }) };
+  }
+}
+
+class FramedMetadata {
+  readonly #limit: { frames: number; maxBytes: number };
+  #bytes = Buffer.alloc(0);
+  #frames = 0;
+  #closed = false;
+  #invalid = false;
+
+  constructor(limit: { frames: number; maxBytes: number }) {
+    this.#limit = limit;
+  }
+  push(chunk: Buffer): void {
+    if (this.#invalid || this.#frames >= this.#limit.frames) return;
+    if (this.#bytes.length + chunk.length > this.#limit.maxBytes) {
+      this.#invalid = true;
+      this.#bytes = Buffer.alloc(0);
+      return;
+    }
+    this.#bytes = Buffer.concat([this.#bytes, chunk]);
+    for (const byte of chunk) if (byte === 0) this.#frames++;
+    if (this.#frames > this.#limit.frames) this.#invalid = true;
+  }
+  close(): void {
+    this.#closed = true;
+  }
+  get pending(): boolean {
+    return !this.#closed && !this.#invalid && this.#frames < this.#limit.frames;
+  }
+  get record(): Buffer | undefined {
+    return !this.#invalid && this.#frames === this.#limit.frames && this.#bytes.at(-1) === 0
+      ? this.#bytes
+      : undefined;
   }
 }
 

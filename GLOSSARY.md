@@ -305,6 +305,15 @@ Agent 在某个 node 上的工作目录，路径为该 node 的 `<工作区根>/
 **命令进程组**（command process group）
 node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Windows 活 shell 的进程树，追踪与停止的范围见 [ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)。
 
+**命令环境**（command environment）
+Linux/macOS node 在内存中为每个 Agent 保留的启动基线和主命令目录。主对话和助手共用基线，每次执行仍是新进程；node 重启清空，重连不清空。
+
+**启动基线**（startup baseline）
+首次调用时通过宿主账号 Bash/zsh 的交互式非登录启动规则捕获的普通配置，包括环境、变量和数组、函数、别名及配置选项。后续调用恢复同一份基线，不继承前一条命令的修改。失败的初始化也保留到 node 重启，避免重复启动副作用。
+
+**主命令目录**（main working directory）
+每个 Agent 在每个 node 上记住的物理目录，初始为工作区。只有获得更新权的主对话前台调用可发布最终目录；同期其他调用、后台和助手不发布。文件工具的根仍为工作区。
+
 **身份拒绝**（gateway.refused）
 网关对 node 说"你是谁"不被接受：身份不认识（`unknown_identity`）、签名或公钥无效、配对令牌被拒。除了"不认识"而 node 手里有配对令牌的情况，node 收到后退出，不重试。
 避免：把它和**协议错误**（`gateway.error`：格式错误、顺序错误、握手超时、内部错误）混为一谈；协议错误只结束这条连接，node 退避重连。

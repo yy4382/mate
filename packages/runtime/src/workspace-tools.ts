@@ -9,9 +9,15 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
-import { bashTool, parseBashArguments, type ToolName } from "@mate/node-protocol";
+import {
+  bashTool,
+  parseBashArguments,
+  type ToolName,
+  type ConversationRole,
+} from "@mate/node-protocol";
 import { z } from "zod";
 import { backgroundCommands } from "./background-commands.ts";
+import { conversationRole } from "./assistants.ts";
 
 export type WorkspaceToolName = ToolName;
 
@@ -19,6 +25,7 @@ export type WorkspaceToolRequest = {
   readonly tool: WorkspaceToolName;
   readonly arguments: JsonObject;
   readonly node?: string;
+  readonly conversationRole: ConversationRole;
 };
 
 export type WorkspaceNode = {
@@ -68,13 +75,13 @@ function withNode(parameters: { readonly properties?: object }): ToolRegistratio
       node: {
         type: "string",
         description:
-          "要在哪个 node 上执行，用 `node_list` 查名字。不给就在你的主 node 上执行。每个已授权的 node 都有你自己的工作区，命令和文件路径都从该工作区开始。各 node 的文件独立，不会同步。主 node 的 `MEMORY.md` 是你维护的记忆入口；主 node 初始化 `MEMORY.md`，其他 node 准备工作区时不初始化它。",
+          "要在哪个 node 上执行，用 `node_list` 查名字。不给就在你的主 node 上执行。每个已授权的 node 都有你自己的工作区，文件工具路径从该工作区开始；Linux/macOS 的主对话前台命令可以记住目录变化。各 node 的文件和命令环境独立，不会同步。主 node 的 `MEMORY.md` 是你维护的记忆入口；主 node 初始化 `MEMORY.md`，其他 node 准备工作区时不初始化它。",
       },
     },
   });
 }
 
-function splitArguments(value: unknown): Omit<WorkspaceToolRequest, "tool"> {
+function splitArguments(value: unknown): Omit<WorkspaceToolRequest, "tool" | "conversationRole"> {
   const { node, ...args } = toolArguments.parse(value);
   return { arguments: args, ...(node === undefined ? {} : { node }) };
 }
@@ -95,7 +102,7 @@ export function workspaceExtension(
   const commands = backgroundCommands(node, closing, abortTask);
 
   async function forward(
-    request: WorkspaceToolRequest,
+    request: Omit<WorkspaceToolRequest, "conversationRole">,
     api: ToolExecutionApi,
     context: Context,
   ): Promise<ToolExecutionResult> {
@@ -103,7 +110,12 @@ export function workspaceExtension(
       closing,
       ...(context.abortSignal === undefined ? [] : [context.abortSignal]),
     ]);
-    const result = await node.run(request, (chunk) => api.output(chunk), signal);
+    const role = await conversationRole(api, api.conversationId, context);
+    const result = await node.run(
+      { ...request, conversationRole: role },
+      (chunk) => api.output(chunk),
+      signal,
+    );
     return result.details === undefined
       ? { content: result.content, isError: result.isError }
       : { content: result.content, isError: result.isError, details: result.details };
