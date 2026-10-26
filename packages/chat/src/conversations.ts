@@ -1,10 +1,10 @@
+import { ConversationView, ConversationKind } from "./contracts.ts";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
 import { ChatError } from "./chat-error.ts";
 import { SqlBoolean, idList, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
-
-export const ConversationKind = z.enum(["public", "private", "dm"]);
+export { ConversationView, ConversationKind } from "./contracts.ts";
 
 const ConversationRow = z.object({
   id: Id,
@@ -13,17 +13,6 @@ const ConversationRow = z.object({
   archived: SqlBoolean,
 });
 export type Conversation = z.output<typeof ConversationRow>;
-
-/** A conversation as its reader sees it. `name` is null for a DM. */
-export const ConversationView = z.object({
-  conversationId: Id,
-  kind: ConversationKind,
-  name: z.string().nullable(),
-  archived: z.boolean(),
-  member: z.boolean(),
-  members: z.array(Id),
-});
-export type ConversationView = z.output<typeof ConversationView>;
 
 const SELECT_CONVERSATION = "SELECT c.id, c.kind, c.name, c.archived FROM conversations c";
 

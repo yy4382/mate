@@ -82,7 +82,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 | `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |
 | `apps/control-plane`（`@mate/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
 | `apps/web`（`@mate/web`） | Vite 网页客户端 |
-| `apps/mobile`（`@mate/mobile`） | Expo 原生 iOS 客户端，包含认证、管理、Agent 观察、个人资料和原生通知 |
+| `apps/mobile`（`@mate/mobile`） | Expo 原生 iOS 客户端，包含认证、聊天、管理、Agent 观察、个人资料和原生通知 |
 | `apps/node`（`@mate/node`） | node 进程和 `mate node` CLI |
 | `tests/system`（`@mate/system-tests`） | 起真实控制面和 node 进程的系统场景（MODULE_TESTS 第 12 节） |
 
@@ -553,19 +553,28 @@ interface Admin {
 
 网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑；API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
 
-移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前支持保存一个 HTTPS 服务器地址，用已有 handle 和密码登录、显示当前身份、恢复登录和退出，以及完整管理和个人资料。原生通知支持权限、登记、清理与设置。聊天、分发与签名仍待接入。
+移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。当前覆盖 HTTPS 服务器选择、cookie 登录与恢复、频道和私信、讨论串、搜索、提及、消息任务和未读，以及完整管理、Agent 观察、个人资料与通知设置。分发、签名与真实 APNs 送达仍需 Apple 环境验证。
 
-移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。根层 `lifecycle.tsx` 统一持有认证启动和唯一的 AppState 监听。仅真正进入 background 后回到 active 才以 `GET /api/me` 验证 cookie，权限弹窗等仅 inactive → active 的变化不重验或打断通知登记；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
+移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。根层 `lifecycle.tsx` 统一持有认证启动和唯一的 AppState 监听，同时暂停后台聊天流；聊天 provider 只订阅身份，不另行启动认证或重验。聊天验证遮罩不参与首页重定向，重验后保留当前会话、草稿和 sheet；验证中隐藏并禁止访问旧界面。仅真正进入 background 后回到 active 才以 `GET /api/me` 验证 cookie，权限弹窗等仅 inactive → active 的变化不重验或打断通知登记；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
 
 退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问并清理全部 app cookie，切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
 
 `MobileNotifications` 在 `notifications.ts` 持有系统权限、已验证的服务器与账号、本机登记和未确认的取消登记。`notifications-native.ts` 用 SDK 58 的 `expo-notifications` 获取 APNs token、监听 token 更新、收取通知和点击响应。根层 `NotificationIntegration` 在设置页关闭时仍监听原生响应和 token，并同步认证状态；它不另行启动认证或监听前台。后台暂停由统一生命周期处理，后台的身份更新也不能恢复通知访问。首页与个人资料提供通知设置入口，设置页返回时保留个人资料草稿。只有权限允许、服务器 origin 和环境匹配、订阅请求成功才显示已登记。拒绝或撤回权限会关闭本机推送并尝试取消服务器订阅；网络和签名失败显示未完成；同一 token 登记重试沿用 binding，token 轮换生成新 binding。当前登记与待取消登记分别保存；token 轮换前先持久化旧登记的取消责任，再发新登记。取消失败不丢失旧 token，刷新、重启恢复和退出都会重试。每条待取消记录保留精确服务器、账号、token、环境与 binding，只能用同一服务器和账号的已验证身份发送，确认成功后才移除；重新成为当前登记的相同记录不会再被取消。旧的单条登记设置格式仍可读取，不改变 SQLite 表结构。
 
-`MobileAuth` 的可选 `beforeClear` 屏障在取消登记结束后才允许退出请求和 cookie 清理。退出、更换服务器、401 都使旧请求和点击响应失效，并调用系统取消注册、移除已展示通知。认证验证中或网络不可用时暂停通知展示和导航。冷启动点击等待身份验证；通知必须匹配精确 origin、账号和 binding，且未超过一天。导航只产生 `/conversation?id=<会话>&thread=<讨论串>&seq=<序号>` 的站内参数，忽略 payload 中的 URL。目标页面由聊天导航任务提供，合入 mobile 时须接入同一个已登录导航组。
+`MobileAuth` 的可选 `beforeClear` 屏障在取消登记结束后才允许退出请求和 cookie 清理。退出、更换服务器、401 都使旧请求和点击响应失效，并调用系统取消注册、移除已展示通知。认证验证中或网络不可用时暂停通知展示和导航。冷启动点击等待身份验证；通知必须匹配精确 origin、账号和 binding，且未超过一天。导航只产生 `/conversation?id=<会话>&thread=<讨论串>&seq=<序号>` 的站内参数，忽略 payload 中的 URL。目标页面位于同一个根导航的已登录聊天组，分页定位旧序号并保持讨论串上下文。跨导航组或冷启动的会话页保留原生返回按钮，有历史时返回来源页，没有历史时进入聊天列表。
 
 离线取消不保证服务器停止发送，也不能收回已由 APNs 接受的通知。此时保留 cleanup 记录，在同一账号再次验证时重试；本机立即禁止旧通知导航并尝试向系统取消注册。重新注册后，旧服务器仍可能送来通用提示，所以界面明确说明取消未确认。真实 APNs 投递需要 Apple 凭据和具备推送能力的签名；simctl 注入只验证原生接收和点击，不证明远程投递。
 
 `@mate/auth` 只拥有实际共享的认证契约 `Role`、`HumanView`、`LoginInput` 和 `LoginResult`。控制面、网页和移动端从同一处消费这些类型，移动端在网络边界用 schema 解析响应；控制面的 cookie、Origin 和路由行为保持不变。
+
+原生聊天由一个登录身份所属的 `MobileChat` 实例持有数据、草稿和未完成发送。频道与讨论串各有草稿；导航、短暂断线和前台重验保留实例，退出或换服务器立即关闭实例、取消请求并清空数据。草稿只在本次登录的内存中保存，不跨 app 重启。发送使用 Expo Crypto 生成请求 ID，响应丢失后的重试沿用同一个 ID；成功后只移除发送覆盖的文字。频道创建、成员操作和任务操作的未确认输入与请求 ID 同样由登录会话持有，关闭并重开界面不会丢失；确认完成或收到明确拒绝后清除。未确认期间先重试原操作，避免用另一份输入产生重复创建。
+
+聊天复用现有 HTTP 路由和 SSE 协议。快照先建立游标，再加载时间线；快照就绪后历史、定位和发送即可使用，不等待原生事件流的首个数据块，实时连接仍单独显示连接中状态；历史加载期间收到的实时条目按序号合并。SSE 通过 `expo/fetch` 流式读取，帧解析使用不依赖平台的 `eventsource-parser`，凭据来自与认证相同的 Foundation cookie 存储；断线带最后一个已应用游标重连，40 秒没有数据或心跳时重新连接。`resnapshot` 重新拉取服务端数据并保留草稿。回到前台先验证登录，等旧流关闭后恢复事件流；后台不推进已读位置。历史读取失败会停止，只有显式重试才重新请求；同一时间线的读取共用进行中的请求。在当前可见时间线底部阅读时，客户端使用现有 `read` 操作推进已读位置，失败提供重试。
+
+`@mate/chat/contracts` 是不依赖 SQLite 或 Node 的公开契约入口。账号、会话、条目、未读、读取、发送、任务和实时数据形状只在这里定义；后端继续消费同一份定义，原生端在网络边界解析它们。`@mate/clock` 同时提供原生入口，聊天重连和超时共用已有时钟接口。
+
+原生导航使用 Expo Router，消息虚拟列表使用 React Native `FlatList`，键盘避让使用 `KeyboardAvoidingView` 和导航栏实际高度。连接状态放在可滚动的消息列表中，不占用输入区上方的固定高度。Markdown 由 `react-native-enriched-markdown` 渲染为原生文本，支持选择、代码块、表格、链接与 Dynamic Type；关闭数学、视频和语法高亮附加模块，不增加编辑或附件上传协议。`/conversation` 接受正整数 `id`（会话 ID）、可选 `thread`（根消息 ID）和 `seq`（目标时间线内序号）。没有 `thread` 时定位频道或私信，存在时定位讨论串；通过现有历史分页加载目标并滚动到可见位置。加载或定位失败可重试，不可用目标明确提示，离开页面或切换身份取消未完成定位。搜索结果缺少会话位置、历史消息缺少完整回复数、任务没有独立列表接口的限制与网页相同。
+登录后进入聊天列表，「账号」可到个人资料、通知设置和管理员入口。Agent 详情的「发消息」使用同一登录下的聊天操作打开该 Agent 聊天账号的私信，再进入 `/conversation?id=`，不直接发送消息。根 Stack 上方保留登录所属的聊天 provider 和 `AgentCreationProvider`。
 
 原生管理路由在 `apps/mobile/src/app/(management)`，功能在 `src/admin` 与 `src/profile`。管理员可创建 Agent，修改模型、思考级别和说明文字，暂停、恢复和删除 Agent，管理提供商 key 与接口地址，查看模型目录，生成和复制 Node 配对命令、改名、授权与收回访问，以及添加人类、修改角色、重置密码和永久停用。Agent 显示名与 Handle 没有独立修改端点，主 Node 创建后不变；人类停用后不提供重新启用。普通人类能修改自己的显示名、Handle 和密码，不能进入管理功能。服务端仍负责每次请求的角色检查。创建 Agent 的草稿由根导航上的专用 React provider 持有：普通返回、关闭管理或同一身份前台重验保留输入和发送请求前生成的 Agent ID，继续创建时原样提交这个 ID；如果上一次请求已在服务器完成，则从 Agent 列表确认同一个 ID 后完成恢复；仅创建成功或这次登录结束、服务器、账号、角色改变时清除。进行中的创建状态也随草稿保留，迟到的旧登录回调不能改写新草稿。草稿仅在进程内存中，不承诺跨进程恢复。
 

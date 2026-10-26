@@ -198,7 +198,7 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 避免：把它叫"Web 外壳"（外壳是后端 `apps/control-plane` 加上前端挂载的那一层）。
 
 **移动客户端**（mobile client）
-`apps/mobile` 的原生 iOS 27+ app。连接一个人类在 app 内保存的 HTTPS 服务器，沿用 Web 外壳的 cookie 登录会话。地址和恢复标记保存在本机，密码不保存；退出和换地址清理本机访问，身份从服务器的 `/api/me` 取得。
+`apps/mobile` 的原生 iOS 27+ app。连接一个人类在 app 内保存的 HTTPS 服务器，沿用 Web 外壳的 cookie 登录会话。地址和恢复标记保存在本机，密码不保存；退出和换地址清理本机访问，身份从服务器的 `/api/me` 取得。提供聊天、频道与私信、讨论串、搜索、任务和未读，以及管理、Agent 观察、个人资料与原生通知。认证和通知分别由 `MobileAuth` 与 `MobileNotifications` 持有。
 
 **密码校验队列**
 登录里同时进行的 scrypt 校验最多 2 个，更多的按到达顺序排队（队列最长 64，排队最多 10 秒），超出的回 429；没有锁定，所以输错再多次，正确的密码也进得来。
@@ -336,9 +336,6 @@ node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 
 主工作区里的记忆入口约定，由 Agent 自己维护和选择读取。Mate 只在显式准备主工作区时创建缺失的空文件，执行工具不检查它，runtime 恢复也不自动读取它。远端工作区不预置这个文件。
 
 ## 共用基础
-
-**移动客户端**（mobile client）
-`apps/mobile` 的 Expo 原生 iOS 客户端，最低支持 iOS 27，与 `apps/web` 面向同一个控制面。认证和推送通知分别由 `MobileAuth` 与 `MobileNotifications` 持有。
 
 **时钟**（clock）
 `@mate/clock` 里的 `Clock`：读当前时间（`now`），以及睡到某个时长或某个 `AbortSignal` 中止为止（`sleep`）。所有需要时间或定时器的模块都通过它，而不是直接调用 `Date.now` 或 `setTimeout`；一个定时器就是一次带自己 signal 的 `sleep`，中止 signal 就是取消它。测试里换成**可控时钟**（`FakeClock`），由测试推进时间。

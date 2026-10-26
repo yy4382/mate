@@ -1,6 +1,7 @@
 import type { AgentView, CatalogModel } from "@mate/admin";
 import { router } from "expo-router";
 import { useState } from "react";
+import { useSessionChat } from "../session";
 import { stateLabel, type ReadableAgent } from "./Agents";
 import { NodeAccess } from "./NodeAccess";
 import { useClient, useOperation, useResource } from "./session";
@@ -79,6 +80,7 @@ function Settings({ agent, refresh }: { agent: ReadableAgent; refresh: () => voi
 }
 export function AgentDetail({ agentId }: { agentId: string }) {
   const client = useClient();
+  const chat = useSessionChat();
   const agents = useResource<AgentView[]>("/api/admin/agents", 5000);
   const operation = useOperation();
   const [tab, setTab] = useState<"settings" | "watch" | "workspace">("settings");
@@ -97,6 +99,25 @@ export function AgentDetail({ agentId }: { agentId: string }) {
             {agent.handle ? `@${agent.handle} · ` : ""}
             {stateLabel[agent.state]}
           </Copy>
+          {agent.accountId !== undefined && (
+            <Button
+              title="发消息"
+              disabled={operation.busy || !chat}
+              onPress={() => {
+                const other = agent.accountId;
+                if (!chat || other === undefined) return;
+                let conversationId: number | undefined;
+                void operation
+                  .run(async () => {
+                    conversationId = (await chat.create({ kind: "dm", other })).conversationId;
+                  }, "")
+                  .then((ok) => {
+                    if (ok && conversationId !== undefined && client.getSnapshot().kind === "ready")
+                      router.push({ pathname: "/conversation", params: { id: conversationId } });
+                  });
+              }}
+            />
+          )}
           {agent.state !== "unreadable" && (
             <>
               <Copy muted>主 Node · {agent.nodeName}</Copy>

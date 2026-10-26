@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": {
+      "react-native": "./src/index.ts",
       "mate-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
