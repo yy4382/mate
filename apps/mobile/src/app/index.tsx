@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
+import { useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
 import {
-  AppState,
   Keyboard,
   KeyboardAvoidingView,
   Pressable,
@@ -172,14 +171,6 @@ export default function HomeScreen() {
   const [editingServer, setEditingServer] = useState(false);
   const server = "server" in state ? state.server : "";
   const clearing = state.kind === "clearing";
-
-  useEffect(() => {
-    void auth.start();
-    const subscription = AppState.addEventListener("change", (value) => {
-      if (value === "active") void auth.revalidate();
-    });
-    return () => subscription.remove();
-  }, []);
 
   return (
     <SafeAreaView style={styles.screen} edges={["left", "right", "bottom"]}>

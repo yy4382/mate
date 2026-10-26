@@ -540,7 +540,7 @@ interface Admin {
 
 移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。最终覆盖聊天、完整管理、Agent 观察、个人资料和通知，并为后续功能提供界面。当前支持保存一个 HTTPS 服务器地址，用已有 handle 和密码登录、显示当前身份、恢复登录和退出，以及完整管理和个人资料。聊天、分发与签名、原生推送仍未实现。
 
-移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。启动和回到前台以 `GET /api/me` 验证 cookie；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
+移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。根布局统一持有启动和前台监听，启动和回到前台以 `GET /api/me` 验证 cookie；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
 
 退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问并清理全部 app cookie，切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
 
@@ -550,7 +550,7 @@ interface Admin {
 
 观察使用已有 SSE 接口，显示主对话或工作助手的 run 状态、排队输入、系统提示、上下文起点、文字与思考、工具参数和流式输出，以及模型和工具用量。断线显示错误并可重新连接，重新连接取得新的快照。工作区沿用只读浏览接口，支持目录、文本、二进制提示与截断说明，不新增写文件能力。
 
-`ManagementClient` 只给当前服务器和人类的这次登录发 cookie 请求。登录结束、前台重验或切换服务器时中止旧请求并丢弃迟到响应；查询缓存随这次登录关闭，不持久化管理数据。HTTP 401 和 SSE 的 `login` 事件要求认证模块重新验证。资料保存响应经 `HumanView` schema 解析，`MobileAuth.updateHuman(previous, human)` 只更新提交它的同一次登录，不重新清理 cookie；密码修改继续使用服务端保留当前会话的规则。
+`ManagementClient` 只给当前服务器和人类的这次登录发 cookie 请求。前台重验时中止旧请求、隐藏并禁止访问管理界面，但保持当前导航、表单草稿和查询缓存挂载在内存中；连接故障时继续暂停访问，重试验证相同服务器、账号和角色后恢复原页面，重新读取数据和连接观察流。登录结束、401 确认失效、服务器、账号或角色改变则关闭这次登录的界面与缓存。已取消请求的迟到响应即使在恢复后也不能交付，不持久化管理数据或草稿。HTTP 401 和 SSE 的 `login` 事件要求认证模块重新验证。资料保存响应经 `HumanView` schema 解析，`MobileAuth.updateHuman(previous, human)` 只更新提交它的同一次登录，不重新清理 cookie；密码修改继续使用服务端保留当前会话的规则。
 
 请求状态用与网页同版本的 TanStack Query，SSE 分帧用 `eventsource-parser`，长表单的键盘滚动用 Expo 58 对应的 Keyboard Controller。对话记录和模型选项用 React Native `FlatList`；其余小表单用原生输入框、按钮和确认框，不生成表单 schema 或引入整体 UI 框架。管理数据的类型从 `@mate/admin` 推导，个人身份从 `@mate/auth` 取得，不复制服务端协议。
 

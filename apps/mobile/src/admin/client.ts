@@ -5,6 +5,7 @@ import { createParser } from "eventsource-parser";
 import type { AuthState, MobileAuth } from "../auth";
 
 export type SignedIn = Extract<AuthState, { kind: "signed-in" }>;
+type Access = { kind: "ready" | "suspended"; session: SignedIn } | { kind: "closed" };
 export type AgentSettingsInput = Parameters<Admin["configureAgent"]>[1];
 export type PairingToken = ReturnType<Admin["createPairingToken"]>;
 
@@ -67,7 +68,13 @@ export function errorText(error: unknown): string {
 /** Requests belong to one login, never to the next human or selected server. */
 export class ManagementClient {
   readonly server: string;
-  private active = true;
+  private access: Access;
+  private listeners = new Set<() => void>();
+  getSnapshot = (): Access => this.access;
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
   private requests = new Set<AbortController>();
   private unsubscribe: () => void;
 
@@ -78,32 +85,56 @@ export class ManagementClient {
     private streamFetch: StreamFetch,
   ) {
     this.server = session.server;
-    this.unsubscribe = auth.subscribe(() => {
+    this.access = { kind: "ready", session };
+    const update = () => {
       const state = auth.getSnapshot();
+      if (this.access.kind === "closed") return;
       if (
-        state.kind !== "signed-in" ||
-        state.server !== session.server ||
-        state.human.accountId !== session.human.accountId ||
-        state.human.role !== session.human.role
-      )
-        this.close();
-    });
+        state.kind === "signed-in" &&
+        state.server === session.server &&
+        state.human.accountId === session.human.accountId &&
+        state.human.role === session.human.role
+      ) {
+        this.publish({ kind: "ready", session: state });
+      } else if (
+        (state.kind === "checking" || state.kind === "unavailable") &&
+        state.server === session.server
+      ) {
+        this.abortRequests();
+        this.publish({ kind: "suspended", session: this.access.session });
+      } else this.close();
+    };
+    this.unsubscribe = auth.subscribe(update);
+    update();
+  }
+
+  private publish(access: Access): void {
+    this.access = access;
+    this.listeners.forEach((listener) => listener());
+  }
+
+  private abortRequests(): void {
+    this.requests.forEach((request) => request.abort());
+    this.requests.clear();
   }
 
   close(): void {
-    this.active = false;
-    this.requests.forEach((request) => request.abort());
-    this.requests.clear();
+    this.abortRequests();
     this.unsubscribe?.();
+    this.publish({ kind: "closed" });
   }
 
-  private check(): void {
-    if (!this.active) throw new DOMException("Login ended", "AbortError");
+  private check(signal?: AbortSignal): void {
+    if (this.access.kind !== "ready" || signal?.aborted)
+      throw new DOMException("Login unavailable or request cancelled", "AbortError");
   }
 
-  private async refuse(response: { status: number; json(): Promise<unknown> }): Promise<never> {
+  private async refuse(
+    response: { status: number; json(): Promise<unknown> },
+    signal: AbortSignal,
+  ): Promise<never> {
     const body = Failure.safeParse(await response.json().catch(() => ({})));
-    this.check();
+    this.check(signal);
     if (response.status === 401) void this.auth.revalidate();
     throw new ApiError(
       response.status,
@@ -137,11 +168,10 @@ export class ManagementClient {
               body: JSON.stringify(body ?? {}),
             }),
       });
-      this.check();
-      if (!response.ok) return await this.refuse(response);
+      this.check(request.signal);
+      if (!response.ok) return await this.refuse(response, request.signal);
       const value = response.status === 204 ? undefined : await response.json();
-      this.check();
-      if (request.signal.aborted) throw new DOMException("Request cancelled", "AbortError");
+      this.check(request.signal);
       return value;
     } finally {
       clearTimeout(timeout);
@@ -185,8 +215,8 @@ export class ManagementClient {
         },
       );
       clearTimeout(connectTimeout);
-      this.check();
-      if (!response.ok) return await this.refuse(response);
+      this.check(request.signal);
+      if (!response.ok) return await this.refuse(response, request.signal);
       if (!response.body) throw new Error("No event stream");
       reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -210,8 +240,7 @@ export class ManagementClient {
         clearTimeout(heartbeatTimeout);
         heartbeatTimeout = setTimeout(abort, 60_000);
         const { done, value } = await reader.read();
-        this.check();
-        if (request.signal.aborted) return;
+        this.check(request.signal);
         if (done) throw new Error("Event stream disconnected");
         parser.feed(decoder.decode(value, { stream: true }));
         if (ended) return;

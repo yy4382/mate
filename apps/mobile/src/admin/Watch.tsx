@@ -4,7 +4,7 @@ import { FlatList, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "expo-router";
 import { initialObservation, observeEvents, type Entry } from "./observation";
-import { useClient, useResource } from "./session";
+import { useClient, useManagementAccess, useResource } from "./session";
 import { Usage } from "./Usage";
 import { Button, Card, Copy, ErrorLine, Select } from "./ui";
 
@@ -146,6 +146,7 @@ function StreamBlock({
 }
 export function Watch({ agentId, onBack }: { agentId: string; onBack: () => void }) {
   const client = useClient();
+  const access = useManagementAccess();
   const assistants = useResource<string[]>(
     `/api/admin/agents/${encodeURIComponent(agentId)}/assistants`,
     5000,
@@ -157,6 +158,7 @@ export function Watch({ agentId, onBack }: { agentId: string; onBack: () => void
   const [connected, setConnected] = useState(false);
   useFocusEffect(
     useCallback(() => {
+      if (access.kind !== "ready") return;
       const request = new AbortController();
       setProblem(undefined);
       setConnected(false);
@@ -180,7 +182,7 @@ export function Watch({ agentId, onBack }: { agentId: string; onBack: () => void
           if (!request.signal.aborted) setProblem(error);
         });
       return () => request.abort();
-    }, [client, agentId, assistant, revision]),
+    }, [client, access, agentId, assistant, revision]),
   );
   const head = state.entries.reduce<number | undefined>(
     (latest, entry) => entry.head ?? latest,

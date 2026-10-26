@@ -106,6 +106,86 @@ describe("mobile management requests for the current login", () => {
     expect(env.auth.getSnapshot()).toMatchObject({ human: changed });
   });
 
+  it("resumes the same login after foreground verification while rejecting requests from before the check", async () => {
+    const env = await connected();
+    const old = deferred<Response>();
+    const verification = deferred<Response>();
+    env.respond(async (url) =>
+      String(url).endsWith("/api/me") ? verification.promise : old.promise,
+    );
+    const stale = env.client.request("/api/admin/agents");
+    const rejected = expect(stale).rejects.toMatchObject({ name: "AbortError" });
+    const checking = env.auth.revalidate();
+    await expect(env.client.request("/api/admin/nodes")).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    verification.resolve(json({ ...human, displayName: "Updated elsewhere" }));
+    await checking;
+    old.resolve(json(["old private data"]));
+    await rejected;
+    env.respond(async () => json(["fresh data"]));
+    expect(await env.client.request("/api/admin/nodes")).toEqual(["fresh data"]);
+    expect(env.cookiesCleared).toBe(0);
+  });
+
+  it("keeps access suspended through an outage, resumes on retry, and clears retained identity on logout", async () => {
+    const env = await connected();
+    const states: string[] = [];
+    const stop = env.client.subscribe(() => states.push(env.client.getSnapshot().kind));
+    env.respond(async () => {
+      throw new TypeError("offline");
+    });
+    await env.auth.revalidate();
+    expect(env.client.getSnapshot()).toMatchObject({ kind: "suspended" });
+    await expect(env.client.request("/api/admin/agents")).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    env.respond(async () => json(human));
+    await env.auth.retry();
+    expect(env.client.getSnapshot()).toMatchObject({ kind: "ready", session: { human } });
+    env.respond(async () => new Response(null, { status: 204 }));
+    await env.auth.logout();
+    expect(env.client.getSnapshot()).toEqual({ kind: "closed" });
+    expect(states).toContain("suspended");
+    stop();
+  });
+
+  it("ignores a delayed old 401 body after the same account has resumed", async () => {
+    const env = await connected();
+    const payload = deferred<unknown>();
+    const bodyStarted = deferred<void>();
+    const response = json({}, 401);
+    response.json = () => {
+      bodyStarted.resolve();
+      return payload.promise;
+    };
+    env.respond(async () => response);
+    const stale = expect(env.client.request("/api/admin/agents")).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    await bodyStarted.promise;
+    env.respond(async () => json(human));
+    await env.auth.revalidate();
+    payload.resolve({ error: "login-required" });
+    await stale;
+    expect(env.auth.getSnapshot()).toMatchObject({ kind: "signed-in", human });
+    expect(env.client.getSnapshot()).toMatchObject({ kind: "ready" });
+  });
+
+  it("never resumes the old login when verification returns another account or role", async () => {
+    for (const changed of [
+      { ...human, accountId: 9 },
+      { ...human, role: "member" },
+    ]) {
+      const env = await connected();
+      env.respond(async () => json(changed));
+      await env.auth.revalidate();
+      await expect(env.client.request("/api/admin/agents")).rejects.toMatchObject({
+        name: "AbortError",
+      });
+    }
+  });
+
   it("rejects delayed data and delayed profile identity after logout or server changes, even when transport ignores abort", async () => {
     for (const action of ["logout", "switch"]) {
       const env = await connected();
