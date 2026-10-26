@@ -1,17 +1,9 @@
+import type { HumanView } from "@mate/auth";
 import { AccountNames, type ChatApp } from "@mate/chat";
 import { z } from "zod";
 import { NewPassword, Role, type HumanRecord, type Humans } from "./humans.ts";
 import { HttpError, parseBody } from "./http.ts";
 import { adminOnly, type Route, type RouteInput } from "./routes.ts";
-
-/** A human as a client renders them: the chat account's names and the shell's role. */
-export type HumanView = {
-  readonly accountId: number;
-  readonly handle: string;
-  readonly displayName: string;
-  readonly role: Role;
-  readonly active: boolean;
-};
 
 const RequestId = z.string().min(1).max(128);
 const ChangePassword = z.object({ current: z.string().max(1024), next: NewPassword });

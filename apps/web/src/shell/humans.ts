@@ -1,18 +1,10 @@
+import type { HumanView, Role } from "@mate/auth";
 import { t } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
 import { describe, get } from "./api.ts";
 
-export type Role = "admin" | "member";
-
-/** A human as `/api/me` and `/api/humans` show them. */
-export type HumanView = {
-  accountId: number;
-  handle: string;
-  displayName: string;
-  role: Role;
-};
-
-export type ListedHuman = HumanView & { active: boolean };
+export type { HumanView, Role } from "@mate/auth";
+export type ListedHuman = HumanView;
 
 export const ROLE_LABEL: Record<Role, string> = {
   admin: t("humans.administrator"),
