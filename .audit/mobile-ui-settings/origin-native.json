@@ -1,0 +1,92 @@
+[
+  {
+    "input": "https://127.0.0.1:19860",
+    "protocol": "https:",
+    "hostname": "127.0.0.1",
+    "origin": "https://127.0.0.1:19860",
+    "pathname": "/",
+    "credentials": false,
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "https://127.0.0.1:19860/",
+    "protocol": "https:",
+    "hostname": "127.0.0.1",
+    "origin": "https://127.0.0.1:19860",
+    "pathname": "/",
+    "credentials": false,
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "HTTPS://127.0.0.1:19860",
+    "protocol": "https:",
+    "hostname": "127.0.0.1",
+    "origin": "https://127.0.0.1:19860",
+    "pathname": "/",
+    "credentials": false,
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "http://127.0.0.1:19860",
+    "protocol": "http:",
+    "hostname": "127.0.0.1",
+    "origin": "http://127.0.0.1:19860",
+    "pathname": "/",
+    "credentials": false,
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "https://127.0.0.1:19860/path",
+    "protocol": "https:",
+    "hostname": "127.0.0.1",
+    "origin": "https://127.0.0.1:19860",
+    "pathname": "/path",
+    "credentials": false,
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "https://127.0.0.1:19860/?q=fixture",
+    "protocol": "https:",
+    "hostname": "127.0.0.1",
+    "origin": "https://127.0.0.1:19860",
+    "pathname": "/",
+    "credentials": false,
+    "search": "?q=fixture",
+    "hash": ""
+  },
+  {
+    "input": "https://127.0.0.1:19860/#fixture",
+    "protocol": "https:",
+    "hostname": "127.0.0.1",
+    "origin": "https://127.0.0.1:19860",
+    "pathname": "/",
+    "credentials": false,
+    "search": "",
+    "hash": "#fixture"
+  },
+  {
+    "input": "[credential fixture]",
+    "protocol": "https:",
+    "hostname": "127.0.0.1",
+    "origin": "https://127.0.0.1:19860",
+    "pathname": "/",
+    "credentials": true,
+    "search": "",
+    "hash": ""
+  },
+  {
+    "input": "https://127.0.0.1:19860",
+    "protocol": "https:",
+    "hostname": "127.0.0.1",
+    "origin": "https://127.0.0.1:19860",
+    "pathname": "/",
+    "credentials": false,
+    "search": "",
+    "hash": ""
+  }
+]
