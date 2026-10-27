@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -45,7 +46,14 @@ const verbs = {
 };
 export default function ConversationScreen() {
   const headerHeight = useHeaderHeight();
-  const params = useLocalSearchParams<{ id: string; thread?: string; seq?: string }>();
+  const params = useLocalSearchParams<{
+    id: string;
+    thread?: string;
+    seq?: string;
+    sourceAgent?: string;
+  }>();
+  const sourceAgent = z.uuid().safeParse(params.sourceAgent);
+  const agentReturn = sourceAgent.success && !params.thread ? sourceAgent.data : null;
   const id = Number(params.id);
   const seq = params.seq ? Number(params.seq) : null;
   const thread = params.thread ? Number(params.thread) : null;
@@ -286,13 +294,27 @@ export default function ConversationScreen() {
     <SafeAreaView edges={["bottom", "left", "right"]} style={styles.fill}>
       <Stack.Screen
         options={{
-          headerBackVisible: true,
+          headerBackVisible: agentReturn === null,
+          gestureEnabled: agentReturn === null,
           headerTransparent: false,
           headerStyle: { backgroundColor: c.background },
           title:
             thread === null ? conversationLabel(conversation, state.accounts, state.me) : "讨论串",
         }}
       />
+      {agentReturn !== null && (
+        <Stack.Toolbar placement="left">
+          <Stack.Toolbar.Button
+            icon="chevron.left"
+            accessibilityLabel="返回 Agent 总览"
+            onPress={() =>
+              router.dismissTo({ pathname: "/agents/[id]", params: { id: agentReturn } })
+            }
+          >
+            Agent
+          </Stack.Toolbar.Button>
+        </Stack.Toolbar>
+      )}
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
           icon="ellipsis"
@@ -410,35 +432,51 @@ export default function ConversationScreen() {
             }
             schedulePosition();
           }}
-          renderItem={({ item }) =>
-            item.kind === "message" ? (
-              message(item)
-            ) : (
-              <Pressable
-                testID={`entry-${item.seq}`}
-                accessibilityRole="button"
-                accessibilityLabel={`查看任务 ${item.title}`}
-                onPress={() =>
-                  setPanel({
-                    kind: "task",
-                    task: tasks.get(item.taskId) ?? item,
-                    presentation: { transfer: false, to: null, query: "" },
-                  })
-                }
-                style={{
-                  paddingHorizontal: 20,
-                  paddingVertical: 12,
-                  gap: 6,
-                  backgroundColor: item.seq === seq ? c.tint : c.subtle,
-                }}
-              >
-                {item.seq === seq && <Caption accent>定位到的消息 · #{seq}</Caption>}
-                <Caption>
-                  {accountName(state.accounts, item.actor)} {verbs[item.change]}「{item.title}」
-                </Caption>
-              </Pressable>
-            )
-          }
+          renderItem={({ item, index }) => {
+            const previous = entries[entries.length - index - 2];
+            return (
+              <View>
+                {(!previous ||
+                  new Date(previous.at).toDateString() !== new Date(item.at).toDateString()) && (
+                  <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 }}>
+                    <Caption>
+                      {new Date(item.at).toLocaleDateString("zh-CN", {
+                        month: "long",
+                        day: "numeric",
+                      })}
+                    </Caption>
+                  </View>
+                )}
+                {item.kind === "message" ? (
+                  message(item)
+                ) : (
+                  <Pressable
+                    testID={`entry-${item.seq}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`查看任务 ${item.title}`}
+                    onPress={() =>
+                      setPanel({
+                        kind: "task",
+                        task: tasks.get(item.taskId) ?? item,
+                        presentation: { transfer: false, to: null, query: "" },
+                      })
+                    }
+                    style={{
+                      paddingHorizontal: 20,
+                      paddingVertical: 12,
+                      gap: 6,
+                      backgroundColor: item.seq === seq ? c.tint : c.subtle,
+                    }}
+                  >
+                    {item.seq === seq && <Caption accent>定位到的消息 · #{seq}</Caption>}
+                    <Caption>
+                      {accountName(state.accounts, item.actor)} {verbs[item.change]}「{item.title}」
+                    </Caption>
+                  </Pressable>
+                )}
+              </View>
+            );
+          }}
           ListEmptyComponent={
             <View style={styles.page}>
               <Label>
@@ -519,7 +557,13 @@ export default function ConversationScreen() {
           <ChatComposer
             draft={draft}
             accounts={state.accounts}
-            inThread={thread !== null}
+            destination={
+              thread !== null
+                ? `回复 ${conversationLabel(conversation, state.accounts, state.me)} 的讨论串…`
+                : conversation.kind === "dm"
+                  ? `发消息给 ${conversationLabel(conversation, state.accounts, state.me)}…`
+                  : `发送到 ${conversationLabel(conversation, state.accounts, state.me)}…`
+            }
             onEdit={(text) => chat.edit(ref, text)}
             onSend={() => void chat.send(ref)}
             onAbandon={() => chat.abandon(ref)}
