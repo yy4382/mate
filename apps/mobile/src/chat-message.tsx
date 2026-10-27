@@ -36,8 +36,10 @@ export function ChatMessage({
       testID={isRoot ? "thread-root" : `entry-${entry.seq}`}
       style={{
         paddingHorizontal: 20,
-        paddingVertical: 16,
-        gap: 10,
+        paddingVertical: 10,
+        gap: 6,
+        borderBottomWidth: isRoot ? 0 : 0.5,
+        borderBottomColor: c.border,
         backgroundColor: !isRoot && entry.seq === targetSeq ? c.tint : c.background,
       }}
     >
@@ -56,8 +58,6 @@ export function ChatMessage({
         </View>
         <Caption>
           {new Date(entry.at).toLocaleString("zh-CN", {
-            month: "numeric",
-            day: "numeric",
             hour: "2-digit",
             minute: "2-digit",
           })}
@@ -104,14 +104,37 @@ export function ChatMessage({
             opacity: pressed ? 0.6 : 1,
           })}
         >
-          <Copy>{t.title}</Copy>
-          <Caption>
-            {t.change === "completed"
-              ? "已完成"
-              : t.owner === null
-                ? "无人认领"
-                : `${accountName(accounts, t.owner)}${t.owner === me ? "（你）" : ""}负责`}
-          </Caption>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <View
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              style={{
+                width: 20,
+                height: 25,
+                borderWidth: 1.5,
+                borderColor: c.accent,
+                borderRadius: 3,
+                padding: 4,
+                justifyContent: "center",
+                gap: 4,
+              }}
+            >
+              <View style={{ height: 1.5, backgroundColor: c.accent }} />
+              <View style={{ height: 1.5, backgroundColor: c.accent }} />
+              <View style={{ height: 1.5, width: 6, backgroundColor: c.accent }} />
+            </View>
+            <View style={{ flex: 1, gap: 4 }}>
+              <Copy>{t.title}</Copy>
+              <Caption>
+                {t.change === "completed"
+                  ? "已完成"
+                  : t.owner === null
+                    ? "无人认领"
+                    : `${accountName(accounts, t.owner)}${t.owner === me ? "（你）" : ""}负责`}
+              </Caption>
+            </View>
+          </View>
+          <Text style={{ color: c.accent, fontSize: 15, marginLeft: 30 }}>查看任务 ›</Text>
         </Pressable>
       ))}
       {!isRoot && knownReplies && (
