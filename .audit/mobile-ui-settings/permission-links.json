@@ -109,36 +109,36 @@
     "Independent review and PR merge remain coordinator-owned"
   ],
   "finalSharedIntegration": {
-    "base": "eaaf35d1d354d1495fa020d5b9ab5a92f3d3c924",
-    "baseContext": "Coordinator merged original PR267 at 812f0ce before this follow-up. Ordinary merge preserves final Agent source and shared dark-field fix.",
-    "sourceRevision": "f95308a37489f67215b24b2d0d6de96f14baa2ed",
-    "sourceTree": "cd1977f9035743b03c74c7ba3d26431f32ff148c",
-    "runtimeDeltaFromBase": [
-      "apps/mobile/src/agent-navigation.tsx: navigate on next native frame after dismissTo"
-    ],
-    "ownedAndCore": "Final Settings screens, role guard, Providers/ProviderDetail/Nodes callbacks, auth/notifications/session/lifecycle unchanged from merged base",
+    "base": "6c269663f088d13b71fa5a71c0c0a1282592de61",
+    "baseContext": "Coordinator integrated the next-frame redirect and three hidden legacy entry headers. This follow-up is evidence only relative to that shared base.",
+    "sourceRevision": "757ec839a06a78af82d9896ebece50bf909d0db9",
+    "sourceTree": "3a2da3bc315f801de882257e0fe9164e9c21a326",
+    "runtimeDeltaFromBase": [],
+    "ownedAndCore": "All apps/mobile and docs source is byte-identical to shared base 6c269663, including final Settings/Agent screens, role guard, all prerequisite callbacks and three legacy headerShown=false declarations.",
     "configuration": "Normal Expo/Xcode Release, ordinary iPhone18Pro iOS27.0 simulator 406A8738-C8CD-4FCC-B803-2A9FD38CA4EF",
-    "buildBundleSHA256": "72de20fa9d6afed4c920950b2bb3a55df1c4c055e159df15f81737f39b1a8043",
-    "installedBundleSHA256": "72de20fa9d6afed4c920950b2bb3a55df1c4c055e159df15f81737f39b1a8043",
+    "buildBundleSHA256": "fa1283fa6fa1b6b0d5f541069bb4e27a00a918c19264afc02e81aa1016f0a131",
+    "installedBundleSHA256": "fa1283fa6fa1b6b0d5f541069bb4e27a00a918c19264afc02e81aa1016f0a131",
     "checks": {
       "publicInterface": {
         "command": "pnpm exec vitest run apps/mobile/test",
         "passed": 76,
         "logSha256": "659d37203afa3da204c26a6d531018b95374c07732072d80d8185c406b7f9a31",
-        "environment": "Local listener permission required; first sandbox attempt reported EPERM, final authorized execution passed all tests."
+        "environment": "Local listener permission required; first sandbox attempt reported EPERM, final authorized execution passed all tests.",
+        "sourceRevision": "f95308a37489f67215b24b2d0d6de96f14baa2ed",
+        "reuseReason": "The only later product change is three legacy route headerShown=false declarations. No public business interface or test changed."
       },
       "typecheck": {
         "command": "pnpm --filter @mate/mobile typecheck",
         "result": "passed",
-        "logSha256": "67d7559b98b1de3ed83cc56ae216f81661bf18448ea9f32e947d7e129eeecb50"
+        "logSha256": "50072a2af26cbbb8e795a56f7ea48459df7e1f7f707d9a2a890d171f7e87c1a5"
       },
       "build": {
         "result": "BUILD SUCCEEDED",
-        "logSha256": "3009a7f1100bde4e28804d93b3994caf2658d109d7a75406130c931818c6fda6"
+        "logSha256": "f6907fcad53b75cebd3cf6c0bffab3ffad2e28df30e3006e70583e5dd6eef88d"
       },
       "native": {
-        "bundle": "permission-links-integrated.xcresult",
-        "logSha256": "abf042eccd9921c3bde5c89b48b79b5fecf9f68ca75ca5b53b9fe62c88cb8308",
+        "bundle": "permission-links-headers.xcresult",
+        "logSha256": "a32d4344ff4092813cb067864b282ff53cb6dd0d70df5cc933c12c4e9f1e807d",
         "passed": [
           "testExternalAgentAdminDestinations",
           "testExternalAgentDMReturn",
@@ -146,34 +146,53 @@
         ],
         "failed": 0,
         "skipped": 0,
-        "scope": "Both schemes, eight exact Settings root returns without Back, strict Agent DM return, eight member denials and cold-link denial. Final Agent UI is present in this run."
+        "scope": "Both schemes, eight exact Settings root returns without Back, strict Agent DM return, eight member denials and cold-link denial. Final Agent UI and the three hidden legacy entry headers are present in this run."
       }
     },
     "screenshots": [
       {
         "file": "permission-integrated-settings-root.png",
-        "bundle": "permission-links-integrated.xcresult",
-        "attachment": "external-agent-settings-root_0_671A068F-A91C-4863-A231-56C186A06561.png",
-        "sha256": "c4d33923021a6a3db105c78087bcfe50125e6a2713e1fb203d748b87706195d5",
+        "bundle": "permission-links-headers.xcresult",
+        "attachment": "external-agent-settings-root_0_B4DED208-FF26-475B-A52E-361FAA99E02B.png",
+        "sha256": "c10161a9217e72039a1e47f0b4961f3cd66a6a16165353421216703dbc42f5a8",
         "edited": false
       },
       {
         "file": "permission-integrated-member-denied.png",
-        "bundle": "permission-links-integrated.xcresult",
-        "attachment": "external-member-cold-denied_0_1497CD89-4D4E-4841-BB70-E86D5916ADBE.png",
-        "sha256": "bcbc2bd9fbce834448d7aea9c95c032d46c5b307ee6c64ac2bcf64d3b518a86d",
+        "bundle": "permission-links-headers.xcresult",
+        "attachment": "external-member-cold-denied_0_EBE75334-4481-463C-B20B-F016E93B5D53.png",
+        "sha256": "5dfe09852c3f8128da5acc39c1354fbd270a22b14fb2489b2f08498f3aba0acf",
         "edited": false
       },
       {
         "file": "permission-integrated-dm-return.png",
-        "bundle": "permission-links-integrated.xcresult",
-        "attachment": "external-agent-dm-return_0_42E65B00-5B12-47CC-97BD-E87D08B401FC.png",
-        "sha256": "e094cf83f8284e6b21069f3062145902f9e55767a633179855c8f32ca373e0a6",
+        "bundle": "permission-links-headers.xcresult",
+        "attachment": "external-agent-dm-return_0_CBF60294-25FA-4548-BCB0-0696B8ADE96B.png",
+        "sha256": "e0f8609246dadcd0dca98b0dea11fcae3f09a767d49a4ac98ef4fe840be4805d",
         "edited": false
       }
     ],
     "prerequisites": "Callbacks and standard routes unchanged. Agent-owner combined prerequisites2 receipt retained at .audit/mobile-ui-agents/integration.json; this follow-up is an external-link run, not a new prerequisite/create acceptance run.",
     "review": "Independent review and merge remain coordinator-owned",
     "signing": "User-authorized one-command unsigned commits; no signing configuration change"
+  },
+  "earlierSharedIntegration": {
+    "sourceRevision": "f95308a37489f67215b24b2d0d6de96f14baa2ed",
+    "sourceTree": "cd1977f9035743b03c74c7ba3d26431f32ff148c",
+    "buildBundleSHA256": "72de20fa9d6afed4c920950b2bb3a55df1c4c055e159df15f81737f39b1a8043",
+    "installedBundleSHA256": "72de20fa9d6afed4c920950b2bb3a55df1c4c055e159df15f81737f39b1a8043",
+    "native": {
+      "bundle": "permission-links-headers.xcresult",
+      "logSha256": "a32d4344ff4092813cb067864b282ff53cb6dd0d70df5cc933c12c4e9f1e807d",
+      "passed": [
+        "testExternalAgentAdminDestinations",
+        "testExternalAgentDMReturn",
+        "testExternalAgentMemberDenials"
+      ],
+      "failed": 0,
+      "skipped": 0,
+      "scope": "Both schemes, eight exact Settings root returns without Back, strict Agent DM return, eight member denials and cold-link denial. Final Agent UI and the three hidden legacy entry headers are present in this run."
+    },
+    "rawScreenshotManifest": "/tmp/mate-mobile-ui-settings/artifacts/permission-links-integrated-images/manifest.json"
   }
 }

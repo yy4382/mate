@@ -77,10 +77,10 @@
   },
   "pending": "Final Agent owner migration and combined prerequisite round-trip remain integration-owned; these separate-area native checks do not prove that path.",
   "subsequentExternalLinkIntegration": {
-    "sourceRevision": "f95308a37489f67215b24b2d0d6de96f14baa2ed",
-    "base": "eaaf35d1d354d1495fa020d5b9ab5a92f3d3c924",
+    "sourceRevision": "757ec839a06a78af82d9896ebece50bf909d0db9",
+    "base": "6c269663f088d13b71fa5a71c0c0a1282592de61",
     "evidence": "permission-links.json",
-    "scope": "One-line next-frame AgentRedirect change; final Settings and final Agent owner source retained",
-    "nativeResult": "3 native methods passed on final combined UI; eight exact admin Settings-root returns and strict DM return; member warm/cold denials; 76 public tests passed"
+    "scope": "Final product source matches shared base, including next-frame redirect and three hidden legacy entry headers; follow-up PR contains evidence only",
+    "nativeResult": "3 final native methods passed, 0 failed/skipped; eight exact admin Settings-root returns, strict DM return, member warm/cold denials; earlier 76 public tests passed with unchanged business interfaces"
   }
 }
