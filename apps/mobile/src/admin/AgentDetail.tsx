@@ -297,7 +297,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                         )
                           router.push({
                             pathname: "/conversation",
-                            params: { id: conversationId },
+                            params: { id: conversationId, sourceAgent: agentId },
                           });
                       });
                   }}
