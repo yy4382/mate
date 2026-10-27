@@ -451,5 +451,11 @@
   "localDriver": "/tmp/mate-mobile-ui-chat/NativeDrive.swift",
   "localFixture": "/tmp/mate-mobile-ui-chat/server.ts",
   "localDecisionTrail": "/tmp/mate-mobile-ui-chat/decisions.tsv",
-  "review": "pending coordinator-owned independent review"
+  "review": "pending coordinator-owned independent review",
+  "sharedNavigationFollowup": {
+    "sourceRevision": "b40ead817e4550e860c4b30ddc2c6b0d364e26a7",
+    "record": "permission-links.json",
+    "provenance": "permission-links-provenance.json",
+    "note": "Original full-area coverage above retains its original exact revisions. This bounded follow-up adds canonical member permission explanations and verifies admin tab history."
+  }
 }
