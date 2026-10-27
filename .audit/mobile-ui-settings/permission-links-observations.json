@@ -1,0 +1,484 @@
+[
+  {
+    "phase": "before",
+    "href": "/agents",
+    "tree": {
+      "index": 0,
+      "routes": [
+        {
+          "name": "__root",
+          "state": {
+            "index": 0,
+            "routes": [
+              {
+                "name": "(signed-in)",
+                "state": {
+                  "index": 2,
+                  "routes": [
+                    {
+                      "name": "(chat)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "chat",
+                            "key": "chat:0-1-0-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-0"
+                      },
+                      "key": "(chat):0-1-0"
+                    },
+                    {
+                      "name": "(agents)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "agents/index",
+                            "key": "agents/index:0-1-1-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-1"
+                      },
+                      "key": "(agents):0-1-1"
+                    },
+                    {
+                      "name": "(settings)",
+                      "state": {
+                        "index": 1,
+                        "routes": [
+                          {
+                            "name": "account",
+                            "key": "account:0-1-2-0"
+                          },
+                          {
+                            "name": "admin",
+                            "state": {
+                              "index": 0,
+                              "routes": [
+                                {
+                                  "name": "agents/index",
+                                  "key": "agents/index:0-1-2-1-0"
+                                }
+                              ],
+                              "key": "navigator:0-1-2-1"
+                            },
+                            "key": "admin:0-1-2-1"
+                          }
+                        ],
+                        "key": "navigator:0-1-2"
+                      },
+                      "key": "(settings):0-1-2"
+                    }
+                  ],
+                  "key": "navigator:0-1"
+                },
+                "key": "(signed-in):0-1"
+              }
+            ],
+            "key": "navigator:0"
+          },
+          "key": "__root:0"
+        }
+      ],
+      "key": "navigator:root"
+    }
+  },
+  {
+    "phase": "after",
+    "href": "/agents",
+    "tree": {
+      "index": 0,
+      "routes": [
+        {
+          "name": "__root",
+          "state": {
+            "index": 0,
+            "routes": [
+              {
+                "name": "(signed-in)",
+                "state": {
+                  "index": 1,
+                  "routes": [
+                    {
+                      "name": "(chat)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "chat",
+                            "key": "chat:0-1-0-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-0"
+                      },
+                      "key": "(chat):0-1-0"
+                    },
+                    {
+                      "name": "(agents)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "agents/index",
+                            "key": "agents/index:0-1-1-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-1"
+                      },
+                      "key": "(agents):0-1-1"
+                    },
+                    {
+                      "name": "(settings)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "account",
+                            "key": "account:0-1-2-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-2"
+                      },
+                      "key": "(settings):0-1-2"
+                    }
+                  ],
+                  "key": "navigator:0-1"
+                },
+                "key": "(signed-in):0-1"
+              }
+            ],
+            "key": "navigator:0"
+          },
+          "key": "__root:0"
+        }
+      ],
+      "key": "navigator:root"
+    }
+  },
+  {
+    "phase": "before",
+    "href": "/agents/2db11a18-e714-4238-b0cf-54b657b74ffa",
+    "tree": {
+      "index": 0,
+      "routes": [
+        {
+          "name": "__root",
+          "state": {
+            "index": 0,
+            "routes": [
+              {
+                "name": "(signed-in)",
+                "state": {
+                  "index": 2,
+                  "routes": [
+                    {
+                      "name": "(chat)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "chat",
+                            "key": "chat:0-1-0-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-0"
+                      },
+                      "key": "(chat):0-1-0"
+                    },
+                    {
+                      "name": "(agents)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "agents/index",
+                            "key": "agents/index:0-1-1-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-1"
+                      },
+                      "key": "(agents):0-1-1"
+                    },
+                    {
+                      "name": "(settings)",
+                      "state": {
+                        "index": 1,
+                        "routes": [
+                          {
+                            "name": "account",
+                            "key": "account:0-1-2-0"
+                          },
+                          {
+                            "name": "admin",
+                            "state": {
+                              "index": 0,
+                              "routes": [
+                                {
+                                  "name": "agents/index",
+                                  "key": "agents/index:0-1-2-2-0"
+                                }
+                              ],
+                              "key": "navigator:0-1-2-2"
+                            },
+                            "key": "admin:0-1-2-2"
+                          }
+                        ],
+                        "key": "navigator:0-1-2"
+                      },
+                      "key": "(settings):0-1-2"
+                    }
+                  ],
+                  "key": "navigator:0-1"
+                },
+                "key": "(signed-in):0-1"
+              }
+            ],
+            "key": "navigator:0"
+          },
+          "key": "__root:0"
+        }
+      ],
+      "key": "navigator:root"
+    }
+  },
+  {
+    "phase": "after",
+    "href": "/agents/2db11a18-e714-4238-b0cf-54b657b74ffa",
+    "tree": {
+      "index": 0,
+      "routes": [
+        {
+          "name": "__root",
+          "state": {
+            "index": 0,
+            "routes": [
+              {
+                "name": "(signed-in)",
+                "state": {
+                  "index": 1,
+                  "routes": [
+                    {
+                      "name": "(chat)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "chat",
+                            "key": "chat:0-1-0-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-0"
+                      },
+                      "key": "(chat):0-1-0"
+                    },
+                    {
+                      "name": "(agents)",
+                      "state": {
+                        "index": 1,
+                        "routes": [
+                          {
+                            "name": "agents/index",
+                            "key": "agents/index:0-1-1-0"
+                          },
+                          {
+                            "name": "agents/[id]",
+                            "key": "agents/[id]:0-1-1-1"
+                          }
+                        ],
+                        "key": "navigator:0-1-1"
+                      },
+                      "key": "(agents):0-1-1"
+                    },
+                    {
+                      "name": "(settings)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "account",
+                            "key": "account:0-1-2-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-2"
+                      },
+                      "key": "(settings):0-1-2"
+                    }
+                  ],
+                  "key": "navigator:0-1"
+                },
+                "key": "(signed-in):0-1"
+              }
+            ],
+            "key": "navigator:0"
+          },
+          "key": "__root:0"
+        }
+      ],
+      "key": "navigator:root"
+    }
+  },
+  {
+    "phase": "before",
+    "href": "/agents/create",
+    "tree": {
+      "index": 0,
+      "routes": [
+        {
+          "name": "__root",
+          "state": {
+            "index": 0,
+            "routes": [
+              {
+                "name": "(signed-in)",
+                "state": {
+                  "index": 2,
+                  "routes": [
+                    {
+                      "name": "(chat)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "chat",
+                            "key": "chat:0-1-0-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-0"
+                      },
+                      "key": "(chat):0-1-0"
+                    },
+                    {
+                      "name": "(agents)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "agents/index",
+                            "key": "agents/index:0-1-1-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-1"
+                      },
+                      "key": "(agents):0-1-1"
+                    },
+                    {
+                      "name": "(settings)",
+                      "state": {
+                        "index": 1,
+                        "routes": [
+                          {
+                            "name": "account",
+                            "key": "account:0-1-2-0"
+                          },
+                          {
+                            "name": "admin",
+                            "state": {
+                              "index": 0,
+                              "routes": [
+                                {
+                                  "name": "agents/index",
+                                  "key": "agents/index:0-1-2-3-0"
+                                }
+                              ],
+                              "key": "navigator:0-1-2-3"
+                            },
+                            "key": "admin:0-1-2-3"
+                          }
+                        ],
+                        "key": "navigator:0-1-2"
+                      },
+                      "key": "(settings):0-1-2"
+                    }
+                  ],
+                  "key": "navigator:0-1"
+                },
+                "key": "(signed-in):0-1"
+              }
+            ],
+            "key": "navigator:0"
+          },
+          "key": "__root:0"
+        }
+      ],
+      "key": "navigator:root"
+    }
+  },
+  {
+    "phase": "after",
+    "href": "/agents/create",
+    "tree": {
+      "index": 0,
+      "routes": [
+        {
+          "name": "__root",
+          "state": {
+            "index": 0,
+            "routes": [
+              {
+                "name": "(signed-in)",
+                "state": {
+                  "index": 1,
+                  "routes": [
+                    {
+                      "name": "(chat)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "chat",
+                            "key": "chat:0-1-0-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-0"
+                      },
+                      "key": "(chat):0-1-0"
+                    },
+                    {
+                      "name": "(agents)",
+                      "state": {
+                        "index": 1,
+                        "routes": [
+                          {
+                            "name": "agents/index",
+                            "key": "agents/index:0-1-1-0"
+                          },
+                          {
+                            "name": "agents/create",
+                            "key": "agents/create:0-1-1-2"
+                          }
+                        ],
+                        "key": "navigator:0-1-1"
+                      },
+                      "key": "(agents):0-1-1"
+                    },
+                    {
+                      "name": "(settings)",
+                      "state": {
+                        "index": 0,
+                        "routes": [
+                          {
+                            "name": "account",
+                            "key": "account:0-1-2-0"
+                          }
+                        ],
+                        "key": "navigator:0-1-2"
+                      },
+                      "key": "(settings):0-1-2"
+                    }
+                  ],
+                  "key": "navigator:0-1"
+                },
+                "key": "(signed-in):0-1"
+              }
+            ],
+            "key": "navigator:0"
+          },
+          "key": "__root:0"
+        }
+      ],
+      "key": "navigator:root"
+    }
+  }
+]

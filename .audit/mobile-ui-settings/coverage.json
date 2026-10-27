@@ -367,5 +367,12 @@
     "Dedicated Chinese IME composition not separately exercised",
     "Independent review and PR merge remain coordinator-owned"
   ],
-  "commitSigning": "User-authorized command-only unsigned commits after configured 1Password failure; no Git configuration or keys changed"
+  "commitSigning": "User-authorized command-only unsigned commits after configured 1Password failure; no Git configuration or keys changed",
+  "subsequentExternalLinkIntegration": {
+    "sourceRevision": "ba7bfd93473b5debca1b6f8bb7b6524ca99e14cd",
+    "lead": "c85ae640a5c4abf0c8f07a0e004463a7cb4f12ae",
+    "evidence": "permission-links.json",
+    "scope": "existing guarded leaves, public AgentRedirect and native-intent seam; eleven owned/core source blobs unchanged",
+    "nativeResult": "3 final native methods passed; admin eight-return sequence passed twice"
+  }
 }
