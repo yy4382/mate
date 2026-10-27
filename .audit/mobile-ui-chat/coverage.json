@@ -1,0 +1,467 @@
+{
+  "recordedAt": "2026-10-27T01:55:36.291967+00:00",
+  "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+  "baseRevision": "dbc0f851233bf0e8287bf11e3d7992dd2652e701",
+  "branch": "feat/mobile-ui-chat",
+  "sharedCheckpoint": "0aabd39b951329b3fcd57bb29716baed77f17133",
+  "environment": {
+    "host": "YiMini.local",
+    "simulator": "61960580-E2C0-49FB-AB3D-5B57A52C0309",
+    "device": "ordinary iPhone 17",
+    "runtime": "iOS 27.0",
+    "largestText": "accessibility-extra-extra-extra-large",
+    "node": "v26.12.1",
+    "baselineSimulatorUntouched": "03EAB6B4-A45D-4DC6-B62B-44052F97362B"
+  },
+  "publicInterfaceTests": {
+    "command": "pnpm test apps/mobile/test packages/chat/test apps/control-plane/test/live.test.ts apps/control-plane/test/push.test.ts",
+    "passed": 220,
+    "files": 21,
+    "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+    "log": "/tmp/mate-mobile-ui-chat/tests-review-source.log",
+    "logSha256": "986c425f111f6ca56020249ccbdbed5195ccfb8228e01ef8680c6ceda65b1752"
+  },
+  "build": {
+    "kind": "Normal Expo/Xcode Release simulator build with the existing plugins",
+    "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+    "log": "/tmp/mate-mobile-ui-chat/chat-build12.log",
+    "errors": 0,
+    "existingWarnings": 3,
+    "mobileTypecheck": "/tmp/mate-mobile-ui-chat/typecheck-return-position.log",
+    "earlierWorkspaceTypecheck": "/tmp/mate-mobile-ui-chat/typecheck-all.log",
+    "earlierWorkspaceBuild": "/tmp/mate-mobile-ui-chat/build-all.log"
+  },
+  "nativeRuns": [
+    {
+      "bundle": "/tmp/mate-mobile-ui-chat/artifacts/final-focus20.xcresult",
+      "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+      "log": "/tmp/mate-mobile-ui-chat/driver-final-focus20.log",
+      "logSha256": "a2af6248cd468bdf4b1b50087ca774f9fb63cb4134d919d0e7fa8c92ea6251bc",
+      "passed": [
+        {
+          "name": "testAgentReturn",
+          "seconds": 24.121
+        },
+        {
+          "name": "testFinalVisual",
+          "seconds": 36.723
+        },
+        {
+          "name": "testPositionedRoot",
+          "seconds": 15.161
+        },
+        {
+          "name": "testTabModalFocus",
+          "seconds": 29.355
+        }
+      ]
+    },
+    {
+      "bundle": "/tmp/mate-mobile-ui-chat/artifacts/final-native17.xcresult",
+      "sourceRevision": "bf5c1e23536ef28fa4e51e225b830fe401e8d4cf",
+      "log": "/tmp/mate-mobile-ui-chat/driver-final-native17.log",
+      "logSha256": "5c951b07e7582a7be6314eef6379005ee786ecd8648049f3d46bc5bccae3b367",
+      "passed": [
+        {
+          "name": "testAgentReturn",
+          "seconds": 23.668
+        },
+        {
+          "name": "testChatReading",
+          "seconds": 65.305
+        },
+        {
+          "name": "testFinalVisual",
+          "seconds": 36.885
+        },
+        {
+          "name": "testForeground",
+          "seconds": 67.576
+        },
+        {
+          "name": "testNotifications",
+          "seconds": 83.914
+        },
+        {
+          "name": "testSamples",
+          "seconds": 21.534
+        }
+      ],
+      "supersededAssertion": {
+        "test": "testAgentReturn",
+        "reason": "An earlier label-contains assertion matched the composer placeholder. final-focus20 requires the exact Agent button and absence of the composer, and its screenshot shows Agent detail."
+      }
+    },
+    {
+      "bundle": "/tmp/mate-mobile-ui-chat/artifacts/final-ax5-dark16b.xcresult",
+      "sourceRevision": "bf5c1e23536ef28fa4e51e225b830fe401e8d4cf",
+      "log": "/tmp/mate-mobile-ui-chat/driver-final-ax5-dark16b.log",
+      "logSha256": "6f7d07032624f6cd31d76f8b88ed64b01294953f264bc73df20179d5a301e923",
+      "passed": [
+        {
+          "name": "testAppearance",
+          "seconds": 25.41
+        }
+      ]
+    },
+    {
+      "bundle": "/tmp/mate-mobile-ui-chat/artifacts/final-light11.xcresult",
+      "sourceRevision": "ccade2e09a3ea07967a0b09cfb39615b31c58841",
+      "log": "/tmp/mate-mobile-ui-chat/driver-final-light11.log",
+      "logSha256": "51cd45ac7082e87a250d8710091c94e6dcc4f726a5124d178a1a8dfb3568e4fa",
+      "passed": [
+        {
+          "name": "testFinalVisual",
+          "seconds": 33.92
+        },
+        {
+          "name": "testForeground",
+          "seconds": 66.941
+        },
+        {
+          "name": "testPositionedRoot",
+          "seconds": 14.669
+        },
+        {
+          "name": "testProtectedPickers",
+          "seconds": 66.277
+        }
+      ]
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "chat-list.png",
+      "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+      "sourceBundle": "final-focus20.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-focus20-screens/76ABA871-163E-40FA-8CF9-1A0C02E6E3F5.png",
+      "sha256": "150932fa685d0591a453c5258e1fcfcd4556b1179a477d001ade4f92cb814de1",
+      "edited": false
+    },
+    {
+      "file": "conversation.png",
+      "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+      "sourceBundle": "final-focus20.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-focus20-screens/0B64E0AF-D587-4F5E-8FC0-4D7B23130BEC.png",
+      "sha256": "9424a9244d9089f521990010fb04abc3e4513264176f58e18d39fb086d4d692e",
+      "edited": false
+    },
+    {
+      "file": "task-card.png",
+      "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+      "sourceBundle": "final-focus20.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-focus20-screens/EED42CBA-33CA-4F25-BE84-2CA6BBD76642.png",
+      "sha256": "acc11995f399ba655a71ffdd799a79b5025f96f7e1333028b253412d573fe091",
+      "edited": false
+    },
+    {
+      "file": "task-detail.png",
+      "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+      "sourceBundle": "final-focus20.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-focus20-screens/46065D9B-791D-48C5-8842-6A3FE83A3DB3.png",
+      "sha256": "c1478f366e0bf9dd6f53f58646b7b63ab92d451a2a3b490032a1d59b4bec1ce7",
+      "edited": false
+    },
+    {
+      "file": "keyboard.png",
+      "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+      "sourceBundle": "final-focus20.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-focus20-screens/7D112FA2-EAD9-4212-BE5D-6208C40951AA.png",
+      "sha256": "4846f5667d12005047ed8d66fe718135ef59941a1289a4425e3d5748ec8d66b2",
+      "edited": false
+    },
+    {
+      "file": "search.png",
+      "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+      "sourceBundle": "final-focus20.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-focus20-screens/B5557FD1-1E49-471F-9FC6-7570D8306ED4.png",
+      "sha256": "d791ff249614caea899c4a4c4cf88227475b9d98044632f8fe8d165ec9ca1d9d",
+      "edited": false
+    },
+    {
+      "file": "agent-return.png",
+      "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+      "sourceBundle": "final-focus20.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-focus20-screens/8A47A169-C17F-4E3B-BA49-ED6F916591B8.png",
+      "sha256": "c349f481fff21033708e6ddfcb93cd419fa805cceca09e7ad5f125b2034f9cef",
+      "edited": false
+    },
+    {
+      "file": "tab-sheet-restored.png",
+      "sourceRevision": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+      "sourceBundle": "final-focus20.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-focus20-screens/37DD7E49-D605-4393-8FEB-C3243CEDCF29.png",
+      "sha256": "3470641b988c69e3c66a9b4d96878a093d03d0c299246475cff3c6e9c433ff1b",
+      "edited": false
+    },
+    {
+      "file": "create.png",
+      "sourceRevision": "bf5c1e23536ef28fa4e51e225b830fe401e8d4cf",
+      "sourceBundle": "final-native17.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-native17-screens/43B6C2DA-F50F-4284-B109-4EDAF8DBAC98.png",
+      "sha256": "6696d251aafe51c491193e3d77566b6d123f181a6c985966f13ee17792538888",
+      "edited": false
+    },
+    {
+      "file": "settings.png",
+      "sourceRevision": "bf5c1e23536ef28fa4e51e225b830fe401e8d4cf",
+      "sourceBundle": "final-native17.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-native17-screens/709BC6D5-757D-44DA-A979-5A2BA5360771.png",
+      "sha256": "88b80f0d57d3c212cbae79adda5e0d319fcb83a613a6369b464f47e21df7cff0",
+      "edited": false
+    },
+    {
+      "file": "notification-thread.png",
+      "sourceRevision": "bf5c1e23536ef28fa4e51e225b830fe401e8d4cf",
+      "sourceBundle": "final-native17.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-native17-screens/8498499B-1F03-4889-BFF1-F329B7174DED.png",
+      "sha256": "29a5bfad3f4e8c705cf9f4a607f6f953f9fb76a5a44bdb8fd536e5cad81a9707",
+      "edited": false
+    },
+    {
+      "file": "foreground-task.png",
+      "sourceRevision": "bf5c1e23536ef28fa4e51e225b830fe401e8d4cf",
+      "sourceBundle": "final-native17.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-native17-screens/CAF26A30-5F4C-4906-9AC3-A2E3BAE263D1.png",
+      "sha256": "21172e2e1882dc98bed9f4a651e18f3727144e57923d684f69a2072e9657b45f",
+      "edited": false
+    },
+    {
+      "file": "keyboard-largest-dark.png",
+      "sourceRevision": "bf5c1e23536ef28fa4e51e225b830fe401e8d4cf",
+      "sourceBundle": "final-ax5-dark16b.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-ax5-dark16b-screens/19250247-D98B-4C09-8DDA-76E0BBA5388E.png",
+      "sha256": "cbdf59845c0b027b0616fd3c330d0d7b532aa3a45e2282c1f22130ea79d1e951",
+      "edited": false
+    },
+    {
+      "file": "filter-largest-dark.png",
+      "sourceRevision": "bf5c1e23536ef28fa4e51e225b830fe401e8d4cf",
+      "sourceBundle": "final-ax5-dark16b.xcresult",
+      "originalFile": "/tmp/mate-mobile-ui-chat/artifacts/final-ax5-dark16b-screens/57542B85-98F5-49DA-9AE0-E7CCDA851D63.png",
+      "sha256": "38970aae1c3cf11bab081be326b423f0f14cac96f189bd8481f5aed77b9ac5a7",
+      "edited": false
+    }
+  ],
+  "ownedApprovedCapabilities": [
+    {
+      "领域": "聊天",
+      "现有能力": "频道、私信、讨论串未读与提及摘要",
+      "原型场景": "chat",
+      "目的地与约束": "顶部全部、未读、提及筛选；无独立任务总表",
+      "权威源码": "chat.ts"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "所有可见会话、未加入频道、私有与归档浏览",
+      "原型场景": "channel-browse",
+      "目的地与约束": "频道目录与归档独立入口；人类阅读范围不缩小",
+      "权威源码": "app/(signed-in)/chat.tsx"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "公开和私有频道创建、关闭与未确认创建重试",
+      "原型场景": "new-channel",
+      "目的地与约束": "新建面板；原请求结果未知时锁定输入并重试",
+      "权威源码": "app/(signed-in)/new.tsx"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "账号选择、打开唯一的一对私信",
+      "原型场景": "new-dm",
+      "目的地与约束": "单选列表；确认只打开，不代发内容",
+      "权威源码": "app/(signed-in)/new.tsx"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "主时间线历史分页、实时消息与重连",
+      "原型场景": "conversation",
+      "目的地与约束": "快照后即可阅读与发送；连接提示在消息区",
+      "权威源码": "chat.ts"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "讨论串根消息、回复历史与返回频道",
+      "原型场景": "thread",
+      "目的地与约束": "根消息短摘要，完整原帖独立阅读层",
+      "权威源码": "app/(signed-in)/conversation.tsx"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "指定 seq 定位、目标缺失、重试与回最新",
+      "原型场景": "conversation-history",
+      "目的地与约束": "就地标记目标，保留 thread 与会话参数",
+      "权威源码": "app/(signed-in)/conversation.tsx"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "当前底部阅读推进已读、失败重试",
+      "原型场景": "read-error",
+      "目的地与约束": "轻量同步恢复行；历史回看不推进已读",
+      "权威源码": "chat.ts"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "每条时间线的登录内草稿、发送、@候选与多行输入",
+      "原型场景": "conversation-keyboard",
+      "目的地与约束": "紧凑输入栏；键盘候选有姓名、Handle、种类",
+      "权威源码": "chat.ts"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "响应丢失同 ID 重试、取消本机重试、保留后输入",
+      "原型场景": "send-failed",
+      "目的地与约束": "状态归属待发送正文；不承诺撤回服务器消息",
+      "权威源码": "chat.ts"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "Markdown 选择、段落、代码、表格、链接和复制",
+      "原型场景": "conversation",
+      "目的地与约束": "复用原生 Markdown；长代码单独横向滚动",
+      "权威源码": "message-body.tsx"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "查看会话成员，辨认自己、人类与 Agent",
+      "原型场景": "channel-members",
+      "目的地与约束": "频道资料或私信对象资料；完整名单",
+      "权威源码": "chat-actions.tsx"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "加入、邀请、离开与永久归档",
+      "原型场景": "channel-invite",
+      "目的地与约束": "资料内入口；邀请聚焦，离开与归档系统确认",
+      "权威源码": "chat-actions.tsx"
+    },
+    {
+      "领域": "聊天",
+      "现有能力": "未确认会话操作恢复，归档与未加入限制",
+      "原型场景": "channel-archive",
+      "目的地与约束": "先恢复原请求；只读状态就近表达",
+      "权威源码": "chat-actions.tsx"
+    },
+    {
+      "领域": "搜索",
+      "现有能力": "查询全部可见消息、全文展开、无结果和失败重试",
+      "原型场景": "search",
+      "目的地与约束": "当前 Entry 不含来源位置，不提供跳转原消息",
+      "权威源码": "app/(signed-in)/search.tsx"
+    },
+    {
+      "领域": "任务",
+      "现有能力": "某条消息上创建零到多个任务",
+      "原型场景": "task-create",
+      "目的地与约束": "标题先于可展开来源；创建不自动认领",
+      "权威源码": "chat-actions.tsx"
+    },
+    {
+      "领域": "任务",
+      "现有能力": "认领、让出、转交给活跃账号、完成",
+      "原型场景": "task-owned",
+      "目的地与约束": "按状态给唯一主操作；转交单选再确认",
+      "权威源码": "chat-actions.tsx"
+    },
+    {
+      "领域": "任务",
+      "现有能力": "本人、他人、无人认领、完成与争用拒绝",
+      "原型场景": "task-other",
+      "目的地与约束": "真实负责人权威；并发拒绝重新取状态",
+      "权威源码": "chat.ts"
+    },
+    {
+      "领域": "任务",
+      "现有能力": "未确认创建与更改同请求恢复、任务事件与来源",
+      "原型场景": "task-pending",
+      "目的地与约束": "消息内轻量任务行和时间线事件，不造独立数据库",
+      "权威源码": "chat-actions.tsx"
+    }
+  ],
+  "earlierFunctionalRuns": [
+    {
+      "bundle": "/tmp/mate-mobile-ui-chat/artifacts/lifecycle4.xcresult",
+      "coverage": [
+        "task create lost acknowledgement, reopen and same-request retry",
+        "claim, yield, reclaim, complete"
+      ],
+      "revision": "implementation iteration before f2b997fc; not claimed as a complete final-revision rerun"
+    },
+    {
+      "bundle": "/tmp/mate-mobile-ui-chat/artifacts/flows5.xcresult",
+      "coverage": [
+        "channel create lost acknowledgement and retry",
+        "invite, leave, join, archive",
+        "history failure latch across live events and explicit retry",
+        "send lost acknowledgement and identical-request retry",
+        "task transfer and other-owner read-only state",
+        "ordinary human tabs, guarded old links and identity isolation"
+      ],
+      "revision": "implementation iteration before f2b997fc; business owners are unchanged"
+    },
+    {
+      "bundle": "/tmp/mate-mobile-ui-chat/artifacts/chat1.xcresult",
+      "coverage": [
+        "members and invite picker",
+        "leave and archive cancellation",
+        "open existing unique DM"
+      ],
+      "revision": "earlier implementation iteration"
+    },
+    {
+      "bundle": "/tmp/mate-mobile-ui-chat/artifacts/final-native15.xcresult",
+      "coverage": [
+        "ordinary human tabs and old admin Agent/provider link denial",
+        "logout/login draft isolation"
+      ],
+      "revision": "intermediate ThemeProvider integration before the final presentation fixes",
+      "excludedTest": "testFinalVisual had an insufficient stream-readiness wait and is not counted"
+    },
+    {
+      "bundle": "/tmp/mate-mobile-ui-chat/artifacts/final-dark12.xcresult",
+      "coverage": [
+        "message copy verified by actual simulator clipboard",
+        "mention candidate inserts @wen"
+      ],
+      "revision": "ccade2e09a3ea07967a0b09cfb39615b31c58841",
+      "receipt": "/tmp/mate-mobile-ui-chat/artifacts/clipboard-receipt.json"
+    }
+  ],
+  "unchangedProtocolAndLifecycleOwners": [
+    "apps/mobile/src/auth.ts",
+    "apps/mobile/src/chat.ts",
+    "apps/mobile/src/notifications.ts",
+    "apps/mobile/src/session.tsx",
+    "apps/mobile/src/lifecycle.tsx"
+  ],
+  "principles": {
+    "Model the Domain": "Presentation drafts and selections live above native Modal; pending requests remain session-owned.",
+    "Prove It Works": "System notification taps, exact destination assertions, screenshot inspection, persisted retry receipts, and current/built/installed bundle comparisons."
+  },
+  "limitations": [
+    "Independent native acceptance, review and merge remain coordinator-owned. These captures do not approve the whole product.",
+    "Separate Agent and settings area implementations are not merged here. Their complete nested route and prerequisite return integration must be checked after migration to this base.",
+    "Notification evidence uses local simctl injection and disposable registration state. It proves native presentation, taps, validation and navigation, not real APNs token registration, remote delivery or a physical device.",
+    "No production messages or external model calls. The fixture Agent remains paused.",
+    "The local Node runtime is 26.12.1; the repository engine requests Node 24. CI remains responsible for its configured engine.",
+    "Earlier task/member/recovery runs are retained separately from final source runs. Public protocol tests and retry receipts were checked again on the final source.",
+    "The first local baseline bundle mixed source edits and is not baseline evidence. Supplied original screenshots are the visual baseline.",
+    "Disposable fixtures and the dedicated simulator remain available locally for coordinator review. No other simulator was used."
+  ],
+  "localDriver": "/tmp/mate-mobile-ui-chat/NativeDrive.swift",
+  "localFixture": "/tmp/mate-mobile-ui-chat/server.ts",
+  "localDecisionTrail": "/tmp/mate-mobile-ui-chat/decisions.tsv",
+  "review": "pending coordinator-owned independent review",
+  "sharedNavigationFollowup": {
+    "sourceRevision": "b40ead817e4550e860c4b30ddc2c6b0d364e26a7",
+    "record": "permission-links.json",
+    "provenance": "permission-links-provenance.json",
+    "note": "Original full-area coverage above retains its original exact revisions. This bounded follow-up adds canonical member permission explanations and verifies admin tab history."
+  },
+  "darkFieldFollowup": {
+    "sourceRevision": "c449826c0988d660ad715c9788251a718435ec28",
+    "record": "dark-fields.json",
+    "provenance": "dark-field-provenance.json",
+    "note": "Shared dark Field boundary correction with actual credential/password/human empty-field captures. Light branch unchanged; focused native checks and affected build/typecheck only."
+  }
+}

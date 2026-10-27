@@ -1,0 +1,83 @@
+{
+  "recordedAt": "2026-10-27T02:50:47.880810+00:00",
+  "sourceRevision": "c449826c0988d660ad715c9788251a718435ec28",
+  "previousReviewHead": "c85ae640a5c4abf0c8f07a0e004463a7cb4f12ae",
+  "finding": {
+    "severity": "P2",
+    "review": "/tmp/mate-mobile-ui-independent-review/settings-review.md",
+    "reviewSha256": "931ec7d0982f535cb8f1ed6b2cddb3fa433ccf026ad6397fc571595fbed9588f",
+    "originalImage": "/tmp/mate-mobile-ui-settings/artifacts/dark-role-final-images/9A68E4EC-F90F-484C-A40A-BBF3F0F5121D.png",
+    "cause": "Dark subtle and surface are equal. Field normal border was transparent, making empty inputs disappear in Card."
+  },
+  "change": {
+    "file": "apps/mobile/src/ui.tsx",
+    "scope": "Shared Field styling only. No theme token values, component signatures, area-owned screens, validation or lifecycle logic changed.",
+    "darkFill": "existing background token #111215",
+    "darkNormalBorder": "existing border token #34373F at the existing 1pt width",
+    "light": "Existing subtle fill #F3F3F6 and transparent normal border retained.",
+    "validation": "Existing error ? danger branch retains priority; caller style overrides and native input props retain their order. No behavior change."
+  },
+  "verification": {
+    "host": "YiMini.local",
+    "simulator": "61960580-E2C0-49FB-AB3D-5B57A52C0309",
+    "runtime": "iOS 27.0",
+    "fixture": "Disposable loopback HTTPS fixture; no credentials saved and no humans created by these captures. Paused fixture Agent.",
+    "beforeBinarySource": "b40ead817e4550e860c4b30ddc2c6b0d364e26a7",
+    "beforeRuns": [
+      "/tmp/mate-mobile-ui-chat/artifacts/dark-field-before.xcresult",
+      "/tmp/mate-mobile-ui-chat/artifacts/light-field-before.xcresult"
+    ],
+    "afterRuns": [
+      "/tmp/mate-mobile-ui-chat/artifacts/dark-field-after.xcresult",
+      "/tmp/mate-mobile-ui-chat/artifacts/light-field-after.xcresult"
+    ],
+    "checks": [
+      "Actual dark credential form with empty secure API key.",
+      "Actual dark password card with current/new/confirmation fields empty and dark keyboard capture.",
+      "Actual dark human form with name, Handle and initial password empty.",
+      "Matching light credential form before/after inspected directly.",
+      "Mobile typecheck and formatting pass; normal Release build succeeds with 0 errors and 3 existing warnings.",
+      "Current source, Xcode product and installed simulator bundle hashes match."
+    ],
+    "visualInspection": "Raw before and after native screenshots were opened and inspected. Empty dark entry areas now have recessed fill and a visible border. The light capture retains its prior appearance.",
+    "typecheck": "/tmp/mate-mobile-ui-chat/artifacts/dark-field-typecheck.log",
+    "format": "/tmp/mate-mobile-ui-chat/artifacts/dark-field-format.log",
+    "build": "/tmp/mate-mobile-ui-chat/chat-build16.log",
+    "provenance": "dark-field-provenance.json",
+    "testScope": "Two focused native presentation checks before and after. No full-suite expansion for this color-only correction."
+  },
+  "images": [
+    {
+      "file": "dark-field-human.png",
+      "source": "/tmp/mate-mobile-ui-chat/artifacts/dark-field-after-screens/0BD470AF-4FAD-4F66-B316-55FEE7B24EAF.png",
+      "attachment": "shared-empty-human_0_69272D9F-524E-48A7-B15A-C16B691CC8D0.png",
+      "sha256": "00a2819e500747d96b572aac0b459a190b1fff236a1a08be9901e338193e82a0",
+      "sourceRevision": "c449826c0988d660ad715c9788251a718435ec28"
+    },
+    {
+      "file": "dark-field-password.png",
+      "source": "/tmp/mate-mobile-ui-chat/artifacts/dark-field-after-screens/9F4D8926-40C7-4118-A111-91D253DC473E.png",
+      "attachment": "shared-empty-password-bottom_0_05447133-7960-473E-AE1B-8A3A98FEFD5A.png",
+      "sha256": "f225b6ca246cbc005047d2feb844d65b899478b17f162ca9528bd707695865f6",
+      "sourceRevision": "c449826c0988d660ad715c9788251a718435ec28"
+    },
+    {
+      "file": "dark-field-credential.png",
+      "source": "/tmp/mate-mobile-ui-chat/artifacts/dark-field-after-screens/07E93FF0-F940-4E65-BB2F-A4E9439D7706.png",
+      "attachment": "shared-empty-credential_0_0C7EAC2C-5986-41C8-8FAD-4B5BA5F5EF68.png",
+      "sha256": "86632be1db09bce34996480140c3ff35dde38e82e999631e5fd98f31e2a9cd50",
+      "sourceRevision": "c449826c0988d660ad715c9788251a718435ec28"
+    },
+    {
+      "file": "light-field-credential.png",
+      "source": "/tmp/mate-mobile-ui-chat/artifacts/light-field-after-screens/0BB3B793-CE7B-4A31-B283-D2FD98AA2317.png",
+      "attachment": "shared-light-empty-credential_0_94B4B116-9372-4BAA-BE57-9AF9A25046A4.png",
+      "sha256": "f09ffc2b04871e2837eefb1a7573c94f1e714ea911761a05b13e0dd6499d7420",
+      "sourceRevision": "c449826c0988d660ad715c9788251a718435ec28"
+    }
+  ],
+  "limits": [
+    "These focused forms use the lead checkout existing routes and consumers. Final integrated Agent/settings owner UI verification remains coordinator/area-owner controlled.",
+    "No new independent critic session. Independent acceptance and merge remain coordinator-owned."
+  ]
+}
