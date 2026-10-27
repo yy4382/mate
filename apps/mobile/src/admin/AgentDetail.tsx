@@ -113,7 +113,10 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                   }, "")
                   .then((ok) => {
                     if (ok && conversationId !== undefined && client.getSnapshot().kind === "ready")
-                      router.push({ pathname: "/conversation", params: { id: conversationId } });
+                      router.push({
+                        pathname: "/conversation",
+                        params: { id: conversationId, sourceAgent: agentId },
+                      });
                   });
               }}
             />
