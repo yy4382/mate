@@ -568,8 +568,16 @@ export function Segmented<T extends string>({
   disabled?: boolean;
 }) {
   const c = useTheme();
+  const large = useWindowDimensions().fontScale >= 1.5;
   return (
-    <View style={{ flexDirection: "row", backgroundColor: c.subtle, borderRadius: 12, padding: 3 }}>
+    <View
+      style={{
+        flexDirection: large ? "column" : "row",
+        backgroundColor: c.subtle,
+        borderRadius: 12,
+        padding: 3,
+      }}
+    >
       {options.map((option) => (
         <Pressable
           key={option}
@@ -578,7 +586,7 @@ export function Segmented<T extends string>({
           disabled={disabled}
           onPress={() => onChange(option)}
           style={({ pressed }) => ({
-            flex: 1,
+            flex: large ? undefined : 1,
             minHeight: 44,
             paddingHorizontal: 10,
             paddingVertical: 10,
@@ -592,6 +600,7 @@ export function Segmented<T extends string>({
           <Text
             style={{
               fontSize: 15,
+              textAlign: "center",
               color: option === value ? c.accent : c.muted,
               fontWeight: option === value ? "600" : "400",
             }}
