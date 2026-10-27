@@ -1,0 +1,42 @@
+{
+  "checkedAt": "2026-10-27T01:43:10.803Z",
+  "receipts": [
+    {
+      "path": "/api/chat/tasks",
+      "requestId": "51262290-f8d2-4f0a-be06-cd933bda0abc",
+      "attempts": 2,
+      "uniquePersistedResult": true
+    },
+    {
+      "path": "/api/chat/tasks",
+      "requestId": "7917bec6-c599-4087-91da-920a79e2241d",
+      "attempts": 2,
+      "uniquePersistedResult": true
+    },
+    {
+      "path": "/api/chat/tasks",
+      "requestId": "d07d1512-d8ff-43c2-aa02-d9011b762bc4",
+      "attempts": 2,
+      "uniquePersistedResult": true
+    },
+    {
+      "path": "/api/chat/channels",
+      "requestId": "3fa31e16-554f-46f4-9930-001026ab567f",
+      "attempts": 2,
+      "uniquePersistedResult": true
+    },
+    {
+      "path": "/api/chat/messages",
+      "requestId": "3b883719-4fd8-4a32-8877-d6cbd8ab7516",
+      "attempts": 2,
+      "uniquePersistedResult": true
+    }
+  ],
+  "abandoned": [
+    {
+      "path": "/api/chat/tasks",
+      "requestId": "22649c59-576a-4f08-ac9c-3deed9d5a466",
+      "reason": "earlier driver run ended before retry; not counted as verification"
+    }
+  ]
+}
