@@ -1,0 +1,371 @@
+{
+  "sourceRevision": "8abf13ec927288f035c21d00f06a6779e41e6019",
+  "sourceTree": "495146fa61fe7b783ee5363e660ce783ce47cee0",
+  "leadRevision": "2a1cbac3cf04c06b0ea105f1f7e69c2261954341",
+  "sharedCheckpoint": "0aabd39b951329b3fcd57bb29716baed77f17133",
+  "environment": {
+    "host": "YiMini.local",
+    "simulator": "406A8738-C8CD-4FCC-B803-2A9FD38CA4EF",
+    "device": "ordinary iPhone 18 Pro",
+    "runtime": "iOS 27.0",
+    "configuration": "normal Expo/Xcode Release, existing real plugins and pods",
+    "node": "v26.12.1"
+  },
+  "build": {
+    "log": "/tmp/mate-mobile-ui-settings/release-lead-integration.log",
+    "logSha256": "8b20c6794b09af23c2c659821303401ec20bc145cf0e96993d99ad0b015dbd20",
+    "bundleSHA256": "edf990275e26765a4bd1382977a4f3cbb3330d4a533ac38406b72b0c793ed8f1",
+    "result": "BUILD SUCCEEDED"
+  },
+  "checks": {
+    "publicInterface": {
+      "command": "pnpm exec vitest run apps/mobile/test",
+      "files": 6,
+      "passed": 76,
+      "logSha256": "924c3c8fd01ee31fcfb9d3b13c9e4ae77b41b414649704fe69e6690ccdc45f0e"
+    },
+    "typecheck": {
+      "command": "pnpm --filter @mate/mobile typecheck",
+      "result": "passed source and tests",
+      "logSha256": "f20b1c7fff5a27a42093c3a67632a55de4ff9a19aa25e5b9bbcc464dd5e781b4"
+    }
+  },
+  "nativeRuns": [
+    {
+      "bundle": "lead-integration-dark.xcresult",
+      "methods": ["testAppearance", "testLeadPresentationIntegration"],
+      "result": "2 passed",
+      "log": "/tmp/mate-mobile-ui-settings/drive-lead-integration-dark.log",
+      "logSha256": "46a4a09ee45d61f766f77985a805d49c6398e190f748bcfa14d00776090b6d6a"
+    },
+    {
+      "bundle": "lead-integration-largest.xcresult",
+      "methods": ["testAppearance", "testLeadLegacyRouteGuards"],
+      "result": "2 passed",
+      "log": "/tmp/mate-mobile-ui-settings/drive-lead-integration-largest.log",
+      "logSha256": "774e55a477c51de904e241055401bff8358c95bbebd04258c2af9e1b45d28a4d"
+    },
+    {
+      "bundle": "lead-integration-light.xcresult",
+      "methods": ["testAppearance"],
+      "result": "1 passed",
+      "log": "/tmp/mate-mobile-ui-settings/drive-lead-integration-light.log",
+      "logSha256": "6bbcddedad7cdecdcfaf9d982f36fa00907134fffe089d3c4a2647593b3e241e"
+    }
+  ],
+  "screenshots": [
+    {
+      "file": "settings-light.png",
+      "sourceRevision": "8abf13ec927288f035c21d00f06a6779e41e6019",
+      "bundle": "lead-integration-light.xcresult",
+      "sourceFile": "/tmp/mate-mobile-ui-settings/artifacts/named/lead-integration-light-images/appearance-settings.png",
+      "sha256": "61afc1f19c1a009b100461a3d4d4a02350d62c14e89cbaddc9a8751291cd070c",
+      "edited": false
+    },
+    {
+      "file": "notifications-dark.png",
+      "sourceRevision": "8abf13ec927288f035c21d00f06a6779e41e6019",
+      "bundle": "lead-integration-dark.xcresult",
+      "sourceFile": "/tmp/mate-mobile-ui-settings/artifacts/named/lead-integration-dark-images/appearance-notification-details.png",
+      "sha256": "bcf5714cccf32987690843566888642a0a37503d21c451f2c88cad3a688a713a",
+      "edited": false
+    },
+    {
+      "file": "profile-largest.png",
+      "sourceRevision": "8abf13ec927288f035c21d00f06a6779e41e6019",
+      "bundle": "lead-integration-largest.xcresult",
+      "sourceFile": "/tmp/mate-mobile-ui-settings/artifacts/named/lead-integration-largest-images/appearance-profile-keyboard.png",
+      "sha256": "21b78abddb3b00ecfe4d831e4b6c3519d5f9c81d884f9563847c7cdf07b516f5",
+      "edited": false
+    },
+    {
+      "file": "model-restored.png",
+      "sourceRevision": "8abf13ec927288f035c21d00f06a6779e41e6019",
+      "bundle": "lead-integration-dark.xcresult",
+      "sourceFile": "/tmp/mate-mobile-ui-settings/artifacts/named/lead-integration-dark-images/integrated-model-selection-restored.png",
+      "sha256": "aabc4fa16a91b01e3e5bd1ea487f4bd7cd87ed75fa0ff1bdcb67d75efbec8873",
+      "edited": false
+    },
+    {
+      "file": "human-restored.png",
+      "sourceRevision": "8abf13ec927288f035c21d00f06a6779e41e6019",
+      "bundle": "lead-integration-dark.xcresult",
+      "sourceFile": "/tmp/mate-mobile-ui-settings/artifacts/named/lead-integration-dark-images/integrated-human-draft-role-restored.png",
+      "sha256": "18412a6cef71ef51491200d5f559531d5db75c2c1126cd1cd57db41763bd198e",
+      "edited": false
+    },
+    {
+      "file": "legacy-denied-largest.png",
+      "sourceRevision": "8abf13ec927288f035c21d00f06a6779e41e6019",
+      "bundle": "lead-integration-largest.xcresult",
+      "sourceFile": "/tmp/mate-mobile-ui-settings/artifacts/named/lead-integration-largest-images/legacy-agent-member-denied.png",
+      "sha256": "b1e9b83dd623777cbe91572bb76dfbafdfd156a23c35027c588b88d4ba86287a",
+      "edited": false
+    }
+  ],
+  "ownedApprovedCapabilities": [
+    {
+      "领域": "认证",
+      "现有能力": "首次 HTTPS 地址保存、校验与更换",
+      "原型场景": "server",
+      "目的地与约束": "单字段表单；退出后果提交前确认",
+      "权威源码": "auth.ts",
+      "实现目的地": "src/app/index.tsx; MobileAuth",
+      "原生证据": "canonical-origins.xcresult; isolation1.xcresult; routing-offline1.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "No-slash/slash/case and invalid origins; login/401; logout/server/account scopes; same-identity modal/draft recovery; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "认证",
+      "现有能力": "人类 Handle 与密码登录，错误与限流重试",
+      "原型场景": "login",
+      "目的地与约束": "同一登录页，字段错误不泄露账号是否存在",
+      "权威源码": "auth.ts",
+      "实现目的地": "src/app/index.tsx; MobileAuth",
+      "原生证据": "canonical-origins.xcresult; isolation1.xcresult; routing-offline1.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "No-slash/slash/case and invalid origins; login/401; logout/server/account scopes; same-identity modal/draft recovery; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "认证",
+      "现有能力": "冷启动恢复、前台重验、离线重试、手动重验",
+      "原型场景": "auth-checking",
+      "目的地与约束": "统一身份保护层；同身份回原页面",
+      "权威源码": "lifecycle.tsx",
+      "实现目的地": "src/app/index.tsx; MobileAuth",
+      "原生证据": "canonical-origins.xcresult; isolation1.xcresult; routing-offline1.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "No-slash/slash/case and invalid origins; login/401; logout/server/account scopes; same-identity modal/draft recovery; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "认证",
+      "现有能力": "隐藏受保护 sheet、草稿和选择器搜索保持挂载",
+      "原型场景": "auth-checking",
+      "目的地与约束": "保护层阻断交互，不另建生命周期",
+      "权威源码": "admin/session.tsx",
+      "实现目的地": "src/app/index.tsx; MobileAuth",
+      "原生证据": "canonical-origins.xcresult; isolation1.xcresult; routing-offline1.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "No-slash/slash/case and invalid origins; login/401; logout/server/account scopes; same-identity modal/draft recovery; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "认证",
+      "现有能力": "退出、换服、401、账号或角色改变隔离旧请求",
+      "原型场景": "logout",
+      "目的地与约束": "清通知再清 cookie；旧回调不能写新登录",
+      "权威源码": "auth.ts",
+      "实现目的地": "src/app/index.tsx; MobileAuth",
+      "原生证据": "canonical-origins.xcresult; isolation1.xcresult; routing-offline1.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "No-slash/slash/case and invalid origins; login/401; logout/server/account scopes; same-identity modal/draft recovery; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "提供商",
+      "现有能力": "OpenAI 与 DeepSeek 状态、脱敏密钥、接口地址",
+      "原型场景": "providers",
+      "目的地与约束": "列表只表示凭据保存，不标为连接验证通过",
+      "权威源码": "admin/Providers.tsx",
+      "实现目的地": "/admin/providers → /admin/providers/[provider] → catalog; local credential Sheet",
+      "原生证据": "management4.xcresult; light-final.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Saved state is not connection verification; fresh key required; catalog is read-only; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "提供商",
+      "现有能力": "保存新密钥和可选 baseUrl、删除与影响说明",
+      "原型场景": "provider-edit",
+      "目的地与约束": "每次保存必须填 key，空地址使用默认；删除确认",
+      "权威源码": "admin/Providers.tsx",
+      "实现目的地": "/admin/providers → /admin/providers/[provider] → catalog; local credential Sheet",
+      "原生证据": "management4.xcresult; light-final.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Saved state is not connection verification; fresh key required; catalog is read-only; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "提供商",
+      "现有能力": "已配置提供商模型目录及完整标识和支持级别",
+      "原型场景": "provider-catalog",
+      "目的地与约束": "浏览和选模是不同任务；未配置先引导保存",
+      "权威源码": "admin/Providers.tsx",
+      "实现目的地": "/admin/providers → /admin/providers/[provider] → catalog; local credential Sheet",
+      "原生证据": "management4.xcresult; light-final.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Saved state is not connection verification; fresh key required; catalog is read-only; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "Node",
+      "现有能力": "在线离线、系统架构、hostname、版本、上次连接、ID",
+      "原型场景": "nodes",
+      "目的地与约束": "列表显示判断信息，详情承载完整系统报告",
+      "权威源码": "admin/Nodes.tsx",
+      "实现目的地": "/admin/nodes → /admin/nodes/[id]; local pairing/rename Sheets",
+      "原生证据": "management4.xcresult; isolation1.xcresult; light-final.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Online/offline uses Node list; copied command is not pairing success; forced-expiry fixture is UI evidence only; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "Node",
+      "现有能力": "改名、名字规则、name-taken 和 unknown-node",
+      "原型场景": "node-rename",
+      "目的地与约束": "独立 sheet，错误附着名称；成功刷新关联 Agent",
+      "权威源码": "admin/Nodes.tsx",
+      "实现目的地": "/admin/nodes → /admin/nodes/[id]; local pairing/rename Sheets",
+      "原生证据": "management4.xcresult; isolation1.xcresult; light-final.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Online/offline uses Node list; copied command is not pairing success; forced-expiry fixture is UI evidence only; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "Node",
+      "现有能力": "一次性配对令牌、到期、复制命令与令牌、关闭、重生",
+      "原型场景": "pairing",
+      "目的地与约束": "命令先于手动令牌；确认连接查看在线列表",
+      "权威源码": "admin/Nodes.tsx",
+      "实现目的地": "/admin/nodes → /admin/nodes/[id]; local pairing/rename Sheets",
+      "原生证据": "management4.xcresult; isolation1.xcresult; light-final.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Online/offline uses Node list; copied command is not pairing success; forced-expiry fixture is UI evidence only; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "人类",
+      "现有能力": "有效和永久停用列表、自己与他人详情",
+      "原型场景": "humans",
+      "目的地与约束": "保留普通人类词汇，成员仅用于会话",
+      "权威源码": "admin/Humans.tsx",
+      "实现目的地": "/admin/humans → /admin/humans/[id]; add/role/reset/safety Sheets",
+      "原生证据": "management4.xcresult; isolation1.xcresult; dark-role-final.xcresult testSelfRole; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Last-admin/self restrictions; lost-ack same request; permanent deactivation; self-role ended old session and hid/rejected management after relogin; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "人类",
+      "现有能力": "添加显示名、Handle、初始密码、角色和幂等请求",
+      "原型场景": "human-add",
+      "目的地与约束": "默认普通人类；密码按 UTF-8 字节校验",
+      "权威源码": "admin/Humans.tsx",
+      "实现目的地": "/admin/humans → /admin/humans/[id]; add/role/reset/safety Sheets",
+      "原生证据": "management4.xcresult; isolation1.xcresult; dark-role-final.xcresult testSelfRole; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Last-admin/self restrictions; lost-ack same request; permanent deactivation; self-role ended old session and hid/rejected management after relogin; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "人类",
+      "现有能力": "更改本人或他人角色、最后管理员保护与登录结束",
+      "原型场景": "human-role",
+      "目的地与约束": "确认前后角色；最后管理员 409 原地说明",
+      "权威源码": "admin/Humans.tsx",
+      "实现目的地": "/admin/humans → /admin/humans/[id]; add/role/reset/safety Sheets",
+      "原生证据": "management4.xcresult; isolation1.xcresult; dark-role-final.xcresult testSelfRole; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Last-admin/self restrictions; lost-ack same request; permanent deactivation; self-role ended old session and hid/rejected management after relogin; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "人类",
+      "现有能力": "重置他人密码、结束旧登录、永久停用和消息保留",
+      "原型场景": "human-deactivate",
+      "目的地与约束": "重置聚焦表单；停用独立危险确认；不增重新启用",
+      "权威源码": "admin/Humans.tsx",
+      "实现目的地": "/admin/humans → /admin/humans/[id]; add/role/reset/safety Sheets",
+      "原生证据": "management4.xcresult; isolation1.xcresult; dark-role-final.xcresult testSelfRole; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Last-admin/self restrictions; lost-ack same request; permanent deactivation; self-role ended old session and hid/rejected management after relogin; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "个人",
+      "现有能力": "编辑显示名与 Handle、重复 Handle 错误",
+      "原型场景": "profile-edit",
+      "目的地与约束": "概览与编辑分离；更新同一登录身份",
+      "权威源码": "profile/Profile.tsx",
+      "实现目的地": "/profile → /profile-edit or /password",
+      "原生证据": "owned-flows1.xcresult testProfileAndNotification passed; light-final.xcresult; toolbar-save2.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Profile PATCH updates same login; UTF-8 byte rules; password retains current session; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "个人",
+      "现有能力": "当前、新、确认密码与 UTF-8 长度、其他登录退出",
+      "原型场景": "password-error",
+      "目的地与约束": "规则就地说明，不把 12 字节改成 12 字符",
+      "权威源码": "profile/Profile.tsx",
+      "实现目的地": "/profile → /profile-edit or /password",
+      "原生证据": "owned-flows1.xcresult testProfileAndNotification passed; light-final.xcresult; toolbar-save2.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Profile PATCH updates same login; UTF-8 byte rules; password retains current session; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "通知",
+      "现有能力": "未登录、检查、disabled、enabled、denied、unavailable",
+      "原型场景": "notifications",
+      "目的地与约束": "状态驱动下一步，三项条件来自原 owner 结构化状态",
+      "权威源码": "notifications.ts",
+      "实现目的地": "/notifications → 通知详情",
+      "原生证据": "isolation1.xcresult; routing-offline1.xcresult; routing-cold2.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Actual permission/settings and unavailable token; simctl routing is not APNs delivery; signed-device delivery and Settings revocation are external gaps; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "通知",
+      "现有能力": "首次权限、APNs 登记重试、token 轮换、取消与待清理",
+      "原型场景": "notifications-enabled",
+      "目的地与约束": "按 binding 隔离，登记成功才开启；无假测试通知",
+      "权威源码": "notifications.ts",
+      "实现目的地": "/notifications → 通知详情",
+      "原生证据": "isolation1.xcresult; routing-offline1.xcresult; routing-cold2.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Actual permission/settings and unavailable token; simctl routing is not APNs delivery; signed-device delivery and Settings revocation are external gaps; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "通知",
+      "现有能力": "打开系统设置、重新检查、隐私范围和专注模式",
+      "原型场景": "notification-help",
+      "目的地与约束": "私信与提及、不含正文、旧通知限制完整可查",
+      "权威源码": "notifications.ts",
+      "实现目的地": "/notifications → 通知详情",
+      "原生证据": "isolation1.xcresult; routing-offline1.xcresult; routing-cold2.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Actual permission/settings and unavailable token; simctl routing is not APNs delivery; signed-device delivery and Settings revocation are external gaps; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "通知",
+      "现有能力": "冷启动通知点击、精确范围与一天有效期、旧消息定位",
+      "原型场景": "conversation-history",
+      "目的地与约束": "验证后才导航；seq 历史定位；无历史回聊天",
+      "权威源码": "notifications-root.tsx",
+      "实现目的地": "/notifications → 通知详情",
+      "原生证据": "isolation1.xcresult; routing-offline1.xcresult; routing-cold2.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Actual permission/settings and unavailable token; simctl routing is not APNs delivery; signed-device delivery and Settings revocation are external gaps; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    },
+    {
+      "领域": "通知",
+      "现有能力": "退出和换服前清理、离线未确认、旧通知失效",
+      "原型场景": "logout-cleanup",
+      "目的地与约束": "先 unsubscribe 再 cookie；不保证 APNs 远端即时停止",
+      "权威源码": "notifications.ts",
+      "实现目的地": "/notifications → 通知详情",
+      "原生证据": "isolation1.xcresult; routing-offline1.xcresult; routing-cold2.xcresult; largest-toolbar.xcresult; dark-role-final.xcresult testAppearance; light-toolbar.xcresult testAppearance",
+      "公开接口检查": "pnpm exec vitest run apps/mobile/test (76 passed)",
+      "范围与限制": "Actual permission/settings and unavailable token; simctl routing is not APNs delivery; signed-device delivery and Settings revocation are external gaps; final largest-text toolbar/avatar correction verified in largest-toolbar.xcresult"
+    }
+  ],
+  "earlierNativeEvidence": {
+    "management4": "2 passed; environment and human writes/refusals",
+    "owned-flows1": "testProfileAndNotification passed; earlier driver failures retained in other tests",
+    "canonical-origins": "passed actual no-slash/slash/case and invalid inputs; pathname slash",
+    "isolation1": "3 passed; permission/settings, server/member scopes, suspension/recovery/401",
+    "routing-offline1": "offline draft test passed; valid channel/thread target passed before wrong-account banner driver failure",
+    "routing-cold2": "passed cold valid target, wrong-account/server/binding and after-logout rejection",
+    "largest-toolbar": "appearance passed after actual clipping corrections",
+    "light-toolbar": "appearance passed; toolbar test driver assumed wrong origin and failed; corrected in toolbar-save2",
+    "toolbar-save2": "profile write/back and password error/disabled action passed",
+    "dark-role-final": "2 passed; appearance and self-role logout/member deep-link denial"
+  },
+  "originFacts": "origin-native.json contains actual native URL properties observed before this integration; auth.ts content is unchanged by the lead integration",
+  "limits": [
+    "Final Agent prerequisites → details/catalog/rename/pair → original creation draft requires combined native acceptance by Agent/integration owner",
+    "simctl push verifies local injection/routing, not APNs remote delivery",
+    "Signed-device APNs and native Settings revocation remain external validation gaps",
+    "Dedicated Chinese IME composition not separately exercised",
+    "Independent review and PR merge remain coordinator-owned"
+  ],
+  "commitSigning": "User-authorized command-only unsigned commits after configured 1Password failure; no Git configuration or keys changed"
+}
