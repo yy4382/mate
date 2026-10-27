@@ -23,7 +23,7 @@ export function AgentList() {
   const { attempt } = draft;
   const create = () => {
     if (attempt.kind === "succeeded") update(newAgentDraft);
-    router.push("/admin/agents/create");
+    router.push("/agents/create");
   };
   return (
     <>
@@ -53,8 +53,8 @@ export function AgentList() {
               }
               onPress={() =>
                 attempt.kind === "succeeded"
-                  ? router.push({ pathname: "/admin/agents/[id]", params: { id: attempt.agentId } })
-                  : router.push("/admin/agents/create")
+                  ? router.push({ pathname: "/agents/[id]", params: { id: attempt.agentId } })
+                  : router.push("/agents/create")
               }
             />
           </Section>
@@ -78,7 +78,7 @@ export function AgentList() {
                 value={stateLabel[agent.state]}
                 accessibilityLabel={`${agent.displayName ?? agent.agentId}，${stateLabel[agent.state]}${agent.handle ? `，@${agent.handle}` : ""}`}
                 onPress={() =>
-                  router.push({ pathname: "/admin/agents/[id]", params: { id: agent.agentId } })
+                  router.push({ pathname: "/agents/[id]", params: { id: agent.agentId } })
                 }
               />
             ))}
@@ -168,7 +168,7 @@ export function CreateAgent() {
               title={attempt.input.displayName}
               subtitle={`@${attempt.input.handle}`}
               onPress={() =>
-                router.replace({ pathname: "/admin/agents/[id]", params: { id: attempt.agentId } })
+                router.replace({ pathname: "/agents/[id]", params: { id: attempt.agentId } })
               }
             />
             <Row title="创建另一个 Agent" onPress={() => update(newAgentDraft)} />
@@ -200,14 +200,14 @@ export function CreateAgent() {
                   <Row
                     title="配对 Node"
                     subtitle="Agent 需要一个固定的主 Node"
-                    onPress={() => router.push("/admin/agents/prerequisites/nodes")}
+                    onPress={() => router.push("/agents/prerequisites/nodes")}
                   />
                 )}
                 {models.data?.length === 0 && (
                   <Row
                     title="配置模型提供商"
                     subtitle="保存凭据后即可选择模型"
-                    onPress={() => router.push("/admin/agents/prerequisites/providers")}
+                    onPress={() => router.push("/agents/prerequisites/providers")}
                   />
                 )}
               </Section>

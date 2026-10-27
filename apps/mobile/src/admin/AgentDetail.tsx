@@ -161,9 +161,9 @@ export function AgentDetail({ agentId }: { agentId: string }) {
   };
   const destination = (page: Destination) => {
     const paths = {
-      settings: "/admin/agents/[id]/settings",
-      access: "/admin/agents/[id]/access",
-      usage: "/admin/agents/[id]/usage",
+      settings: "/agents/[id]/settings",
+      access: "/agents/[id]/access",
+      usage: "/agents/[id]/usage",
     } as const;
     router.push({ pathname: paths[page], params: { id: agentId } });
   };
@@ -259,7 +259,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
           <Loading loading={agents.loading && !agents.data} />
           {!agent && agents.data && (
             <Empty title="找不到这个 Agent" message="它可能已被删除。">
-              <Button title="返回 Agent 列表" onPress={() => router.replace("/admin/agents")} />
+              <Button title="返回 Agent 列表" onPress={() => router.replace("/agents")} />
             </Empty>
           )}
           {agents.error != null && <Button title="重新读取 Agent" onPress={agents.refresh} />}

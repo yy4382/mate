@@ -25,7 +25,7 @@ export function Workspace({
   );
   const data = result.data;
   const open = (next: string) =>
-    router.push({ pathname: "/admin/agents/[id]/workspace", params: { id: agentId, path: next } });
+    router.push({ pathname: "/agents/[id]/workspace", params: { id: agentId, path: next } });
   const outside = result.error instanceof ApiError && result.error.reason === "outside-workspace";
   return (
     <>
