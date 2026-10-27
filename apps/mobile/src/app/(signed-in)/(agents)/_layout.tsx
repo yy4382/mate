@@ -32,6 +32,12 @@ export default function AgentsLayout() {
       <Stack.Screen name="agents/[id]/workspace" options={{ title: "工作区" }} />
       <Stack.Screen name="agents/prerequisites/nodes" options={{ title: "Node" }} />
       <Stack.Screen name="agents/prerequisites/providers" options={{ title: "提供商" }} />
+      <Stack.Screen
+        name="agents/prerequisites/providers/[provider]"
+        options={{ title: "提供商" }}
+      />
+      <Stack.Screen name="agents/prerequisites/providers/catalog" options={{ title: "模型目录" }} />
+      <Stack.Screen name="agents/prerequisites/nodes/[id]" options={{ title: "Node" }} />
     </Stack>
   );
 }
