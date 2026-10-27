@@ -1,0 +1,9 @@
+{
+  "sourceCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+  "builtBundleSha256": "70e6e8244467df9029ea7d8cd1f2f40dcd52eaa6aca08bb0eba17832726c4519",
+  "installedBundleSha256": "70e6e8244467df9029ea7d8cd1f2f40dcd52eaa6aca08bb0eba17832726c4519",
+  "builtExecutableSha256": "902b3258ca1b2c22210e3dac925e77c95f36c90397a09451cecb86bc35d2b18b",
+  "installedExecutableSha256": "902b3258ca1b2c22210e3dac925e77c95f36c90397a09451cecb86bc35d2b18b",
+  "configuration": "Release-iphonesimulator",
+  "simulator": "0302210E-CABB-41AB-8CEB-7BE979E0D283"
+}
