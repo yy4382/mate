@@ -1,0 +1,20 @@
+domain,capability,source,nativeEvidence,status
+Agent,列表状态 open、paused、closed、unreadable 与详情,admin/Agents.tsx,flows2:agent overview/paused/unreadable/missing/closed-fixture,PASS; closed is synthetic
+Agent,创建身份、固定主 Node、模型、思考与可选说明,admin/Agents.tsx,recovery1:testCreationRecovery; flows2:testAreaFlows,PASS; real HTTP/FakeNode
+Agent,缺 Node 或凭据配置后返回原草稿,admin/creation.tsx,prerequisites2:testPrerequisiteRoundTrip; created-agent-confirmations.json,"PASS; real provider save/catalog, Node pair/rename, auth suspension, exact draft return and create"
+Agent,分配前生成 Agent ID，中断后原样继续并核对列表,admin/creation.tsx,recovery1:testCreationRecovery; requests.jsonl UUID comparison,PASS; prepare/lost response/Back/foreground/late success
+Agent,模型搜索、无结果、当前项、清除搜索和思考级别,admin/settings.tsx,flows2:model-empty/model-search/thinking-picker; suspension-merge:model-search-restored,PASS; native search/restoration
+Agent,配置模型、thinking、说明并保存,admin/AgentDetail.tsx,flows2:settings-saved/instructions-keyboard,PASS; real settings save
+Agent,暂停、恢复、删除、缺失、错误详情,admin/AgentDetail.tsx,flows2:pause/resume/missing/unreadable; boundaries2:testDeleteUnreadable,PASS; real lifecycle/delete
+Agent,发消息快捷入口,admin/AgentDetail.tsx,final-dark-return:testAgentDMReturn; final-largest:testAgentDMReturn,PASS; current-view hittability and composer absence; largest also opens Agent management menu
+Agent,主 Node 固定访问、其他 Node 授权与收回,admin/NodeAccess.tsx,flows2:node-access/node-offline-granted/node-revoked,PASS; real grants/revoke/fixed main
+观察,主对话与工作助手切换、名称列表与对象状态,admin/Watch.tsx,recovery1:watch-target-picker/watch-assistant,PASS; real main/assistant
+观察,SSE 快照、执行、空闲、暂停结束、断线和重连,admin/observation.ts,recovery1:testObservationFlows; flows2:watch-paused,PASS; real SSE/partial/reconnect
+观察,排队输入、上下文起点、压缩备注和上下文更新,admin/Watch.tsx,boundaries3:synthetic-watch-context/diagnostics,PASS; synthetic rare context/compaction
+观察,模型文字、思考、图片块类型、错误与流式块,admin/Watch.tsx,recovery1:watch-streaming; boundaries3:synthetic-watch-image-type/thinking-error,"PASS; real streaming, synthetic rare blocks/errors"
+观察,工具等待、执行、输出、参数、结果和记录编号,admin/Watch.tsx,recovery1:watch-tool-parameters/full-result; boundaries3:synthetic-watch-pending/running/empty-values/tool-error,"PASS; real tools, synthetic rare variants"
+观察,系统提示、分节、当前说明、工具添加与移除,admin/Watch.tsx,recovery1:watch-system-prompt/system-tools/context; boundaries3:synthetic-watch-system/tools-removed,"PASS; real system, synthetic removal/sections"
+用量,模型与工具 total、input、output、cache、reasoning、cost,admin/Usage.tsx,flows2:usage-details; recovery1:watch-usage,PASS; all model/tool usage/cost fields
+工作区,根、父、目录、文件与符号链接只读浏览,admin/Workspace.tsx,final-workspace:testWorkspaceFlows; flows2:paused-workspace,PASS; real browse wire/FakeNode
+工作区,文本原文、大小、二进制提示与截断,admin/Workspace.tsx,final-workspace:workspace-text/binary/truncated-text/truncated-directory,PASS; raw text/size/truncation
+工作区,空目录、越界、not-found、unreadable、node-offline,admin/Workspace.tsx,final-workspace:workspace-empty-directory/empty-file/outside/not-found/unreadable/offline/recovered,PASS; real browse refusals/recovery

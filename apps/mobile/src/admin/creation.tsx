@@ -1,15 +1,19 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { randomUUID } from "expo-crypto";
 import { auth } from "../auth-native";
-import type { SignedIn } from "./client";
+import type { ManagementClient, SignedIn } from "./client";
 import { emptySettings, type SettingsDraft } from "./settings";
 
+type CreationInput = Parameters<ManagementClient["createAgent"]>[0];
+type Attempt =
+  | { kind: "new"; agentId: string }
+  | { kind: "pending" | "interrupted" | "succeeded"; agentId: string; input: CreationInput };
 type Draft = {
   displayName: string;
   handle: string;
   nodeId: string;
   settings: SettingsDraft;
-  attempt: { kind: "new" | "pending" | "interrupted"; agentId: string };
+  attempt: Attempt;
 };
 export function newAgentDraft(): Draft {
   return {

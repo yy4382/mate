@@ -25,7 +25,19 @@ export default function AgentsLayout() {
     >
       <Stack.Screen name="agents/index" options={{ title: "Agent", headerLargeTitle: true }} />
       <Stack.Screen name="agents/create" options={{ title: "创建 Agent" }} />
-      <Stack.Screen name="agents/[id]" options={{ title: "Agent 详情" }} />
+      <Stack.Screen name="agents/[id]" options={{ title: "Agent" }} />
+      <Stack.Screen name="agents/[id]/settings" options={{ title: "设置" }} />
+      <Stack.Screen name="agents/[id]/access" options={{ title: "Node 访问" }} />
+      <Stack.Screen name="agents/[id]/usage" options={{ title: "用量" }} />
+      <Stack.Screen name="agents/[id]/workspace" options={{ title: "工作区" }} />
+      <Stack.Screen name="agents/prerequisites/nodes" options={{ title: "Node" }} />
+      <Stack.Screen name="agents/prerequisites/providers" options={{ title: "提供商" }} />
+      <Stack.Screen
+        name="agents/prerequisites/providers/[provider]"
+        options={{ title: "提供商" }}
+      />
+      <Stack.Screen name="agents/prerequisites/providers/catalog" options={{ title: "模型目录" }} />
+      <Stack.Screen name="agents/prerequisites/nodes/[id]" options={{ title: "Node" }} />
     </Stack>
   );
 }

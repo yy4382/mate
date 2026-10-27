@@ -457,5 +457,11 @@
     "record": "permission-links.json",
     "provenance": "permission-links-provenance.json",
     "note": "Original full-area coverage above retains its original exact revisions. This bounded follow-up adds canonical member permission explanations and verifies admin tab history."
+  },
+  "darkFieldFollowup": {
+    "sourceRevision": "c449826c0988d660ad715c9788251a718435ec28",
+    "record": "dark-fields.json",
+    "provenance": "dark-field-provenance.json",
+    "note": "Shared dark Field boundary correction with actual credential/password/human empty-field captures. Light branch unchanged; focused native checks and affected build/typecheck only."
   }
 }

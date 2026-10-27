@@ -1,6 +1,7 @@
 import type { CatalogModel } from "@mate/admin";
+import { useState, type ReactNode } from "react";
 import type { AgentSettingsInput } from "./client";
-import { Field, Select } from "./ui";
+import { Button, Caption, Field, Row, Section, Select, Sheet } from "../ui";
 
 export type SettingsDraft = { model: string; thinking: string; instructions: string };
 export const emptySettings: SettingsDraft = { model: "", thinking: "", instructions: "" };
@@ -28,43 +29,68 @@ export function SettingsFields({
   value,
   onChange,
   disabled,
+  node,
 }: {
   models: readonly CatalogModel[];
   value: SettingsDraft;
-  onChange: (value: SettingsDraft) => void;
+  onChange(value: SettingsDraft): void;
   disabled: boolean;
+  node?: ReactNode;
 }) {
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
   const selected = models.find((model) => `${model.provider}/${model.modelId}` === value.model);
   return (
     <>
-      <Select
-        label="模型"
-        disabled={disabled}
-        value={value.model}
-        options={models.map((model) => ({
-          value: `${model.provider}/${model.modelId}`,
-          label: `${model.provider} · ${model.name}`,
-        }))}
-        onChange={(model) => onChange({ ...value, model, thinking: "" })}
-      />
-      <Select
-        label="思考级别"
-        disabled={disabled}
-        value={value.thinking}
-        options={[
-          { value: "", label: "默认" },
-          ...(selected?.thinkingLevels ?? []).map((value) => ({ value, label: value })),
-        ]}
-        onChange={(thinking) => onChange({ ...value, thinking })}
-      />
-      <Field
-        label="说明文字（可选）"
-        value={value.instructions}
-        multiline
-        maxLength={50_000}
-        editable={!disabled}
-        onChangeText={(instructions) => onChange({ ...value, instructions })}
-      />
+      <Section
+        title="运行配置"
+        footer={node ? "主 Node 执行默认命令并保存主工作区，创建后不能更换。" : ""}
+      >
+        {node}
+        <Select
+          label="模型"
+          disabled={disabled}
+          value={value.model}
+          options={models.map((model) => ({
+            value: `${model.provider}/${model.modelId}`,
+            label: `${model.name} · ${model.provider}\n${model.modelId}`,
+          }))}
+          onChange={(model) => onChange({ ...value, model, thinking: "" })}
+        />
+        <Select
+          label="思考级别"
+          disabled={disabled || !selected}
+          value={value.thinking}
+          options={[
+            { value: "", label: "默认" },
+            ...(selected?.thinkingLevels ?? []).map((value) => ({ value, label: value })),
+          ]}
+          onChange={(thinking) => onChange({ ...value, thinking })}
+        />
+      </Section>
+      <Section footer="模型和说明文字可以稍后修改，从下一次模型请求起生效。">
+        <Row
+          title="说明文字"
+          value={value.instructions.trim() ? "已填写" : "可选"}
+          subtitle={
+            value.instructions.trim() ? (value.instructions.split("\n")[0] ?? "").slice(0, 90) : ""
+          }
+          disabled={disabled}
+          onPress={() => setInstructionsOpen(true)}
+        />
+      </Section>
+      <Sheet visible={instructionsOpen} title="说明文字" onClose={() => setInstructionsOpen(false)}>
+        <Field
+          label="给 Agent 的说明"
+          testID="agent-instructions"
+          value={value.instructions}
+          multiline
+          maxLength={50_000}
+          editable={!disabled}
+          onChangeText={(instructions) => onChange({ ...value, instructions })}
+        />
+        <Caption>说明会随模型设置一起保存。返回不会提交更改。</Caption>
+        <Button title="完成" onPress={() => setInstructionsOpen(false)} />
+      </Sheet>
     </>
   );
 }

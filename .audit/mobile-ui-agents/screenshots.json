@@ -1,0 +1,262 @@
+[
+  {
+    "file": "list.png",
+    "nativeRun": "final-permission",
+    "attachment": "appearance-list",
+    "sourceCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "de013ad52a1ade309def08bb6de64c523b773740f41fc1257d926cee23a96297"
+  },
+  {
+    "file": "overview.png",
+    "nativeRun": "final-permission",
+    "attachment": "appearance-overview",
+    "sourceCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "61bb53bce80958a54feeaf40f1c905946eefd58e15b5a8ec8cffb5f4aa799bc2"
+  },
+  {
+    "file": "create.png",
+    "nativeRun": "final-permission",
+    "attachment": "appearance-create",
+    "sourceCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "25ebce281e2f655d90517384b895854751822b35206c22ece151b1e90578e0ad"
+  },
+  {
+    "file": "settings.png",
+    "nativeRun": "final-permission",
+    "attachment": "appearance-settings",
+    "sourceCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "ffe38cfd0405cad579b36d1096b8d530b29756977f9855356e166ea0ce05c12e"
+  },
+  {
+    "file": "access.png",
+    "nativeRun": "final-permission",
+    "attachment": "appearance-access",
+    "sourceCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "d976f5ab420330eb6d8d5defb96088f5b6c144061832a23ea9fa781642459381"
+  },
+  {
+    "file": "usage.png",
+    "nativeRun": "final-permission",
+    "attachment": "appearance-usage",
+    "sourceCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "53e2256585801dad9bfdb5577cf588f88c37b4c99a27a2ee8f13993537f70561"
+  },
+  {
+    "file": "watch.png",
+    "nativeRun": "final-permission",
+    "attachment": "appearance-watch",
+    "sourceCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "c04bd9cf42ebe2cfa0dec7f30b80834cc88a7038765f1ef672795d91b964ea2f"
+  },
+  {
+    "file": "dm-return-dark.png",
+    "nativeRun": "final-dark-return",
+    "attachment": "agent-local-dm-return",
+    "sourceCommit": "52fe3a2007e34d1750fba917a4ed3dac133c49ad",
+    "appearance": "dark",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "3f7b4d9980227b6737993006b90c3be972e9cdccd2e888e397e782d831015674"
+  },
+  {
+    "file": "workspace-dark.png",
+    "nativeRun": "final-dark-return",
+    "attachment": "appearance-workspace",
+    "sourceCommit": "52fe3a2007e34d1750fba917a4ed3dac133c49ad",
+    "appearance": "dark",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "5c56c29fa42bc58e2a9a8e527e895972eef1fa8627dbf2cef679241072c99a83"
+  },
+  {
+    "file": "overview-largest.png",
+    "nativeRun": "final-largest2",
+    "attachment": "appearance-overview",
+    "sourceCommit": "52fe3a2007e34d1750fba917a4ed3dac133c49ad",
+    "appearance": "light",
+    "contentSize": "accessibility-extra-extra-extra-large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "5007d19bcbe51da5916de695ae54d3c458c3bdbced5c45e01dcecd8093477fa2"
+  },
+  {
+    "file": "keyboard-largest.png",
+    "nativeRun": "final-largest2",
+    "attachment": "appearance-keyboard",
+    "sourceCommit": "52fe3a2007e34d1750fba917a4ed3dac133c49ad",
+    "appearance": "light",
+    "contentSize": "accessibility-extra-extra-extra-large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "ef21c94aaa95a19946187535847dd2f16f73556584c74c35778e34a2ef221b22"
+  },
+  {
+    "file": "workspace-largest.png",
+    "nativeRun": "final-largest2",
+    "attachment": "appearance-workspace",
+    "sourceCommit": "52fe3a2007e34d1750fba917a4ed3dac133c49ad",
+    "appearance": "light",
+    "contentSize": "accessibility-extra-extra-extra-large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "43b7bc7b2b24c51d1be154d788644329f52cda7b9836f1b1cba487c13e3d2841"
+  },
+  {
+    "file": "prerequisite-provider-return.png",
+    "nativeRun": "prerequisites2",
+    "attachment": "prerequisite-provider-return",
+    "sourceCommit": "4ed9e909b81fb747c5e3695b9c717def18a31d15",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "7d3011580aeee2e7db485c0d43fb881daf3a37942f04e72de7640b10ef48fde8"
+  },
+  {
+    "file": "prerequisite-catalog-detail.png",
+    "nativeRun": "prerequisites2",
+    "attachment": "prerequisite-catalog-detail",
+    "sourceCommit": "4ed9e909b81fb747c5e3695b9c717def18a31d15",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "76afe21a9607a68cd0d1a9d4fecdd59793d3b9386394eb537e9cd02a375fe2fc"
+  },
+  {
+    "file": "prerequisite-node-renamed.png",
+    "nativeRun": "prerequisites2",
+    "attachment": "prerequisite-node-renamed",
+    "sourceCommit": "4ed9e909b81fb747c5e3695b9c717def18a31d15",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "142bd6fa6536ed5dd0ce85a10c079716321fd512777c68a48463b5aa811f78a9"
+  },
+  {
+    "file": "prerequisite-created.png",
+    "nativeRun": "prerequisites2",
+    "attachment": "prerequisite-created",
+    "sourceCommit": "4ed9e909b81fb747c5e3695b9c717def18a31d15",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "8ed79b59ecb3e8e21034b6465eed1b267611de537d57bb3d5603aa746feab4a6"
+  },
+  {
+    "file": "workspace-outside.png",
+    "nativeRun": "final-workspace",
+    "attachment": "workspace-outside",
+    "sourceCommit": "52fe3a2007e34d1750fba917a4ed3dac133c49ad",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "9f0f486c58939ab705e9295ba5ced7ec7d1d41076a3359c17ee16baede01fbc9"
+  },
+  {
+    "file": "workspace-offline.png",
+    "nativeRun": "final-workspace",
+    "attachment": "workspace-offline",
+    "sourceCommit": "52fe3a2007e34d1750fba917a4ed3dac133c49ad",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "0061705441e7951fec852915591984343c8efea839608f844fc67a11e65f2020"
+  },
+  {
+    "file": "workspace-truncated-text.png",
+    "nativeRun": "final-workspace",
+    "attachment": "workspace-truncated-text",
+    "sourceCommit": "52fe3a2007e34d1750fba917a4ed3dac133c49ad",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "7d8e4976881e8fc5bd1b9be10b3eebb87250c8955332ace615b46cd720c66e97"
+  },
+  {
+    "file": "watch-tool-parameters.png",
+    "nativeRun": "recovery1",
+    "attachment": "watch-tool-parameters",
+    "sourceCommit": "pre-initial-commit working tree; exact build not retained",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "418cf1ad89b4042d6afa8f470409c80541f98b5fe9efb1628ae01b5cc26853fb"
+  },
+  {
+    "file": "watch-tool-full-result.png",
+    "nativeRun": "recovery1",
+    "attachment": "watch-tool-full-result",
+    "sourceCommit": "pre-initial-commit working tree; exact build not retained",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "418cf1ad89b4042d6afa8f470409c80541f98b5fe9efb1628ae01b5cc26853fb"
+  },
+  {
+    "file": "creation-response-lost.png",
+    "nativeRun": "recovery1",
+    "attachment": "creation-response-lost",
+    "sourceCommit": "pre-initial-commit working tree; exact build not retained",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "0bc20c12e19acd72cc446d1853f5aaa065d25069e4f78fd9141bac1fb233d9bf"
+  },
+  {
+    "file": "creation-success-after-back.png",
+    "nativeRun": "recovery1",
+    "attachment": "creation-success-after-back",
+    "sourceCommit": "pre-initial-commit working tree; exact build not retained",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "fcc9f616969411bf650cb292373541c0841ba74995f78526b0367ff9dd302734"
+  },
+  {
+    "file": "chinese-ime.png",
+    "nativeRun": "identity-ime",
+    "attachment": "chinese-instructions-committed",
+    "sourceCommit": "2e9eb36 working tree before later routing integrations",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real HTTP/FakeNode",
+    "sha256": "659c00732eecb5300bc0ece208652bf7dff2486bfd7c404894854c10aa22ad07"
+  },
+  {
+    "file": "watch-synthetic-empty-values.png",
+    "nativeRun": "boundaries3",
+    "attachment": "synthetic-watch-empty-values",
+    "sourceCommit": "2e9eb36 working tree before later routing integrations",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "synthetic valid existing observation wire",
+    "sha256": "34b586db46c581e9f92db492891768780b9bdb7e25c22801f9da9be5aa14c518"
+  },
+  {
+    "file": "permission-denied.png",
+    "nativeRun": "final-permission2",
+    "attachment": "canonical-member-agents",
+    "sourceCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+    "appearance": "light",
+    "contentSize": "large",
+    "kind": "real member session on disposable HTTP control plane",
+    "sha256": "db7eb3f41a5401c827885ae5c8bb5fd6d1407896724431606e8bd068b25f3303"
+  }
+]
