@@ -42,7 +42,8 @@
       "Sheet": "Optional scroll?: boolean defaults true. Use scroll={false} when the child owns a FlatList; existing callers keep the default keyboard-aware scrolling.",
       "Segmented": "Segmented<T extends string>({options: readonly T[], value: T, onChange(value: NoInfer<T>): void, disabled?: boolean}). Options use full rows at fontScale >= 1.5."
     },
-    "existingConsumers": "Existing props remain accepted. Select virtualizes options and keeps query/open state above its Sheet."
+    "existingConsumers": "Existing props remain accepted. Select virtualizes options and keeps query/open state above its Sheet.",
+    "fieldAppearance": "Field uses existing background and border tokens in dark mode to separate empty inputs from Card surface. Light mode retains subtle fill and transparent normal border. Error danger border, caller style overrides and all props/behavior stay unchanged. No API migration."
   },
   "otherOwners": {
     "agents": "a37144fb-74cd-49f7-9f6a-8bd77eba72bc",
