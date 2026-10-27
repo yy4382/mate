@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
+  FlatList,
   Modal,
   Pressable,
   RefreshControl,
@@ -225,11 +226,19 @@ export function Row({
         </Text>
       )}
       {selected !== undefined ? (
-        <Text accessibilityElementsHidden style={{ color: c.accent, fontSize: 20, width: 24 }}>
+        <Text
+          allowFontScaling={false}
+          accessibilityElementsHidden
+          style={{ color: c.accent, fontSize: 20, width: 24 }}
+        >
           {selected ? "✓" : ""}
         </Text>
       ) : onPress ? (
-        <Text accessibilityElementsHidden style={{ color: c.muted, fontSize: 20 }}>
+        <Text
+          allowFontScaling={false}
+          accessibilityElementsHidden
+          style={{ color: c.muted, fontSize: 20 }}
+        >
           ›
         </Text>
       ) : null}
@@ -367,11 +376,13 @@ export function Sheet({
   onClose,
   children,
   visible = true,
+  scroll = true,
 }: {
   title: string;
   onClose(): void;
   children: ReactNode;
   visible?: boolean;
+  scroll?: boolean;
 }) {
   const ready = useContext(PresentationAccess);
   const focused = useIsFocused();
@@ -379,11 +390,16 @@ export function Sheet({
   return (
     <Modal
       visible={visible && ready && focused}
-      animationType="slide"
+      animationType={ready && focused ? "slide" : "none"}
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <SafeAreaView style={{ flex: 1, backgroundColor: c.grouped }}>
+      <SafeAreaView
+        style={{ flex: 1, backgroundColor: c.grouped, opacity: ready && focused ? 1 : 0 }}
+        pointerEvents={ready && focused ? "auto" : "none"}
+        accessibilityElementsHidden={!ready || !focused}
+        importantForAccessibility={ready && focused ? "auto" : "no-hide-descendants"}
+      >
         <View
           style={{
             flexDirection: "row",
@@ -404,14 +420,18 @@ export function Sheet({
           </View>
           <Button title="关闭" onPress={onClose} />
         </View>
-        <KeyboardAwareScrollView
-          bottomOffset={24}
-          keyboardDismissMode="interactive"
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.page}
-        >
-          {children}
-        </KeyboardAwareScrollView>
+        {scroll ? (
+          <KeyboardAwareScrollView
+            bottomOffset={24}
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.page}
+          >
+            {children}
+          </KeyboardAwareScrollView>
+        ) : (
+          <View style={{ flex: 1 }}>{children}</View>
+        )}
       </SafeAreaView>
     </Modal>
   );
@@ -442,19 +462,25 @@ export function Select({
         onPress={() => setOpen(true)}
         disabled={disabled}
       />
-      <Sheet visible={open} title={label} onClose={() => setOpen(false)}>
+      <Sheet visible={open} title={label} onClose={() => setOpen(false)} scroll={false}>
         {options.length > 8 && (
-          <Field
-            label="搜索选项"
-            value={query}
-            onChangeText={setQuery}
-            clearButtonMode="while-editing"
-          />
+          <View style={{ padding: 16 }}>
+            <Field
+              label="搜索选项"
+              value={query}
+              onChangeText={setQuery}
+              clearButtonMode="while-editing"
+            />
+          </View>
         )}
-        <Section>
-          {filtered.map((o) => (
+        <FlatList
+          data={filtered}
+          keyExtractor={(o) => o.value}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          contentContainerStyle={{ padding: 16 }}
+          renderItem={({ item: o }) => (
             <Row
-              key={o.value}
               title={o.label}
               selected={o.value === value}
               onPress={() => {
@@ -462,9 +488,9 @@ export function Select({
                 setOpen(false);
               }}
             />
-          ))}
-        </Section>
-        {filtered.length === 0 && <Empty title="没有匹配选项" message="换一个关键词试试。" />}
+          )}
+          ListEmptyComponent={<Empty title="没有匹配选项" message="换一个关键词试试。" />}
+        />
         <Button title="取消选择" onPress={() => setOpen(false)} />
       </Sheet>
     </>
@@ -529,3 +555,60 @@ export const styles = StyleSheet.create({
   fill: { flex: 1 },
   muted: { fontSize: 13 },
 });
+
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  options: readonly T[];
+  value: T;
+  onChange(value: NoInfer<T>): void;
+  disabled?: boolean;
+}) {
+  const c = useTheme();
+  const large = useWindowDimensions().fontScale >= 1.5;
+  return (
+    <View
+      style={{
+        flexDirection: large ? "column" : "row",
+        backgroundColor: c.subtle,
+        borderRadius: 12,
+        padding: 3,
+      }}
+    >
+      {options.map((option) => (
+        <Pressable
+          key={option}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: option === value, disabled }}
+          disabled={disabled}
+          onPress={() => onChange(option)}
+          style={({ pressed }) => ({
+            flex: large ? undefined : 1,
+            minHeight: 44,
+            paddingHorizontal: 10,
+            paddingVertical: 10,
+            borderRadius: 9,
+            backgroundColor: option === value ? c.surface : "transparent",
+            alignItems: "center",
+            justifyContent: "center",
+            opacity: disabled ? 0.4 : pressed ? 0.6 : 1,
+          })}
+        >
+          <Text
+            style={{
+              fontSize: 15,
+              textAlign: "center",
+              color: option === value ? c.accent : c.muted,
+              fontWeight: option === value ? "600" : "400",
+            }}
+          >
+            {option}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}

@@ -1,13 +1,12 @@
+import { z } from "zod";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppState,
   FlatList,
-  Keyboard,
   KeyboardAvoidingView,
   Pressable,
-  ScrollView,
   Text,
   View,
   type FlatListProps,
@@ -15,12 +14,29 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Entry, TimelineRef } from "@mate/chat/contracts";
 import { accountName, conversationLabel, timelineKey } from "../../../chat";
-import { ConversationActions, CreateTask, TaskActions } from "../../../chat-actions";
-import { MessageBody } from "../../../message-body";
+import {
+  ConversationActionsContent,
+  type ConversationPresentation,
+  type TaskCreationPresentation,
+  type TaskPresentation,
+  CreateTaskContent,
+  TaskActionsContent,
+} from "../../../chat-actions";
+import { setStringAsync } from "expo-clipboard";
+import { ChatComposer } from "../../../chat-composer";
+import { ChatMessage } from "../../../chat-message";
 import { useChat, useChatState } from "../../../session";
-import { Button, ErrorLine, Field, Label, styles } from "../../../ui";
+import { Button, Caption, Empty, ErrorLine, Label, Row, Section, Sheet, styles } from "../../../ui";
 import { useTheme } from "../../../theme";
 
+type Message = Extract<Entry, { kind: "message" }>;
+type Task = Extract<Entry, { kind: "task" }>;
+type Panel =
+  | { kind: "root" }
+  | { kind: "conversation"; presentation: ConversationPresentation }
+  | { kind: "message"; entry: Message }
+  | { kind: "create-task"; entry: Message; presentation: TaskCreationPresentation }
+  | { kind: "task"; task: Task; presentation: TaskPresentation };
 const verbs = {
   created: "创建了任务",
   claimed: "认领了任务",
@@ -30,7 +46,14 @@ const verbs = {
 };
 export default function ConversationScreen() {
   const headerHeight = useHeaderHeight();
-  const params = useLocalSearchParams<{ id: string; thread?: string; seq?: string }>();
+  const params = useLocalSearchParams<{
+    id: string;
+    thread?: string;
+    seq?: string;
+    sourceAgent?: string;
+  }>();
+  const sourceAgent = z.uuid().safeParse(params.sourceAgent);
+  const agentReturn = sourceAgent.success && !params.thread ? sourceAgent.data : null;
   const id = Number(params.id);
   const seq = params.seq ? Number(params.seq) : null;
   const thread = params.thread ? Number(params.thread) : null;
@@ -54,15 +77,26 @@ export default function ConversationScreen() {
   const [composing, setComposing] = useState(false);
   const [bottom, setBottom] = useState(true);
   const [readError, setReadError] = useState("");
-  const [more, setMore] = useState(false);
-  const [tasking, setTasking] = useState<Extract<Entry, { kind: "message" }> | null>(null);
-  const [task, setTask] = useState<Extract<Entry, { kind: "task" }> | null>(null);
   const [rootError, setRootError] = useState("");
+  const [panel, setPanel] = useState<Panel | null>(null);
+  const messageMenu = panel?.kind === "message" ? panel.entry : null;
+  const task = panel?.kind === "task" ? panel.task : null;
+  const sourceLocate = useRef<AbortController | null>(null);
+  useEffect(() => () => sourceLocate.current?.abort(), [key, focused, task?.taskId]);
+  const [copiedMessage, setCopiedMessage] = useState<number | null>(null);
   const [destination, setDestination] = useState<
     "loading" | "positioning" | "done" | "missing" | "failed"
   >(seq === null ? "done" : "loading");
   const [destinationRetry, setDestinationRetry] = useState(0);
-  const jump = useRef<{ seq: number; attempts: number; measured: number } | null>(null);
+  const jump = useRef<{
+    seq: number;
+    attempts: number;
+    measured: number;
+    positioned: boolean;
+  } | null>(null);
+  const measuredEntries = useRef({ key: listKey, entries: new Set<number>() });
+  if (measuredEntries.current.key !== listKey)
+    measuredEntries.current = { key: listKey, entries: new Set<number>() };
   const frame = useRef<number | null>(null);
   const list = useRef<FlatList<Entry>>(null);
   const marked = useRef("");
@@ -80,7 +114,8 @@ export default function ConversationScreen() {
       setDestination("failed");
       return;
     }
-    list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: false });
+    target.positioned = measuredEntries.current.entries.has(target.seq);
+    list.current?.scrollToIndex({ index, viewPosition: 1, animated: false });
   }, []);
   const schedulePosition = useCallback(() => {
     if (frame.current !== null || !jump.current) return;
@@ -101,7 +136,10 @@ export default function ConversationScreen() {
           ),
         };
         if (!jump.current) return;
-        if (viewableItems.some((item) => item.isViewable && item.item.seq === jump.current?.seq)) {
+        if (
+          jump.current.positioned &&
+          viewableItems.some((item) => item.isViewable && item.item.seq === jump.current?.seq)
+        ) {
           jump.current = null;
           setDestination("done");
         } else schedulePosition();
@@ -142,8 +180,11 @@ export default function ConversationScreen() {
     if (marked.current === mark) return;
     marked.current = mark;
     void chat.markRead(ref).then(
-      () => setReadError(""),
       () => {
+        if (activeList.current === listKey) setReadError("");
+      },
+      () => {
+        if (activeList.current !== listKey) return;
         marked.current = "";
         setReadError("已读状态未同步，点此重试。");
       },
@@ -179,13 +220,9 @@ export default function ConversationScreen() {
     void chat.locate(ref, { seq }, cancel.signal).then((result) => {
       if (cancel.signal.aborted) return;
       if (result === "found") {
-        if (visibleEntries.current.key === listKey && visibleEntries.current.entries.has(seq))
-          setDestination("done");
-        else {
-          jump.current = { seq, attempts: 0, measured: -1 };
-          setDestination("positioning");
-          schedulePosition();
-        }
+        jump.current = { seq, attempts: 0, measured: -1, positioned: false };
+        setDestination("positioning");
+        schedulePosition();
       } else if (result !== "cancelled")
         setDestination(result === "missing" ? "missing" : "failed");
     });
@@ -219,118 +256,133 @@ export default function ConversationScreen() {
   const tasks = new Map<number, Extract<Entry, { kind: "task" }>>();
   for (const entry of entries) if (entry.kind === "task") tasks.set(entry.taskId, entry);
   const visibleTasks = Array.from(tasks.values());
-  function message(entry: Extract<Entry, { kind: "message" }>, isRoot = false) {
-    const author = state.accounts.find((a) => a.accountId === entry.author);
-    const related = visibleTasks.filter((t) => t.messageId === entry.messageId);
+  const taskSource = task
+    ? entries.find((e): e is Message => e.kind === "message" && e.messageId === task.messageId)
+    : undefined;
+  function message(entry: Message, isRoot = false) {
+    const knownReplies =
+      thread === null &&
+      (state.unread.timelines.some(
+        (t) => "thread" in t.timeline && t.timeline.thread === entry.messageId,
+      ) ||
+        chat.timeline({ thread: entry.messageId }).entries.some((e) => e.kind === "message"));
     return (
-      <View
-        testID={isRoot ? "thread-root" : `entry-${entry.seq}`}
-        style={{
-          padding: 16,
-          gap: 8,
-          borderBottomWidth: 1,
-          borderColor: c.border,
-          backgroundColor: isRoot || entry.seq === seq ? c.subtle : c.background,
+      <ChatMessage
+        entry={entry}
+        accounts={state.accounts}
+        me={state.me}
+        related={visibleTasks.filter((t) => t.messageId === entry.messageId)}
+        targetSeq={seq}
+        isRoot={isRoot}
+        knownReplies={knownReplies}
+        onMenu={(entry) => {
+          setCopiedMessage(null);
+          setPanel({ kind: "message", entry });
         }}
-      >
-        {entry.seq === seq && !isRoot && <Label>定位到的消息 · #{seq}</Label>}
-        <View style={styles.row}>
-          <Text style={{ color: c.foreground, fontSize: 16, fontWeight: "600" }}>
-            {accountName(state.accounts, entry.author)}
-          </Text>
-          <Label muted>
-            @{author?.handle ?? "?"} ·{" "}
-            {new Date(entry.at).toLocaleString("zh-CN", {
-              month: "numeric",
-              day: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </Label>
-        </View>
-        <MessageBody text={entry.body} accounts={state.accounts} mentions={entry.mentions} />
-        {entry.attachments.map((a, i) => (
-          <Label key={i} muted>
-            附件：{a.name}（{a.size} 字节，暂不支持下载）
-          </Label>
-        ))}
-        {related.map((t) => (
-          <Pressable
-            key={t.taskId}
-            accessibilityRole="button"
-            disabled={!canWrite}
-            onPress={() => setTask(t)}
-            style={{ padding: 12, gap: 4, borderWidth: 1, borderColor: c.border, borderRadius: 6 }}
-          >
-            <Label>
-              {t.change === "completed" ? "已完成 · " : "任务 · "}
-              {t.title}
-            </Label>
-            <Label muted>
-              {t.owner === null ? "无人认领" : `负责人：${accountName(state.accounts, t.owner)}`}
-              {canWrite && t.change !== "completed" ? " · 点此操作" : ""}
-            </Label>
-          </Pressable>
-        ))}
-        {!isRoot && (
-          <View style={styles.row}>
-            {thread === null && (
-              <Button
-                testID={`reply-${entry.messageId}`}
-                title="回复讨论串"
-                onPress={() =>
-                  router.push({
-                    pathname: "/conversation",
-                    params: { id, thread: entry.messageId },
-                  })
-                }
-              />
-            )}{" "}
-            {canWrite && (
-              <Button
-                testID={`create-task-${entry.messageId}`}
-                title="转为任务"
-                onPress={() => setTasking(entry)}
-              />
-            )}
-          </View>
-        )}
-      </View>
+        onTask={(task) =>
+          setPanel({ kind: "task", task, presentation: { transfer: false, to: null, query: "" } })
+        }
+        onThread={(entry) =>
+          router.push({ pathname: "/conversation", params: { id, thread: entry.messageId } })
+        }
+      />
     );
   }
 
   if (!conversation)
     return (
-      <View style={styles.page}>
-        <Label>找不到这个会话。请返回列表重试。</Label>
-      </View>
+      <Empty
+        title={state.me ? "找不到这个会话" : "正在读取会话…"}
+        message={state.me ? "它可能已不可用。返回聊天选择其他会话。" : ""}
+      >
+        <Button title="返回聊天" onPress={() => router.replace("/chat")} />
+      </Empty>
     );
   return (
     <SafeAreaView edges={["bottom", "left", "right"]} style={styles.fill}>
       <Stack.Screen
         options={{
-          headerBackVisible: false,
+          headerBackVisible: agentReturn === null,
+          gestureEnabled: agentReturn === null,
+          headerTransparent: false,
+          headerStyle: { backgroundColor: c.background },
           title:
             thread === null ? conversationLabel(conversation, state.accounts, state.me) : "讨论串",
         }}
       />
-      <Stack.Toolbar placement="left">
-        <Stack.Toolbar.Button
-          icon="chevron.left"
-          accessibilityLabel="返回"
-          onPress={() => (router.canGoBack() ? router.back() : router.replace("/chat"))}
-        >
-          返回
-        </Stack.Toolbar.Button>
-      </Stack.Toolbar>
+      {agentReturn !== null && (
+        <Stack.Toolbar placement="left">
+          <Stack.Toolbar.Button
+            icon="chevron.left"
+            accessibilityLabel="返回 Agent 总览"
+            onPress={() => {
+              if (router.canDismiss()) router.dismiss();
+              router.navigate({ pathname: "/agents/[id]", params: { id: agentReturn } });
+            }}
+          >
+            Agent
+          </Stack.Toolbar.Button>
+        </Stack.Toolbar>
+      )}
       <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button onPress={() => setMore(true)}>更多</Stack.Toolbar.Button>
+        <Stack.Toolbar.Button
+          icon="ellipsis"
+          accessibilityLabel="更多"
+          onPress={() =>
+            setPanel({
+              kind: "conversation",
+              presentation: { page: "info", query: "", invitee: null },
+            })
+          }
+        >
+          更多
+        </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <KeyboardAvoidingView
         style={styles.fill}
         behavior="padding"
         keyboardVerticalOffset={headerHeight}
       >
+        {thread !== null && (
+          <View
+            style={{
+              backgroundColor: c.subtle,
+              paddingHorizontal: 20,
+              paddingVertical: 10,
+              gap: 4,
+            }}
+          >
+            {root ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="查看原帖"
+                onPress={() => setPanel({ kind: "root" })}
+                style={{ minHeight: 44, justifyContent: "center", gap: 4 }}
+              >
+                <Caption>
+                  {conversationLabel(conversation, state.accounts, state.me)} ·{" "}
+                  {accountName(state.accounts, root.author)}的原帖
+                </Caption>
+                <Text numberOfLines={2} style={{ fontSize: 16, color: c.foreground }}>
+                  {root.body.split("\n")[0]}
+                </Text>
+                <Caption accent>查看原帖</Caption>
+              </Pressable>
+            ) : (
+              <Caption>{rootError || "正在读取原帖…"}</Caption>
+            )}
+            {rootError && (
+              <Button
+                title="重试根消息"
+                onPress={() =>
+                  void chat.retryLoad({ conversation: id }).then(() => {
+                    if (activeList.current === listKey) setDestinationRetry((x) => x + 1);
+                  })
+                }
+              />
+            )}
+          </View>
+        )}
         {seq !== null && destination !== "done" && (
           <View style={{ padding: 12 }}>
             <Label>
@@ -344,7 +396,9 @@ export default function ConversationScreen() {
               <Button
                 title="重试定位消息"
                 onPress={() =>
-                  void chat.retryLoad(ref).then(() => setDestinationRetry((x) => x + 1))
+                  void chat.retryLoad(ref).then(() => {
+                    if (activeList.current === listKey) setDestinationRetry((x) => x + 1);
+                  })
                 }
               />
             )}
@@ -356,16 +410,20 @@ export default function ConversationScreen() {
           ref={list}
           data={[...entries].reverse()}
           inverted
+          onLayout={schedulePosition}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           maintainVisibleContentPosition={
-            seq === null ? { minIndexForVisible: 0, autoscrollToTopThreshold: 80 } : undefined
+            destination === "done"
+              ? { minIndexForVisible: 0, ...(seq === null ? { autoscrollToTopThreshold: 80 } : {}) }
+              : undefined
           }
           viewabilityConfig={{ viewAreaCoveragePercentThreshold: 30 }}
           onViewableItemsChanged={viewable}
           onScrollToIndexFailed={({ index, averageItemLength, highestMeasuredFrameIndex }) => {
             if (activeList.current !== listKey) return;
             const target = jump.current;
+            if (target) target.positioned = false;
             if (target && highestMeasuredFrameIndex > target.measured) {
               target.measured = highestMeasuredFrameIndex;
               target.attempts = 0;
@@ -374,7 +432,13 @@ export default function ConversationScreen() {
           }}
           keyExtractor={(entry) => String(entry.seq)}
           onScroll={(event) => {
-            if (activeList.current === listKey) setBottom(event.nativeEvent.contentOffset.y < 80);
+            if (activeList.current !== listKey) return;
+            setBottom(event.nativeEvent.contentOffset.y < 80);
+            const target = jump.current;
+            if (target?.positioned && visibleEntries.current.entries.has(target.seq)) {
+              jump.current = null;
+              setDestination("done");
+            }
           }}
           scrollEventThrottle={100}
           onContentSizeChange={() => {
@@ -385,24 +449,60 @@ export default function ConversationScreen() {
             }
             schedulePosition();
           }}
-          renderItem={({ item }) =>
-            item.kind === "message" ? (
-              message(item)
-            ) : (
-              <View testID={`entry-${item.seq}`} style={{ padding: 12, backgroundColor: c.subtle }}>
-                {item.seq === seq && <Label>定位到的消息 · #{seq}</Label>}
-                <Label muted>
-                  {accountName(state.accounts, item.actor)} {verbs[item.change]}「{item.title}」
-                </Label>
-                {canWrite && (
-                  <Button
-                    title={`查看任务 ${item.title}`}
-                    onPress={() => setTask(tasks.get(item.taskId) ?? item)}
-                  />
+          renderItem={({ item, index }) => {
+            const previous = entries[entries.length - index - 2];
+            return (
+              <View
+                onLayout={() => {
+                  if (activeList.current !== listKey) return;
+                  measuredEntries.current.entries.add(item.seq);
+                  if (jump.current?.seq === item.seq) {
+                    jump.current.positioned = false;
+                    schedulePosition();
+                  }
+                }}
+              >
+                {(!previous ||
+                  new Date(previous.at).toDateString() !== new Date(item.at).toDateString()) && (
+                  <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 }}>
+                    <Caption>
+                      {new Date(item.at).toLocaleDateString("zh-CN", {
+                        month: "long",
+                        day: "numeric",
+                      })}
+                    </Caption>
+                  </View>
+                )}
+                {item.kind === "message" ? (
+                  message(item)
+                ) : (
+                  <Pressable
+                    testID={`entry-${item.seq}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`查看任务 ${item.title}`}
+                    onPress={() =>
+                      setPanel({
+                        kind: "task",
+                        task: tasks.get(item.taskId) ?? item,
+                        presentation: { transfer: false, to: null, query: "" },
+                      })
+                    }
+                    style={{
+                      paddingHorizontal: 20,
+                      paddingVertical: 12,
+                      gap: 6,
+                      backgroundColor: item.seq === seq ? c.tint : c.subtle,
+                    }}
+                  >
+                    {item.seq === seq && <Caption accent>定位到的消息 · #{seq}</Caption>}
+                    <Caption>
+                      {accountName(state.accounts, item.actor)} {verbs[item.change]}「{item.title}」
+                    </Caption>
+                  </Pressable>
                 )}
               </View>
-            )
-          }
+            );
+          }}
           ListEmptyComponent={
             <View style={styles.page}>
               <Label>
@@ -447,18 +547,6 @@ export default function ConversationScreen() {
                   />
                 </View>
               )}
-              {root && message(root, true)}
-              <ErrorLine text={rootError} />
-              {rootError && (
-                <Button
-                  title="重试根消息"
-                  onPress={() =>
-                    void chat
-                      .retryLoad({ conversation: id })
-                      .then(() => setDestinationRetry((x) => x + 1))
-                  }
-                />
-              )}
             </View>
           }
         />
@@ -468,96 +556,48 @@ export default function ConversationScreen() {
               title={readError}
               onPress={() =>
                 void chat.markRead(ref).then(
-                  () => setReadError(""),
-                  () => setReadError("已读状态未同步，点此重试。"),
+                  () => {
+                    if (activeList.current === listKey) setReadError("");
+                  },
+                  () => {
+                    if (activeList.current === listKey) setReadError("已读状态未同步，点此重试。");
+                  },
                 )
               }
             />
           </View>
         ) : null}
-        {!bottom && !composing && destination === "done" && (
-          <Button
-            title={count ? `${count} 条未读 · 回到最新消息` : "回到最新消息"}
-            onPress={() => {
-              if (seq !== null) router.setParams({ seq: undefined });
-              else {
-                list.current?.scrollToOffset({ offset: 0, animated: false });
-                setBottom(true);
-              }
-            }}
-          />
-        )}
-        {canWrite ? (
-          <ScrollView
-            testID="message-composer-panel"
-            style={{ flexGrow: 0, flexShrink: 0, maxHeight: "65%" }}
-            contentContainerStyle={{
-              padding: 12,
-              gap: 8,
-              borderTopWidth: 1,
-              borderColor: c.border,
-            }}
-            keyboardShouldPersistTaps="handled"
-          >
-            <Field
-              testID="message-composer"
-              accessibilityLabel="消息"
-              placeholder={
-                thread === null ? "发送消息，使用 @handle 提及" : "回复讨论串，使用 @handle 提及"
-              }
-              multiline
-              value={draft.text}
-              onChangeText={(text) => chat.edit(ref, text)}
-              onFocus={() => setComposing(true)}
-              onBlur={() => setComposing(false)}
-              style={{ maxHeight: 160, textAlignVertical: "top" }}
+        {!composing &&
+          (seq !== null
+            ? destination !== "missing" && destination !== "failed"
+            : !bottom && destination === "done") && (
+            <Button
+              title={count ? `${count} 条未读 · 回到最新消息` : "回到最新消息"}
+              onPress={() => {
+                if (seq !== null) router.setParams({ seq: undefined });
+                else {
+                  list.current?.scrollToOffset({ offset: 0, animated: false });
+                  setBottom(true);
+                }
+              }}
             />
-            {/@[\p{L}\p{N}_.-]*$/u.test(draft.text) && (
-              <View style={styles.row}>
-                {state.accounts
-                  .filter(
-                    (a) =>
-                      a.active &&
-                      a.handle
-                        .toLowerCase()
-                        .startsWith(
-                          (draft.text.match(/@([\p{L}\p{N}_.-]*)$/u)?.[1] ?? "").toLowerCase(),
-                        ),
-                  )
-                  .slice(0, 5)
-                  .map((a) => (
-                    <Button
-                      key={a.accountId}
-                      title={`@${a.handle}`}
-                      onPress={() =>
-                        chat.edit(ref, draft.text.replace(/@[\p{L}\p{N}_.-]*$/u, `@${a.handle} `))
-                      }
-                    />
-                  ))}
-              </View>
-            )}
-            <ErrorLine text={draft.error} />
-            <View style={[styles.row, { justifyContent: "flex-end" }]}>
-              {composing && <Button title="收起键盘" onPress={Keyboard.dismiss} />}
-              {draft.pending?.status === "failed" && (
-                <Button title="取消本次发送" onPress={() => chat.abandon(ref)} />
-              )}
-              <Button
-                title={
-                  draft.pending?.status === "sending"
-                    ? "发送中…"
-                    : draft.pending?.status === "failed"
-                      ? "重试发送"
-                      : "发送"
-                }
-                primary
-                disabled={
-                  draft.pending?.status === "sending" || (!draft.pending && !draft.text.trim())
-                }
-                onPress={() => void chat.send(ref)}
-              />
-            </View>
-          </ScrollView>
+          )}
+        {canWrite ? (
+          <ChatComposer
+            draft={draft}
+            accounts={state.accounts}
+            destination={
+              thread !== null
+                ? `回复 ${conversationLabel(conversation, state.accounts, state.me)} 的讨论串…`
+                : conversation.kind === "dm"
+                  ? `发消息给 ${conversationLabel(conversation, state.accounts, state.me)}…`
+                  : `发送到 ${conversationLabel(conversation, state.accounts, state.me)}…`
+            }
+            onEdit={(text) => chat.edit(ref, text)}
+            onSend={() => void chat.send(ref)}
+            onAbandon={() => chat.abandon(ref)}
+            onFocusChange={setComposing}
+          />
         ) : (
           <View style={styles.page}>
             <Label>
@@ -568,14 +608,149 @@ export default function ConversationScreen() {
                   : "你还没有加入这个会话，加入后才能发言。"}
             </Label>
             {conversation.kind !== "dm" && !conversation.archived && (
-              <Button title="加入频道" onPress={() => setMore(true)} />
+              <Button
+                title="加入频道"
+                onPress={() =>
+                  setPanel({
+                    kind: "conversation",
+                    presentation: { page: "info", query: "", invitee: null },
+                  })
+                }
+              />
             )}
           </View>
         )}
       </KeyboardAvoidingView>
-      {more && <ConversationActions conversation={conversation} onClose={() => setMore(false)} />}{" "}
-      {tasking && <CreateTask entry={tasking} onClose={() => setTasking(null)} />}{" "}
-      {task && <TaskActions task={tasks.get(task.taskId) ?? task} onClose={() => setTask(null)} />}
+      <Sheet
+        visible={panel !== null}
+        title={
+          panel?.kind === "conversation"
+            ? "会话与成员"
+            : panel?.kind === "root"
+              ? "原帖"
+              : panel?.kind === "create-task"
+                ? "转为任务"
+                : panel?.kind === "task"
+                  ? "消息任务"
+                  : "消息"
+        }
+        onClose={() => {
+          sourceLocate.current?.abort();
+          setPanel(null);
+        }}
+      >
+        {panel?.kind === "conversation" && (
+          <ConversationActionsContent
+            conversation={conversation}
+            presentation={panel.presentation}
+            onChange={(presentation) =>
+              setPanel((p) => (p?.kind === "conversation" ? { ...p, presentation } : p))
+            }
+            onClose={() => setPanel((p) => (p?.kind === "conversation" ? null : p))}
+          />
+        )}
+        {messageMenu && (
+          <>
+            <Caption>
+              {accountName(state.accounts, messageMenu.author)} ·{" "}
+              {new Date(messageMenu.at).toLocaleString("zh-CN")}
+            </Caption>
+            <Text numberOfLines={3} style={{ fontSize: 17, color: c.foreground, lineHeight: 26 }}>
+              {messageMenu.body}
+            </Text>
+            <Section>
+              {thread === null && (
+                <Row
+                  title="回复讨论串"
+                  onPress={() => {
+                    const entry = messageMenu;
+                    setPanel(null);
+                    router.push({
+                      pathname: "/conversation",
+                      params: { id, thread: entry.messageId },
+                    });
+                  }}
+                />
+              )}
+              {canWrite && (
+                <Row
+                  title="转为任务"
+                  testID={`create-task-${messageMenu.messageId}`}
+                  onPress={() => {
+                    const saved = state.operations.get(
+                      `task-create/${messageMenu.messageId}`,
+                    )?.input;
+                    setPanel({
+                      kind: "create-task",
+                      entry: messageMenu,
+                      presentation: {
+                        title: saved?.kind === "task-create" ? saved.title : "",
+                        source: false,
+                      },
+                    });
+                  }}
+                />
+              )}
+              <Row
+                title={copiedMessage === messageMenu.messageId ? "已复制消息" : "复制消息"}
+                onPress={() =>
+                  void setStringAsync(messageMenu.body).then(() =>
+                    setCopiedMessage(messageMenu.messageId),
+                  )
+                }
+              />
+            </Section>
+          </>
+        )}
+        {panel?.kind === "root" && root && message(root, true)}
+        {panel?.kind === "create-task" && (
+          <CreateTaskContent
+            entry={panel.entry}
+            presentation={panel.presentation}
+            onChange={(presentation) =>
+              setPanel((p) => (p?.kind === "create-task" ? { ...p, presentation } : p))
+            }
+            onClose={() =>
+              setPanel((p) =>
+                p?.kind === "create-task" && p.entry.messageId === panel.entry.messageId ? null : p,
+              )
+            }
+          />
+        )}
+        {panel?.kind === "task" && (
+          <TaskActionsContent
+            task={tasks.get(panel.task.taskId) ?? panel.task}
+            presentation={panel.presentation}
+            onChange={(presentation) =>
+              setPanel((p) => (p?.kind === "task" ? { ...p, presentation } : p))
+            }
+            canWrite={canWrite}
+            {...(taskSource ? { source: taskSource } : {})}
+            onSource={async () => {
+              const sourceId = panel.task.messageId;
+              sourceLocate.current?.abort();
+              const cancel = new AbortController();
+              sourceLocate.current = cancel;
+              const result = await chat.locate(ref, { messageId: sourceId }, cancel.signal);
+              if (activeList.current !== listKey || cancel.signal.aborted) return;
+              const source = chat
+                .timeline(ref)
+                .entries.find((e) => e.kind === "message" && e.messageId === sourceId);
+              if (result !== "found" || !source)
+                throw new Error(
+                  result === "failed" ? "来源消息读取失败，请重试。" : "来源消息已不可用。",
+                );
+              setPanel(null);
+              router.setParams({ seq: String(source.seq) });
+            }}
+            onClose={() =>
+              setPanel((p) =>
+                p?.kind === "task" && p.task.taskId === panel.task.taskId ? null : p,
+              )
+            }
+          />
+        )}
+      </Sheet>
     </SafeAreaView>
   );
 }
