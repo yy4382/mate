@@ -17,6 +17,8 @@ export default function SettingsLayout() {
       <Stack.Screen name="account" options={{ title: "设置", headerLargeTitle: true }} />
       <Stack.Screen name="connection" options={{ title: "账号与连接" }} />
       <Stack.Screen name="profile" options={{ title: "个人资料" }} />
+      <Stack.Screen name="profile-edit" options={{ title: "编辑资料" }} />
+      <Stack.Screen name="password" options={{ title: "修改密码" }} />
       <Stack.Screen name="notifications" options={{ title: "通知" }} />
       <Stack.Screen name="admin" options={{ headerShown: false }} />
     </Stack>
