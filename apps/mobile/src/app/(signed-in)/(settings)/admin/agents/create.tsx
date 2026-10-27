@@ -1,4 +1,4 @@
-import { Redirect } from "expo-router";
+import { AgentRedirect } from "../../../../../agent-navigation";
 export default function LegacyCreateAgent() {
-  return <Redirect href="/agents/create" />;
+  return <AgentRedirect href="/agents/create" />;
 }
