@@ -23,6 +23,7 @@ function serverAddress(input: string): string {
   const url = new URL(input.trim());
   if (
     url.protocol !== "https:" ||
+    !url.hostname ||
     url.username ||
     url.password ||
     url.pathname !== "/" ||

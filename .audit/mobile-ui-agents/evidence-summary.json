@@ -1,0 +1,373 @@
+{
+  "updatedAt": "2026-10-27T02:45:47.687055+00:00",
+  "branch": "feat/mobile-ui-agents",
+  "head": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+  "pr": "https://github.com/yy4382/mate/pull/266",
+  "baseBranch": "feat/mobile-ui-chat",
+  "base": "c85ae640a5c4abf0c8f07a0e004463a7cb4f12ae",
+  "sharedCheckpoint": "0aabd39b951329b3fcd57bb29716baed77f17133",
+  "builtCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+  "builtSourceTree": "e6143fd1370b9fffa12ab9e03a360c46ddf15ad6",
+  "currentSourceTree": "e6143fd1370b9fffa12ab9e03a360c46ddf15ad6",
+  "bundleSha256": "70e6e8244467df9029ea7d8cd1f2f40dcd52eaa6aca08bb0eba17832726c4519",
+  "configuration": "normal Expo Release; no UI driver or fixture bundled",
+  "machine": "YiMini.local",
+  "simulator": {
+    "id": "0302210E-CABB-41AB-8CEB-7BE979E0D283",
+    "name": "Mate-Agents-a371-iOS27",
+    "device": "iPhone 17",
+    "runtime": "iOS 27.0"
+  },
+  "fixtures": "Owned disposable HTTPS control planes; FakeNode; localhost ScriptedProvider. Rare observation and closed-state presentation samples explicitly synthetic.",
+  "designFiles": [
+    {
+      "file": "handoff.html",
+      "expected": "9544f3596d58bd92141f70996d93561c84fd884f9ebf671053cd32de890b98eb",
+      "actual": "9544f3596d58bd92141f70996d93561c84fd884f9ebf671053cd32de890b98eb"
+    },
+    {
+      "file": "flows.json",
+      "expected": "92a7af5050f45421f537f140a7c3a995159cfb712e4f42870997cee6955319f2",
+      "actual": "92a7af5050f45421f537f140a7c3a995159cfb712e4f42870997cee6955319f2"
+    },
+    {
+      "file": "capability-map.csv",
+      "expected": "e35b9d844bb8bcb7eab12c458481f57ba6897c2d0bdf306dbee9345b41645cf5",
+      "actual": "e35b9d844bb8bcb7eab12c458481f57ba6897c2d0bdf306dbee9345b41645cf5"
+    },
+    {
+      "file": "prototype.html",
+      "expected": "e30b6e3a32351aa54fae8c17418db7f2be994225b278d7e48cf50de5235ac197",
+      "actual": "e30b6e3a32351aa54fae8c17418db7f2be994225b278d7e48cf50de5235ac197"
+    },
+    {
+      "file": "prototype.js",
+      "expected": "7a8e642814653ad44005ac010da9f3c4726152f07f0d8e5516b30cad90b5365a",
+      "actual": "7a8e642814653ad44005ac010da9f3c4726152f07f0d8e5516b30cad90b5365a"
+    },
+    {
+      "file": "prototype.css",
+      "expected": "1cbed2b47b41d515199ee31301150f2d489a8b7f604ed258cf661e5cf3b57eee",
+      "actual": "1cbed2b47b41d515199ee31301150f2d489a8b7f604ed258cf661e5cf3b57eee"
+    },
+    {
+      "file": "scenes.js",
+      "expected": "c82c485bb53e7f3d2e928dc29c5c6e12dae66b1187bec8bd6ef3c35391ded950",
+      "actual": "c82c485bb53e7f3d2e928dc29c5c6e12dae66b1187bec8bd6ef3c35391ded950"
+    },
+    {
+      "file": "verification.html",
+      "expected": "d7cf3e87ea850b4054caa045d0a911756648d69b5e64bf03e4c02a1b917fb781",
+      "actual": "d7cf3e87ea850b4054caa045d0a911756648d69b5e64bf03e4c02a1b917fb781"
+    }
+  ],
+  "nativeRuns": {
+    "driver-largest-dm.log": [
+      {
+        "test": "testAgentDMReturn",
+        "result": "failed",
+        "seconds": 36.158
+      },
+      {
+        "test": "testAppearance",
+        "result": "failed",
+        "seconds": 43.917
+      }
+    ],
+    "driver-baseline2.log": [
+      {
+        "test": "testBaseline",
+        "result": "passed",
+        "seconds": 49.071
+      }
+    ],
+    "driver-identity2.log": [
+      {
+        "test": "testIdentityIsolation",
+        "result": "passed",
+        "seconds": 269.352
+      }
+    ],
+    "driver-final-light-model.log": [
+      {
+        "test": "testAppearance",
+        "result": "passed",
+        "seconds": 58.071
+      },
+      {
+        "test": "testModelSearchAndCancel",
+        "result": "failed",
+        "seconds": 62.361
+      }
+    ],
+    "driver-model-search.log": [
+      {
+        "test": "testModelSearchAndCancel",
+        "result": "passed",
+        "seconds": 44.726
+      }
+    ],
+    "driver-final-integration.log": [
+      {
+        "test": "testAgentDMReturn",
+        "result": "passed",
+        "seconds": 24.63
+      },
+      {
+        "test": "testAppearance",
+        "result": "passed",
+        "seconds": 57.03
+      },
+      {
+        "test": "testPrerequisiteRoundTrip",
+        "result": "failed",
+        "seconds": 73.28
+      },
+      {
+        "test": "testPresentationSuspension",
+        "result": "failed",
+        "seconds": 38.27
+      }
+    ],
+    "driver-recovery1.log": [
+      {
+        "test": "testCreationRecovery",
+        "result": "passed",
+        "seconds": 215.596
+      },
+      {
+        "test": "testObservationFlows",
+        "result": "passed",
+        "seconds": 97.488
+      },
+      {
+        "test": "testPresentationSuspension",
+        "result": "failed",
+        "seconds": 59.382
+      }
+    ],
+    "driver-largest-return.log": [
+      {
+        "test": "testAgentDMReturn",
+        "result": "passed",
+        "seconds": 24.482
+      },
+      {
+        "test": "testAppearance",
+        "result": "passed",
+        "seconds": 72.437
+      }
+    ],
+    "driver-suspension-merge.log": [
+      {
+        "test": "testPresentationSuspension",
+        "result": "passed",
+        "seconds": 81.896
+      }
+    ],
+    "driver-baseline.log": [
+      {
+        "test": "testBaseline",
+        "result": "failed",
+        "seconds": 33.85
+      }
+    ],
+    "driver-final-permission2.log": [
+      {
+        "test": "testCanonicalAgentPermissions",
+        "result": "passed",
+        "seconds": 60.611
+      }
+    ],
+    "driver-final-permission.log": [
+      {
+        "test": "testAgentDMReturn",
+        "result": "passed",
+        "seconds": 34.803
+      },
+      {
+        "test": "testAppearance",
+        "result": "passed",
+        "seconds": 57.994
+      },
+      {
+        "test": "testCanonicalAgentPermissions",
+        "result": "failed",
+        "seconds": 29.3
+      }
+    ],
+    "driver-identity-ime.log": [
+      {
+        "test": "testChineseKeyboard",
+        "result": "passed",
+        "seconds": 37.967
+      },
+      {
+        "test": "testIdentityIsolation",
+        "result": "failed",
+        "seconds": 102.931
+      }
+    ],
+    "driver-sample1.log": [
+      {
+        "test": "testSamples",
+        "result": "failed",
+        "seconds": 43.013
+      }
+    ],
+    "driver-boundaries.log": [
+      {
+        "test": "testChineseKeyboard",
+        "result": "failed",
+        "seconds": 27.666
+      },
+      {
+        "test": "testDeleteUnreadable",
+        "result": "failed",
+        "seconds": 29.587
+      },
+      {
+        "test": "testRareObservationPresentation",
+        "result": "failed",
+        "seconds": 59.741
+      }
+    ],
+    "driver-sample3.log": [
+      {
+        "test": "testSamples",
+        "result": "passed",
+        "seconds": 53.888
+      }
+    ],
+    "driver-prerequisites2.log": [
+      {
+        "test": "testPrerequisiteRoundTrip",
+        "result": "passed",
+        "seconds": 217.255
+      }
+    ],
+    "driver-final-largest.log": [
+      {
+        "test": "testAgentDMReturn",
+        "result": "passed",
+        "seconds": 33.925
+      },
+      {
+        "test": "testAppearance",
+        "result": "failed",
+        "seconds": 67.952
+      }
+    ],
+    "driver-light-merge.log": [
+      {
+        "test": "testAppearance",
+        "result": "passed",
+        "seconds": 65.058
+      }
+    ],
+    "driver-final-largest2.log": [
+      {
+        "test": "testAppearance",
+        "result": "passed",
+        "seconds": 67.702
+      }
+    ],
+    "driver-final-workspace.log": [
+      {
+        "test": "testWorkspaceFlows",
+        "result": "passed",
+        "seconds": 63.443
+      }
+    ],
+    "driver-boundaries2.log": [
+      {
+        "test": "testChineseKeyboard",
+        "result": "failed",
+        "seconds": 30.684
+      },
+      {
+        "test": "testDeleteUnreadable",
+        "result": "passed",
+        "seconds": 24.479
+      },
+      {
+        "test": "testRareObservationPresentation",
+        "result": "failed",
+        "seconds": 68.087
+      }
+    ],
+    "driver-flows2.log": [
+      {
+        "test": "testAreaFlows",
+        "result": "passed",
+        "seconds": 97.265
+      },
+      {
+        "test": "testObservationFlows",
+        "result": "failed",
+        "seconds": 103.406
+      },
+      {
+        "test": "testWorkspaceFlows",
+        "result": "passed",
+        "seconds": 53.903
+      }
+    ],
+    "driver-dark-merge.log": [
+      {
+        "test": "testAppearance",
+        "result": "passed",
+        "seconds": 64.055
+      }
+    ],
+    "driver-boundaries3.log": [
+      {
+        "test": "testChineseKeyboard",
+        "result": "failed",
+        "seconds": 33.956
+      },
+      {
+        "test": "testRareObservationPresentation",
+        "result": "passed",
+        "seconds": 107.645
+      }
+    ],
+    "driver-largest-dm2.log": [
+      {
+        "test": "testAgentDMReturn",
+        "result": "failed",
+        "seconds": 39.665
+      },
+      {
+        "test": "testAppearance",
+        "result": "failed",
+        "seconds": 94.957
+      }
+    ],
+    "driver-final-dark-return.log": [
+      {
+        "test": "testAgentDMReturn",
+        "result": "passed",
+        "seconds": 26.891
+      },
+      {
+        "test": "testAppearance",
+        "result": "passed",
+        "seconds": 58.884
+      },
+      {
+        "test": "testPresentationSuspension",
+        "result": "passed",
+        "seconds": 86.417
+      }
+    ]
+  },
+  "openIntegration": [],
+  "limits": [
+    "Local public tests ran under Node 26; Node 24 CI also passed.",
+    "Core creation and observation evidence predates later shared routing integrations. Final combined appearance, strict DM, permissions and workspace have separate runs. Prerequisite real save/pair/create ran on 4ed9e909 before the lead permission-intent correction.",
+    "No real provider billing, production data, physical device, APNs remote delivery or VoiceOver session is claimed."
+  ],
+  "signing": "Local feature commits use per-command commit.gpgsign=false after interactive 1Password signer stalled. Global signing config unchanged.",
+  "nativeRunsNote": "Raw runner outcomes include superseded failures and rejected existence-only passes. Accepted evidence is listed in native-checks.json; exclusions are in integration.json."
+}
