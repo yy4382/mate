@@ -1,10 +1,21 @@
 import type { AgentView, CatalogModel } from "@mate/admin";
 import { router, Stack, useIsFocused } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { View } from "react-native";
 import { useSessionChat } from "../session";
 import { useTheme } from "../theme";
-import { Avatar, Button, Caption, Copy, Empty, Row, Screen, Section, Sheet } from "../ui";
+import {
+  Avatar,
+  Button,
+  Caption,
+  Copy,
+  Empty,
+  Row,
+  Screen,
+  Section,
+  Segmented,
+  Sheet,
+} from "../ui";
 import { stateLabel, type ReadableAgent } from "./Agents";
 import { NodeAccess } from "./NodeAccess";
 import { useClient, useManagementAccess, useOperation, useResource } from "./session";
@@ -134,7 +145,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
   const c = useTheme();
   const agents = useResource<AgentView[]>("/api/admin/agents", 5000);
   const operation = useOperation();
-  const [tab, setTab] = useState<"overview" | "watch" | "workspace">("overview");
+  const [tab, setTab] = useState<"总览" | "观察" | "工作区">("总览");
   const [management, setManagement] = useState<"menu" | "delete" | null>(null);
   const focused = useIsFocused();
   const focus = useRef(focused);
@@ -168,55 +179,13 @@ export function AgentDetail({ agentId }: { agentId: string }) {
     router.push({ pathname: paths[page], params: { id: agentId } });
   };
   const navigation = agent && agent.state !== "unreadable" && (
-    <View
-      accessibilityRole="tablist"
-      style={{
-        flexDirection: "row",
-        borderBottomWidth: 0.5,
-        borderColor: c.border,
-        paddingHorizontal: 16,
-      }}
-    >
-      {(
-        [
-          { key: "overview", title: "总览" },
-          { key: "watch", title: "观察" },
-          { key: "workspace", title: "工作区" },
-        ] as const
-      ).map((item) => (
-        <Pressable
-          key={item.key}
-          accessibilityRole="tab"
-          accessibilityState={{ selected: tab === item.key }}
-          onPress={() => setTab(item.key)}
-          style={{
-            flex: 1,
-            minHeight: 48,
-            alignItems: "center",
-            justifyContent: "center",
-            paddingVertical: 12,
-            borderBottomWidth: 2,
-            borderColor: tab === item.key ? c.accent : "transparent",
-          }}
-        >
-          <Text
-            style={{
-              color: tab === item.key ? c.accent : c.muted,
-              fontSize: 16,
-              fontWeight: tab === item.key ? "600" : "400",
-            }}
-          >
-            {item.title}
-          </Text>
-        </Pressable>
-      ))}
-    </View>
+    <Segmented value={tab} options={["总览", "观察", "工作区"] as const} onChange={setTab} />
   );
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <Stack.Screen
         options={{
-          title: tab === "overview" ? name : tab === "watch" ? `观察 · ${name}` : "工作区",
+          title: tab === "总览" ? name : tab === "观察" ? `观察 · ${name}` : "工作区",
           headerLargeTitle: false,
         }}
       />
@@ -230,7 +199,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
           管理 Agent
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
-      {tab === "watch" && agent && agent.state !== "unreadable" ? (
+      {tab === "观察" && agent && agent.state !== "unreadable" ? (
         agent.state === "open" ? (
           <Watch agentId={agentId} name={name} navigation={navigation} />
         ) : (
@@ -245,7 +214,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
             <Outcome operation={operation} />
           </Screen>
         )
-      ) : tab === "workspace" && agent && agent.state !== "unreadable" ? (
+      ) : tab === "工作区" && agent && agent.state !== "unreadable" ? (
         <Workspace
           agentId={agentId}
           name={name}
