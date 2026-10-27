@@ -88,7 +88,15 @@ export default function ConversationScreen() {
     "loading" | "positioning" | "done" | "missing" | "failed"
   >(seq === null ? "done" : "loading");
   const [destinationRetry, setDestinationRetry] = useState(0);
-  const jump = useRef<{ seq: number; attempts: number; measured: number } | null>(null);
+  const jump = useRef<{
+    seq: number;
+    attempts: number;
+    measured: number;
+    positioned: boolean;
+  } | null>(null);
+  const measuredEntries = useRef({ key: listKey, entries: new Set<number>() });
+  if (measuredEntries.current.key !== listKey)
+    measuredEntries.current = { key: listKey, entries: new Set<number>() };
   const frame = useRef<number | null>(null);
   const list = useRef<FlatList<Entry>>(null);
   const marked = useRef("");
@@ -106,6 +114,7 @@ export default function ConversationScreen() {
       setDestination("failed");
       return;
     }
+    target.positioned = measuredEntries.current.entries.has(target.seq);
     list.current?.scrollToIndex({ index, viewPosition: 1, animated: false });
   }, []);
   const schedulePosition = useCallback(() => {
@@ -127,7 +136,10 @@ export default function ConversationScreen() {
           ),
         };
         if (!jump.current) return;
-        if (viewableItems.some((item) => item.isViewable && item.item.seq === jump.current?.seq)) {
+        if (
+          jump.current.positioned &&
+          viewableItems.some((item) => item.isViewable && item.item.seq === jump.current?.seq)
+        ) {
           jump.current = null;
           setDestination("done");
         } else schedulePosition();
@@ -208,13 +220,9 @@ export default function ConversationScreen() {
     void chat.locate(ref, { seq }, cancel.signal).then((result) => {
       if (cancel.signal.aborted) return;
       if (result === "found") {
-        if (visibleEntries.current.key === listKey && visibleEntries.current.entries.has(seq))
-          setDestination("done");
-        else {
-          jump.current = { seq, attempts: 0, measured: -1 };
-          setDestination("positioning");
-          schedulePosition();
-        }
+        jump.current = { seq, attempts: 0, measured: -1, positioned: false };
+        setDestination("positioning");
+        schedulePosition();
       } else if (result !== "cancelled")
         setDestination(result === "missing" ? "missing" : "failed");
     });
@@ -413,6 +421,7 @@ export default function ConversationScreen() {
           onScrollToIndexFailed={({ index, averageItemLength, highestMeasuredFrameIndex }) => {
             if (activeList.current !== listKey) return;
             const target = jump.current;
+            if (target) target.positioned = false;
             if (target && highestMeasuredFrameIndex > target.measured) {
               target.measured = highestMeasuredFrameIndex;
               target.attempts = 0;
@@ -421,7 +430,13 @@ export default function ConversationScreen() {
           }}
           keyExtractor={(entry) => String(entry.seq)}
           onScroll={(event) => {
-            if (activeList.current === listKey) setBottom(event.nativeEvent.contentOffset.y < 80);
+            if (activeList.current !== listKey) return;
+            setBottom(event.nativeEvent.contentOffset.y < 80);
+            const target = jump.current;
+            if (target?.positioned && visibleEntries.current.entries.has(target.seq)) {
+              jump.current = null;
+              setDestination("done");
+            }
           }}
           scrollEventThrottle={100}
           onContentSizeChange={() => {
@@ -435,7 +450,16 @@ export default function ConversationScreen() {
           renderItem={({ item, index }) => {
             const previous = entries[entries.length - index - 2];
             return (
-              <View>
+              <View
+                onLayout={() => {
+                  if (activeList.current !== listKey) return;
+                  measuredEntries.current.entries.add(item.seq);
+                  if (jump.current?.seq === item.seq) {
+                    jump.current.positioned = false;
+                    schedulePosition();
+                  }
+                }}
+              >
                 {(!previous ||
                   new Date(previous.at).toDateString() !== new Date(item.at).toDateString()) && (
                   <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 }}>
