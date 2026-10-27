@@ -1,7 +1,6 @@
 import { router } from "expo-router";
 import { useHuman, useClient } from "../../../admin/session";
-import { Avatar, Row, Screen, Section, ConfirmButton } from "../../../ui";
-import { auth } from "../../../auth-native";
+import { Avatar, Row, Screen, Section } from "../../../ui";
 export default function SettingsScreen() {
   const human = useHuman();
   const client = useClient();
@@ -17,8 +16,7 @@ export default function SettingsScreen() {
           onPress={() => router.push("/profile")}
         />
       </Section>
-      <Section title="个人">
-        <Row title="个人资料与密码" onPress={() => router.push("/profile")} />
+      <Section>
         <Row title="通知" onPress={() => router.push("/notifications")} />
       </Section>
       {human.role === "admin" && (
@@ -30,21 +28,13 @@ export default function SettingsScreen() {
           />
         </Section>
       )}
-      <Section title="当前服务器">
+      <Section title="连接">
         <Row
-          title={new URL(access.session.server).host}
-          subtitle="账号与连接"
+          title="账号与连接"
+          subtitle={new URL(access.session.server).host}
           onPress={() => router.push("/connection")}
         />
       </Section>
-      <ConfirmButton
-        title="退出登录"
-        question="退出当前登录？"
-        message={`@${human.handle} 的聊天与创建草稿会清除。先取消通知登记，再清理本机登录。`}
-        confirmLabel="退出登录"
-        danger
-        onConfirm={() => void auth.logout()}
-      />
     </Screen>
   );
 }

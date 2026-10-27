@@ -57,12 +57,28 @@ describe("mobile authentication public interface", () => {
       "https://name:secret@mate.example.com",
       "https://mate.example.com/app",
       "https://mate.example.com/?key=value",
+      "https://mate.example.com/#section",
+      "https://",
     ]) {
       await auth.changeServer(address);
       expect(auth.getSnapshot().kind).toBe("server");
       expect(p.preferences).toBeNull();
     }
     await auth.changeServer("  https://mate.example.com/  ");
+    expect(p.preferences).toEqual({ server, restore: false });
+    expect(p.calls).toEqual([]);
+  });
+
+  it.each([
+    "https://mate.example.com",
+    "https://mate.example.com/",
+    " HTTPS://MATE.EXAMPLE.COM:443/ ",
+  ])("canonicalizes the HTTPS origin %s", async (address) => {
+    const p = platform();
+    const auth = new MobileAuth(p.port);
+    await auth.start();
+    await auth.changeServer(address);
+    expect(auth.getSnapshot()).toMatchObject({ kind: "signed-out", server });
     expect(p.preferences).toEqual({ server, restore: false });
     expect(p.calls).toEqual([]);
   });

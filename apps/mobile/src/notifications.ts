@@ -18,7 +18,19 @@ type Registrations = z.output<typeof Registrations>;
 export type NotificationState = {
   kind: "signed-out" | "checking" | "disabled" | "enabled" | "denied" | "unavailable";
   message: string;
+  permission: NotificationPermission | "unknown";
+  server: "unknown" | "available" | "unconfigured" | "mismatch";
+  registration: "none" | "unconfirmed" | "registered";
+  pendingCancellations: number;
+  localCleanup: "unknown" | "complete" | "unconfirmed";
 };
+const uncheckedFacts = {
+  permission: "unknown",
+  server: "unknown",
+  registration: "none",
+  pendingCancellations: 0,
+  localCleanup: "unknown",
+} satisfies Omit<NotificationState, "kind" | "message">;
 export type NotificationsPlatform = {
   read(): unknown;
   write(value: Registrations | null): void;
@@ -48,7 +60,11 @@ function sameRegistration(a: Registration, b: Registration): boolean {
 
 /** Owns the active registration and every unconfirmed cancellation across auth transitions. */
 export class MobileNotifications {
-  private state: NotificationState = { kind: "signed-out", message: "请先登录。" };
+  private state: NotificationState = {
+    kind: "signed-out",
+    message: "请先登录。",
+    ...uncheckedFacts,
+  };
   private listeners = new Set<() => void>();
   private session: NotificationSession | null = null;
   private verified: NotificationSession | null = null;
@@ -83,8 +99,27 @@ export class MobileNotifications {
     };
   };
 
-  private publish(kind: NotificationState["kind"], message: string) {
-    this.state = { ...this.state, kind, message };
+  private publish(
+    kind: NotificationState["kind"],
+    message: string,
+    facts: Partial<
+      Omit<NotificationState, "kind" | "message" | "registration" | "pendingCancellations">
+    > = {},
+  ) {
+    const registration = this.registrations.current;
+    this.state = {
+      ...this.state,
+      ...facts,
+      kind,
+      message,
+      registration:
+        registration && same(this.session, registration)
+          ? kind === "enabled"
+            ? "registered"
+            : "unconfirmed"
+          : "none",
+      pendingCancellations: this.registrations.cleanup.length,
+    };
     this.listeners.forEach((listener) => listener());
   }
 
@@ -99,7 +134,11 @@ export class MobileNotifications {
       ++this.generation;
       this.request?.abort();
       this.session = session;
-      this.publish(session ? "checking" : "signed-out", session ? "正在检查通知…" : "请先登录。");
+      this.publish(
+        session ? "checking" : "signed-out",
+        session ? "正在检查通知…" : "请先登录。",
+        uncheckedFacts,
+      );
     }
     if (session) {
       this.verified = session;
@@ -152,8 +191,10 @@ export class MobileNotifications {
 
   refresh(): Promise<void> {
     return this.run(async (session, current) => {
+      this.publish("checking", "正在检查通知…");
       const permission = await this.platform.permission(false);
       if (!current()) return;
+      this.publish(this.state.kind, this.state.message, { permission });
       if (permission === "denied") {
         const message = await this.remove(session);
         if (current())
@@ -164,6 +205,14 @@ export class MobileNotifications {
       if (!current()) return;
       const capability = NativePushCapability.parse(await this.http(session, "native"));
       if (!current()) return;
+      this.publish(this.state.kind, this.state.message, {
+        server: !capability.enabled
+          ? "unconfigured"
+          : capability.server !== session.server ||
+              capability.environment !== this.platform.environment
+            ? "mismatch"
+            : "available",
+      });
       if (!capability.enabled) {
         this.publish(
           "unavailable",
@@ -203,6 +252,7 @@ export class MobileNotifications {
       this.publish("checking", "正在开启通知…");
       const permission = await this.platform.permission(true);
       if (!current()) return;
+      this.publish(this.state.kind, this.state.message, { permission });
       if (permission === "denied" || permission === "undetermined") {
         const message = await this.remove(session);
         if (current())
@@ -211,6 +261,14 @@ export class MobileNotifications {
       }
       const capability = NativePushCapability.parse(await this.http(session, "native"));
       if (!current()) return;
+      this.publish(this.state.kind, this.state.message, {
+        server: !capability.enabled
+          ? "unconfigured"
+          : capability.server !== session.server ||
+              capability.environment !== this.platform.environment
+            ? "mismatch"
+            : "available",
+      });
       if (!capability.enabled) {
         this.publish(
           "unavailable",
@@ -315,10 +373,14 @@ export class MobileNotifications {
     try {
       await this.platform.unregister();
       await this.platform.dismiss();
+      this.publish(this.state.kind, this.state.message, { localCleanup: "complete" });
     } catch {
+      this.publish(this.state.kind, this.state.message, { localCleanup: "unconfirmed" });
       message = "本机通知清理未确认，请在 iOS 设置中关闭通知。";
     }
-    return message + (await this.retire(session));
+    const cancellation = await this.retire(session);
+    this.publish(this.state.kind, this.state.message);
+    return message + cancellation;
   }
 
   disable(): Promise<void> {
@@ -336,7 +398,7 @@ export class MobileNotifications {
     this.request?.abort();
     this.tap = undefined;
     this.opened.clear();
-    this.publish("signed-out", "请先登录。");
+    this.publish("signed-out", "请先登录。", uncheckedFacts);
     await this.pending;
     const message = await this.remove(this.verified);
     this.verified = null;
