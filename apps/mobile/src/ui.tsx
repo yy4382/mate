@@ -291,7 +291,12 @@ export function Avatar({
         justifyContent: "center",
       }}
     >
-      <Text style={{ color: c.accent, fontWeight: "600", fontSize: size * 0.48 }}>{mark}</Text>
+      <Text
+        allowFontScaling={false}
+        style={{ color: c.accent, fontWeight: "600", fontSize: size * 0.48 }}
+      >
+        {mark}
+      </Text>
     </View>
   );
 }

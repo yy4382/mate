@@ -1,109 +1,98 @@
 import { useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
 import {
+  ActivityIndicator,
   Keyboard,
   KeyboardAvoidingView,
-  Pressable,
   ScrollView,
-  StyleSheet,
-  Text,
   TextInput,
+  Text,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Redirect, router } from "expo-router";
+import { Redirect } from "expo-router";
 import { auth } from "../auth-native";
 import { useTheme } from "../theme";
-
-function Button({
-  title,
-  onPress,
-  disabled = false,
-  secondary = false,
-}: {
-  title: string;
-  onPress(): void;
-  disabled?: boolean;
-  secondary?: boolean;
-}) {
-  const colors = useTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.button,
-        {
-          backgroundColor: secondary ? colors.background : colors.foreground,
-          borderColor: colors.border,
-          opacity: disabled ? 0.45 : pressed ? 0.7 : 1,
-        },
-      ]}
-    >
-      <Text
-        style={[styles.buttonText, { color: secondary ? colors.foreground : colors.background }]}
-      >
-        {title}
-      </Text>
-    </Pressable>
-  );
-}
+import {
+  Avatar,
+  Button,
+  Caption,
+  Card,
+  ConfirmButton,
+  Copy,
+  ErrorLine,
+  Field,
+  Heading,
+  PresentationAccess,
+  Row,
+  Section,
+} from "../ui";
 
 function ServerForm({
   initial,
   message,
   onClose,
-  onCancel,
 }: {
   initial: string;
   message: string;
   onClose(): void;
-  onCancel?: () => void;
 }) {
-  const colors = useTheme();
   const [address, setAddress] = useState(initial);
+  const [busy, setBusy] = useState(false);
   const save = async () => {
+    if (busy) return;
     Keyboard.dismiss();
+    setBusy(true);
     await auth.changeServer(address);
+    setBusy(false);
     if (auth.getSnapshot().kind !== "server") onClose();
   };
   return (
     <>
-      <Text accessibilityRole="header" style={[styles.title, { color: colors.foreground }]}>
-        连接服务器
-      </Text>
-      <Text style={[styles.description, { color: colors.muted }]}>
-        输入你使用的 Mate 服务器地址。此设备只保存一个地址，更换后需要重新登录。
-      </Text>
-      <Text style={[styles.label, { color: colors.foreground }]}>服务器地址</Text>
-      <TextInput
-        accessibilityLabel="服务器地址"
-        testID="server-address"
-        value={address}
-        onChangeText={setAddress}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-        textContentType="URL"
-        placeholder="https://mate.example.com"
-        placeholderTextColor={colors.muted}
-        returnKeyType="go"
-        onSubmitEditing={() => void save()}
-        style={[styles.input, { color: colors.foreground, borderColor: colors.border }]}
-      />
-      <Message text={message} />
-      <Button title="保存服务器" disabled={!address.trim()} onPress={() => void save()} />
-      {onCancel && <Button title="取消" secondary onPress={onCancel} />}
+      <Heading>{initial ? "更换服务器" : "连接 Mate"}</Heading>
+      <Copy muted>输入你的 Mate 服务器地址，使用人类账号登录。</Copy>
+      <Card>
+        <Field
+          label="服务器地址"
+          testID="server-address"
+          value={address}
+          onChangeText={setAddress}
+          editable={!busy}
+          keyboardType="url"
+          textContentType="URL"
+          placeholder="https://mate.example.com"
+          hint="使用 HTTPS 地址，不含账号、路径或查询参数。"
+          returnKeyType="done"
+          onSubmitEditing={Keyboard.dismiss}
+        />
+        <ErrorLine text={message} />
+      </Card>
+      {initial ? (
+        <ConfirmButton
+          title="保存服务器"
+          question="更换服务器？"
+          message="当前登录会退出，本次登录的草稿会清除。你需要在新服务器重新登录。"
+          confirmLabel="更换并退出"
+          disabled={busy || !address.trim()}
+          onConfirm={() => void save()}
+        />
+      ) : (
+        <Button
+          title={busy ? "正在连接…" : "保存服务器"}
+          primary
+          disabled={busy || !address.trim()}
+          onPress={() => void save()}
+        />
+      )}
+      {initial && <Button title="取消" disabled={busy} onPress={onClose} />}
     </>
   );
 }
 
 function LoginForm({ busy, message }: { busy: boolean; message: string }) {
-  const colors = useTheme();
   const [handle, setHandle] = useState("");
   const [password, setPassword] = useState("");
   const passwordField = useRef<ComponentRef<typeof TextInput>>(null);
+  const c = useTheme();
   const submit = () => {
     if (busy || !handle.trim() || !password) return;
     Keyboard.dismiss();
@@ -112,43 +101,54 @@ function LoginForm({ busy, message }: { busy: boolean; message: string }) {
   };
   return (
     <>
-      <Text accessibilityRole="header" style={[styles.title, { color: colors.foreground }]}>
-        登录 Mate
-      </Text>
-      <Text style={[styles.label, { color: colors.foreground }]}>Handle</Text>
-      <TextInput
-        accessibilityLabel="Handle"
-        testID="login-handle"
-        value={handle}
-        onChangeText={setHandle}
-        editable={!busy}
-        autoCapitalize="none"
-        autoCorrect={false}
-        textContentType="username"
-        returnKeyType="next"
-        onSubmitEditing={() => passwordField.current?.focus()}
-        submitBehavior="submit"
-        style={[styles.input, { color: colors.foreground, borderColor: colors.border }]}
-      />
-      <Text style={[styles.label, { color: colors.foreground }]}>密码</Text>
-      <TextInput
-        ref={passwordField}
-        accessibilityLabel="密码"
-        testID="login-password"
-        value={password}
-        onChangeText={setPassword}
-        editable={!busy}
-        secureTextEntry
-        autoCapitalize="none"
-        autoCorrect={false}
-        textContentType="password"
-        returnKeyType="go"
-        onSubmitEditing={submit}
-        style={[styles.input, { color: colors.foreground, borderColor: colors.border }]}
-      />
-      <Message text={message} />
+      <Heading>登录 Mate</Heading>
+      <Copy muted>使用这台服务器上的人类账号。</Copy>
+      <Card>
+        <Field
+          label="Handle"
+          testID="login-handle"
+          value={handle}
+          onChangeText={setHandle}
+          editable={!busy}
+          textContentType="username"
+          returnKeyType="next"
+          onSubmitEditing={() => passwordField.current?.focus()}
+          submitBehavior="submit"
+        />
+        <View style={{ gap: 6 }}>
+          <Text style={{ fontSize: 15, fontWeight: "500", color: c.muted }}>密码</Text>
+          <TextInput
+            ref={passwordField}
+            accessibilityLabel="密码"
+            testID="login-password"
+            value={password}
+            onChangeText={setPassword}
+            editable={!busy}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="password"
+            returnKeyType="go"
+            onSubmitEditing={submit}
+            style={{
+              minHeight: 48,
+              padding: 12,
+              borderRadius: 10,
+              fontSize: 17,
+              color: c.foreground,
+              backgroundColor: c.subtle,
+            }}
+          />
+        </View>
+        {message !== "" && (
+          <View accessibilityRole="alert">
+            <Copy>{message}</Copy>
+          </View>
+        )}
+      </Card>
       <Button
         title={busy ? "正在登录…" : "登录"}
+        primary
         disabled={busy || !handle.trim() || !password}
         onPress={submit}
       />
@@ -156,146 +156,129 @@ function LoginForm({ busy, message }: { busy: boolean; message: string }) {
   );
 }
 
-function Message({ text }: { text: string }) {
-  const colors = useTheme();
-  return text ? (
-    <Text accessibilityRole="alert" style={[styles.description, { color: colors.foreground }]}>
-      {text}
-    </Text>
-  ) : null;
-}
-
 export default function HomeScreen({ account = false }: { account?: boolean }) {
-  const colors = useTheme();
+  const c = useTheme();
   const state = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
   const [editingServer, setEditingServer] = useState(false);
   const server = "server" in state ? state.server : "";
   const clearing = state.kind === "clearing";
-
   if (state.kind === "signed-in" && !account && !editingServer) return <Redirect href="/chat" />;
-
-  return (
-    <SafeAreaView style={styles.screen} edges={["left", "right", "bottom"]}>
-      <KeyboardAvoidingView style={styles.screen} behavior="padding" keyboardVerticalOffset={100}>
+  const content = (
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: c.grouped }}
+      edges={
+        account && state.kind === "signed-in"
+          ? ["left", "right"]
+          : ["top", "left", "right", "bottom"]
+      }
+    >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
         <ScrollView
+          contentInsetAdjustmentBehavior="automatic"
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
-          contentContainerStyle={styles.content}
+          contentContainerStyle={{
+            padding: 20,
+            paddingBottom: 40,
+            gap: 24,
+            maxWidth: 720,
+            width: "100%",
+            alignSelf: "center",
+          }}
         >
-          <View
-            style={[styles.card, { backgroundColor: colors.subtle, borderColor: colors.border }]}
-          >
-            {(editingServer || state.kind === "server") && !clearing ? (
-              <ServerForm
-                initial={server}
-                message={state.kind === "server" ? state.message : ""}
-                onClose={() => setEditingServer(false)}
-                {...(server ? { onCancel: () => setEditingServer(false) } : {})}
-              />
-            ) : (
-              <>
-                {(state.kind === "starting" || state.kind === "checking" || clearing) && (
-                  <Message text={clearing ? "正在清理本机登录…" : "正在验证登录…"} />
-                )}
-                {(state.kind === "signed-out" || state.kind === "logging-in") && (
-                  <LoginForm
-                    key={server}
-                    busy={state.kind === "logging-in"}
-                    message={state.kind === "signed-out" ? state.message : ""}
+          {(editingServer || state.kind === "server") && !clearing ? (
+            <ServerForm
+              initial={server}
+              message={state.kind === "server" ? state.message : ""}
+              onClose={() => setEditingServer(false)}
+            />
+          ) : (
+            <>
+              {(state.kind === "starting" || state.kind === "checking" || clearing) && (
+                <View style={{ gap: 20, paddingVertical: 48, alignItems: "center" }}>
+                  <ActivityIndicator />
+                  <Heading>{clearing ? "正在退出登录" : "正在验证身份"}</Heading>
+                  <Copy muted>
+                    {clearing ? "正在完成退出，请稍候。" : "验证后继续原来的任务。"}
+                  </Copy>
+                </View>
+              )}
+              {(state.kind === "signed-out" || state.kind === "logging-in") && (
+                <LoginForm
+                  key={server}
+                  busy={state.kind === "logging-in"}
+                  message={state.kind === "signed-out" ? state.message : ""}
+                />
+              )}
+              {state.kind === "signed-in" && (
+                <>
+                  <Section>
+                    <Row
+                      title={state.human.displayName}
+                      subtitle={`@${state.human.handle} · ${state.human.role === "admin" ? "管理员" : "普通人类"}`}
+                      leading={<Avatar name={state.human.displayName} />}
+                    />
+                  </Section>
+                  <Section title="当前连接">
+                    <Row title="服务器" subtitle={server} />
+                    <Row title="账号 ID" value={String(state.human.accountId)} />
+                    <Row title="重新验证登录" onPress={() => void auth.revalidate()} />
+                  </Section>
+                </>
+              )}
+              {state.kind === "unavailable" && (
+                <>
+                  <Heading>暂时无法连接</Heading>
+                  <ErrorLine text={state.message} />
+                  <Button title="重试连接" primary onPress={() => void auth.retry()} />
+                </>
+              )}
+              {server && !clearing && (
+                <Section title={state.kind === "signed-in" ? "账号" : "服务器"}>
+                  {state.kind !== "signed-in" && (
+                    <Row title={new URL(server).host} subtitle={server} />
+                  )}
+                  <Row
+                    title="更换服务器"
+                    disabled={state.kind === "logging-in"}
+                    onPress={() => setEditingServer(true)}
+                  />
+                </Section>
+              )}
+              {server &&
+                (state.kind === "signed-in" ||
+                  state.kind === "unavailable" ||
+                  state.kind === "checking") && (
+                  <ConfirmButton
+                    title="退出登录"
+                    question="退出当前登录？"
+                    message="本次登录的聊天与创建草稿会清除。再次使用时需要重新登录。"
+                    confirmLabel="退出登录"
+                    danger
+                    onConfirm={() => void auth.logout()}
                   />
                 )}
-                {state.kind === "signed-in" && (
-                  <>
-                    <Text
-                      accessibilityRole="header"
-                      style={[styles.title, { color: colors.foreground }]}
-                    >
-                      当前身份
-                    </Text>
-                    <Text selectable style={[styles.identity, { color: colors.foreground }]}>
-                      {state.human.displayName}
-                    </Text>
-                    <Text selectable style={[styles.description, { color: colors.foreground }]}>
-                      Handle：{state.human.handle}
-                    </Text>
-                    <Text style={[styles.description, { color: colors.foreground }]}>
-                      角色：{state.human.role === "admin" ? "管理员" : "普通人类"}
-                    </Text>
-                    <Text style={[styles.description, { color: colors.muted }]}>
-                      账号 ID：{state.human.accountId} · {state.human.active ? "有效" : "已停用"}
-                    </Text>
-                    <Button
-                      title="通知设置"
-                      secondary
-                      onPress={() => router.push("/notifications")}
-                    />
-                    <Button title="重新验证登录" secondary onPress={() => void auth.revalidate()} />
-                    <Button title="个人资料" onPress={() => router.push("/profile")} />
-                    {state.human.role === "admin" && (
-                      <Button title="管理" onPress={() => router.push("/admin")} />
-                    )}
-                  </>
-                )}
-                {state.kind === "unavailable" && (
-                  <>
-                    <Message text={state.message} />
-                    <Button title="重试连接" onPress={() => void auth.retry()} />
-                  </>
-                )}
-                {server && (
-                  <>
-                    <Text selectable style={[styles.description, { color: colors.muted }]}>
-                      {server}
-                    </Text>
-                    <Button
-                      title="更换服务器"
-                      secondary
-                      disabled={clearing}
-                      onPress={() => setEditingServer(true)}
-                    />
-                    {(state.kind === "signed-in" ||
-                      state.kind === "unavailable" ||
-                      state.kind === "checking") && (
-                      <Button
-                        title="退出登录"
-                        secondary
-                        disabled={clearing}
-                        onPress={() => void auth.logout()}
-                      />
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </View>
+              {state.kind === "signed-out" && (
+                <Caption>密码只用于此次登录，不会保存在本机。</Caption>
+              )}
+            </>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
+  return state.kind === "signed-in" ? (
+    content
+  ) : (
+    <PresentationAccess.Provider
+      value={
+        state.kind === "signed-out" ||
+        state.kind === "server" ||
+        state.kind === "unavailable" ||
+        state.kind === "checking"
+      }
+    >
+      {content}
+    </PresentationAccess.Provider>
+  );
 }
-
-const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  content: {
-    paddingHorizontal: 16,
-    paddingVertical: 24,
-    maxWidth: 576,
-    width: "100%",
-    alignSelf: "center",
-  },
-  card: { padding: 24, borderWidth: 1, borderRadius: 8, gap: 16 },
-  title: { fontSize: 24, fontWeight: "600" },
-  identity: { fontSize: 22, fontWeight: "600" },
-  description: { fontSize: 16, flexShrink: 1 },
-  label: { fontSize: 16, fontWeight: "500" },
-  input: { minHeight: 48, borderWidth: 1, borderRadius: 6, padding: 12, fontSize: 17 },
-  button: {
-    minHeight: 48,
-    padding: 12,
-    borderWidth: 1,
-    borderRadius: 6,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  buttonText: { fontSize: 17, fontWeight: "600", textAlign: "center" },
-});
