@@ -315,9 +315,10 @@ export default function ConversationScreen() {
           <Stack.Toolbar.Button
             icon="chevron.left"
             accessibilityLabel="返回 Agent 总览"
-            onPress={() =>
-              router.dismissTo({ pathname: "/agents/[id]", params: { id: agentReturn } })
-            }
+            onPress={() => {
+              if (router.canDismiss()) router.dismiss();
+              router.navigate({ pathname: "/agents/[id]", params: { id: agentReturn } });
+            }}
           >
             Agent
           </Stack.Toolbar.Button>
@@ -409,6 +410,7 @@ export default function ConversationScreen() {
           ref={list}
           data={[...entries].reverse()}
           inverted
+          onLayout={schedulePosition}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
           maintainVisibleContentPosition={
@@ -565,18 +567,21 @@ export default function ConversationScreen() {
             />
           </View>
         ) : null}
-        {!bottom && !composing && destination === "done" && (
-          <Button
-            title={count ? `${count} 条未读 · 回到最新消息` : "回到最新消息"}
-            onPress={() => {
-              if (seq !== null) router.setParams({ seq: undefined });
-              else {
-                list.current?.scrollToOffset({ offset: 0, animated: false });
-                setBottom(true);
-              }
-            }}
-          />
-        )}
+        {!composing &&
+          (seq !== null
+            ? destination !== "missing" && destination !== "failed"
+            : !bottom && destination === "done") && (
+            <Button
+              title={count ? `${count} 条未读 · 回到最新消息` : "回到最新消息"}
+              onPress={() => {
+                if (seq !== null) router.setParams({ seq: undefined });
+                else {
+                  list.current?.scrollToOffset({ offset: 0, animated: false });
+                  setBottom(true);
+                }
+              }}
+            />
+          )}
         {canWrite ? (
           <ChatComposer
             draft={draft}
