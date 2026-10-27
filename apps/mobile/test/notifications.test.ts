@@ -185,8 +185,14 @@ describe("native notification lifecycle public interface", () => {
     const f = fixture();
     await f.app.setSession(session);
     expect(f.app.getSnapshot().kind).toBe("disabled");
+    expect(f.app.getSnapshot()).toMatchObject({
+      permission: "allowed",
+      server: "available",
+      registration: "none",
+    });
     await f.app.enable();
     expect(f.app.getSnapshot().kind).toBe("enabled");
+    expect(f.app.getSnapshot().registration).toBe("registered");
     expect(f.saved).toMatchObject({
       current: {
         ...session,
@@ -196,6 +202,11 @@ describe("native notification lifecycle public interface", () => {
     expect(f.calls.at(-1)).toMatchObject({ path: session.server + "/api/chat/push/subscribe" });
     await f.app.disable();
     expect(f.saved).toBeNull();
+    expect(f.app.getSnapshot()).toMatchObject({
+      registration: "none",
+      pendingCancellations: 0,
+      localCleanup: "complete",
+    });
     expect(f.app.shouldPresent(f.notice())).toBe(false);
     expect(f.unregistered).toBe(1);
     expect(f.dismissed).toBe(1);
@@ -207,6 +218,11 @@ describe("native notification lifecycle public interface", () => {
     await f.app.setSession(session);
     await f.app.enable();
     expect(f.app.getSnapshot().kind).toBe("unavailable");
+    expect(f.app.getSnapshot()).toMatchObject({
+      permission: "allowed",
+      server: "unconfigured",
+      registration: "none",
+    });
     expect(f.tokenRequests).toBe(0);
     expect(f.saved).toBeNull();
   });
@@ -217,6 +233,7 @@ describe("native notification lifecycle public interface", () => {
     await f.app.setSession(session);
     await f.app.enable();
     expect(f.app.getSnapshot().kind).toBe("denied");
+    expect(f.app.getSnapshot()).toMatchObject({ permission: "denied", server: "unknown" });
     expect(f.tokenRequests).toBe(0);
     f.permission("quiet");
     await f.app.enable();
@@ -238,6 +255,11 @@ describe("native notification lifecycle public interface", () => {
     expect(message).toContain("未能确认服务器取消订阅");
     expect(f.saved?.current).toBeNull();
     expect(f.saved?.cleanup).toHaveLength(1);
+    expect(f.app.getSnapshot()).toMatchObject({
+      registration: "none",
+      pendingCancellations: 1,
+      localCleanup: "complete",
+    });
     expect(f.unregistered).toBe(1);
     f.app.response(old);
     expect(f.opened).toEqual([]);
@@ -295,6 +317,10 @@ describe("native notification lifecycle public interface", () => {
     f.lostAcknowledgements.add("cd".repeat(32));
     await f.app.tokenChanged("cd".repeat(32));
     expect(f.app.getSnapshot().kind).toBe("unavailable");
+    expect(f.app.getSnapshot()).toMatchObject({
+      registration: "unconfirmed",
+      pendingCancellations: 1,
+    });
     expect((await f.post()).sort()).toEqual(["ab".repeat(32), "cd".repeat(32)]);
     const restored = new MobileNotifications(f.platform);
     await restored.setSession(f.scope);
