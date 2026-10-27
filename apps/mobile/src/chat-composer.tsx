@@ -6,7 +6,7 @@ import { useTheme } from "./theme";
 export function ChatComposer({
   draft,
   accounts,
-  inThread,
+  destination,
   onEdit,
   onSend,
   onAbandon,
@@ -14,7 +14,7 @@ export function ChatComposer({
 }: {
   draft: Draft;
   accounts: readonly AccountView[];
-  inThread: boolean;
+  destination: string;
   onEdit(text: string): void;
   onSend(): void;
   onAbandon(): void;
@@ -92,7 +92,7 @@ export function ChatComposer({
           <Field
             testID="message-composer"
             accessibilityLabel="消息"
-            placeholder={!inThread ? "发送消息…" : "回复讨论串…"}
+            placeholder={destination}
             multiline
             value={draft.text}
             onChangeText={(text) => onEdit(text)}
