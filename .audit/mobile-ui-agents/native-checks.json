@@ -1,0 +1,124 @@
+{
+  "appCodeCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+  "acceptedNative": [
+    {
+      "run": "final-permission",
+      "test": "testAgentDMReturn",
+      "result": "passed",
+      "seconds": 34.803
+    },
+    {
+      "run": "final-permission",
+      "test": "testAppearance",
+      "result": "passed",
+      "seconds": 57.994
+    },
+    {
+      "run": "final-permission2",
+      "test": "testCanonicalAgentPermissions",
+      "result": "passed",
+      "seconds": 60.611
+    },
+    {
+      "run": "final-dark-return",
+      "test": "testAgentDMReturn",
+      "result": "passed",
+      "seconds": 26.891
+    },
+    {
+      "run": "final-dark-return",
+      "test": "testAppearance",
+      "result": "passed",
+      "seconds": 58.884
+    },
+    {
+      "run": "final-dark-return",
+      "test": "testPresentationSuspension",
+      "result": "passed",
+      "seconds": 86.417
+    },
+    {
+      "run": "final-largest",
+      "test": "testAgentDMReturn",
+      "result": "passed",
+      "seconds": 33.925
+    },
+    {
+      "run": "final-largest2",
+      "test": "testAppearance",
+      "result": "passed",
+      "seconds": 67.702
+    },
+    {
+      "run": "final-workspace",
+      "test": "testWorkspaceFlows",
+      "result": "passed",
+      "seconds": 63.443
+    },
+    {
+      "run": "prerequisites2",
+      "test": "testPrerequisiteRoundTrip",
+      "result": "passed",
+      "seconds": 217.255
+    },
+    {
+      "run": "recovery1",
+      "test": "testCreationRecovery",
+      "result": "passed",
+      "seconds": 215.596
+    },
+    {
+      "run": "recovery1",
+      "test": "testObservationFlows",
+      "result": "passed",
+      "seconds": 97.488
+    },
+    {
+      "run": "flows2",
+      "test": "testAreaFlows",
+      "result": "passed",
+      "seconds": 97.265
+    },
+    {
+      "run": "boundaries2",
+      "test": "testDeleteUnreadable",
+      "result": "passed",
+      "seconds": 24.479
+    },
+    {
+      "run": "boundaries3",
+      "test": "testRareObservationPresentation",
+      "result": "passed",
+      "seconds": 107.645
+    },
+    {
+      "run": "identity2",
+      "test": "testIdentityIsolation",
+      "result": "passed",
+      "seconds": 269.352
+    },
+    {
+      "run": "identity-ime",
+      "test": "testChineseKeyboard",
+      "result": "passed",
+      "seconds": 37.967
+    },
+    {
+      "run": "model-search",
+      "test": "testModelSearchAndCancel",
+      "result": "passed",
+      "seconds": 44.726
+    }
+  ],
+  "publicInterface": {
+    "command": "pnpm test apps/mobile/test",
+    "files": 6,
+    "passed": 73,
+    "hostNode": "26",
+    "logSha256": "f642786f4a098b9b030e020cf8698a7c6c6d8396012bd74bdfb5faa333fb9e5c"
+  },
+  "recovery": "7 created IDs re-read from their submitted disposable server; same UUID for retry/reconciliation; exactly one Agent per successful identity. See uuid-recovery.json and created-agent-confirmations.json.",
+  "assertionScope": "Strict DM return requires Agent management menu and pause action hittable, with chat composer absent. Auth suspension establishes presentations before hiding them. Member permissions require a visible explanation and absent Agent management controls.",
+  "rareObservation": "Synthetic existing wire variants only; real main/work-assistant, SSE stream/end/reconnect and tool readouts verified separately.",
+  "independentReview": "Not performed by this implementation owner. Coordinator owns review and merge."
+}

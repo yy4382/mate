@@ -1,0 +1,33 @@
+{
+  "sharedCheckpoint": "0aabd39b951329b3fcd57bb29716baed77f17133",
+  "checkpointTree": "4212860a76c1582d8e5acee6345e4406db0b0d3f",
+  "baseBranch": "feat/mobile-ui-chat",
+  "acceptedLeadBase": "c85ae640a5c4abf0c8f07a0e004463a7cb4f12ae",
+  "appCodeCommit": "ad60e2790c02a70cf13bfa22ab88b535fb1a12eb",
+  "prerequisiteDependency": {
+    "owner": "2d055f2a-fed6-4d5d-9654-6b174fc6792c",
+    "sourceCommit": "3a8d45a611e2d2176e52ca9a9276b26558d2ff34",
+    "exactFiles": [
+      "apps/mobile/src/admin/Providers.tsx",
+      "apps/mobile/src/admin/Nodes.tsx",
+      "apps/mobile/src/app/(signed-in)/(settings)/admin/nodes/[id].tsx",
+      "apps/mobile/src/app/(signed-in)/(settings)/admin/providers/[provider].tsx",
+      "apps/mobile/src/app/(signed-in)/(settings)/admin/providers/catalog.tsx"
+    ],
+    "callbacks": ["Providers.onOpenProvider", "ProviderDetail.onOpenCatalog", "Nodes.onOpenNode"],
+    "agentRoot": "/agents/prerequisites"
+  },
+  "prerequisiteNative": "prerequisites2 PASS; real provider credential save/catalog and Node pair/rename, auth suspension drafts and exact original creation fields, then actual create on server B. Later lead permission-intent merge changes external entry only. Internal callbacks and all five dependency files remain identical.",
+  "routes": "All new owned nested routes use /agents. Only three baseline guarded legacy leaves remain. No duplicate nested route tree.",
+  "dm": "AgentDetail passes sourceAgent to existing shared conversation. Lead owns native Back, dismiss then navigate. Strict final test operates Agent management menu and confirms message composer absent.",
+  "permissions": "Lead canonical-intent fix merged ordinarily. Combined Release permissions checked separately; no Agent root, auth, session, lifecycle or notification core changes authored by this area.",
+  "review": "Independent review and merge are coordinator-owned. No independent verdict claimed.",
+  "excludedEvidence": [
+    "Old largest-return and final-integration DM existence-only passes are rejected. Cached inactive Agent elements made those checks insufficient. Use final strict current-view checks.",
+    "Initial recovery1 suspension did not establish selector presentation. Final suspension establishes presented preconditions and verifies hidden controls plus same-identity restoration.",
+    "Initial prerequisite failure was a driver tap on a keyboard-obscured row. Final prerequisites2 dismisses keyboard and verifies actual in-viewport controls.",
+    "First final-largest appearance failure followed custom driver drags that left the editor. Final-largest2 uses normal swipes and the visible header close action. No product fix was inferred from that driver failure.",
+    "First combined permission test used an exact label without the UI Chinese period. The focused final-permission2 rerun matches the actual label and requires hittability."
+  ],
+  "signing": "Feature commits use per-command commit.gpgsign=false because the interactive 1Password signer stalled. Global signing configuration unchanged."
+}

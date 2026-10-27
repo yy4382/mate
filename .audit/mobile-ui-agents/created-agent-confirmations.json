@@ -1,0 +1,80 @@
+[
+  {
+    "server": "chat_a",
+    "agentId": "1b47c932-c995-4ffd-ab5a-4474d76e6fb7",
+    "handle": "recover_1793050900",
+    "state": "open",
+    "nodeId": "a37c83d0-46a9-4640-a978-9b697d6474db",
+    "model": {
+      "provider": "openai",
+      "modelId": "gpt-4o-mini"
+    }
+  },
+  {
+    "server": "chat_a",
+    "agentId": "2d6e467e-da90-4faf-88c7-314f52a02224",
+    "handle": "lost_1793050900",
+    "state": "open",
+    "nodeId": "a37c83d0-46a9-4640-a978-9b697d6474db",
+    "model": {
+      "provider": "openai",
+      "modelId": "gpt-4o-mini"
+    }
+  },
+  {
+    "server": "chat_a",
+    "agentId": "17173a46-8bfc-4acd-a474-24e2d57da1ad",
+    "handle": "back_1793050900",
+    "state": "open",
+    "nodeId": "a37c83d0-46a9-4640-a978-9b697d6474db",
+    "model": {
+      "provider": "openai",
+      "modelId": "gpt-4o-mini"
+    }
+  },
+  {
+    "server": "chat_a",
+    "agentId": "909d6346-2d4c-42d4-a51c-7b9bccd1c8ad",
+    "handle": "foreground_1793050900",
+    "state": "open",
+    "nodeId": "a37c83d0-46a9-4640-a978-9b697d6474db",
+    "model": {
+      "provider": "openai",
+      "modelId": "gpt-4o-mini"
+    }
+  },
+  {
+    "server": "chat_a",
+    "agentId": "285ad1ea-7009-48f6-b554-32fe99388047",
+    "handle": "isolation_1793064533",
+    "state": "open",
+    "nodeId": "a37c83d0-46a9-4640-a978-9b697d6474db",
+    "model": {
+      "provider": "openai",
+      "modelId": "gpt-4o-mini"
+    }
+  },
+  {
+    "server": "chat_a",
+    "agentId": "4c8dd6a8-44bd-4d33-b9ee-c85ba0f64bef",
+    "handle": "isolation_1793064748",
+    "state": "open",
+    "nodeId": "a37c83d0-46a9-4640-a978-9b697d6474db",
+    "model": {
+      "provider": "openai",
+      "modelId": "gpt-4o-mini"
+    }
+  },
+  {
+    "server": "chat_b",
+    "agentId": "a7f1085d-bb13-4415-95e1-2080abd9a044",
+    "handle": "prerequisite_draft",
+    "state": "open",
+    "nodeId": "a94b951c-56eb-4e23-ba2d-725512358222",
+    "model": {
+      "provider": "openai",
+      "modelId": "gpt-4o-mini"
+    },
+    "prerequisiteInstructionsPreserved": true
+  }
+]
