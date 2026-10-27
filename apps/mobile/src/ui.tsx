@@ -9,6 +9,7 @@ import {
   Text,
   TextInput,
   View,
+  useColorScheme,
   useWindowDimensions,
   type TextInputProps,
 } from "react-native";
@@ -316,6 +317,7 @@ export function Field({
   ...props
 }: TextInputProps & { label?: string; hint?: string; error?: string }) {
   const c = useTheme();
+  const dark = useColorScheme() === "dark";
   return (
     <View style={{ gap: 6 }}>
       {label && <Text style={{ fontSize: 15, fontWeight: "500", color: c.muted }}>{label}</Text>}
@@ -330,8 +332,8 @@ export function Field({
           styles.input,
           {
             color: c.foreground,
-            backgroundColor: c.subtle,
-            borderColor: error ? c.danger : "transparent",
+            backgroundColor: dark ? c.background : c.subtle,
+            borderColor: error ? c.danger : dark ? c.border : "transparent",
           },
           props.multiline && { minHeight: 112, textAlignVertical: "top" },
           props.style,
