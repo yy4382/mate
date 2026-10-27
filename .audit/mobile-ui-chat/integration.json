@@ -1,5 +1,5 @@
 {
-  "stableCommit": "487bdad17a50203b707669bb9c6012e9c96c6d4a",
+  "stableCommit": "b40ead817e4550e860c4b30ddc2c6b0d364e26a7",
   "branch": "feat/mobile-ui-chat",
   "base": "dbc0f851233bf0e8287bf11e3d7992dd2652e701",
   "sharedCheckpoint": "0aabd39b951329b3fcd57bb29716baed77f17133",
@@ -11,7 +11,14 @@
     "dmShortcut": "After chat.create({kind:'dm',other}) resolves, push /conversation with id and sourceAgent: agent.agentId.",
     "agentReturn": "Native Back removes the opened chat detail when dismissible, then router.navigate selects /agents/[id]. Cross-tab dismissTo did not switch tabs in the strict native check and is not used. Ordinary chat and thread Back stay unchanged.",
     "productionCaller": "The existing AgentDetail DM shortcut passes sourceAgent: agentId. This is the only integration edit in that owned screen. Keep the Agent owner final implementation and retain this argument.",
-    "migrationFiles": "Move (signed-in)/(agents)/admin/agents/** to (signed-in)/(agents)/agents/**, and update all relative imports, Stack names and links. Keep only the three existing baseline guarded legacy entry files."
+    "migrationFiles": "Move (signed-in)/(agents)/admin/agents/** to (signed-in)/(agents)/agents/**, and update all relative imports, Stack names and links. Keep only the three existing baseline guarded legacy entry files.",
+    "externalAgentLinks": {
+      "source": "+native-intent.ts",
+      "bridge": "/admin/agents?target=<encoded canonical /agents path>",
+      "redirect": "The three existing legacy entry files use AgentRedirect from src/agent-navigation.tsx. Keep the Settings owner role guard around these entries. AgentRedirect pops to existing /account inside Settings, then navigates to Agent.",
+      "ownership": "Lead integration supplies the native-intent hook and AgentRedirect and changes only the three existing thin compatibility leaves. Preserve final area-owned screens and the Settings owner AdminLayout role guard.",
+      "login": "No new auth or pending-link lifecycle. After an expired or signed-out login, reopen the link."
+    }
   },
   "sharedPresentation": {
     "owner": "lead",
