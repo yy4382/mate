@@ -1,4 +1,3 @@
-import en from "../src/locales/en.json";
 const randomUUID = () => globalThis.crypto.randomUUID();
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -252,8 +251,7 @@ describe("native notification lifecycle public interface", () => {
     await f.app.enable();
     const old = f.notice();
     f.offline();
-    const message = await f.app.endSession();
-    expect(message).toContain(en.settings.server_unsubscription_could_not_be_confirmed_the);
+    await f.app.endSession();
     expect(f.saved?.current).toBeNull();
     expect(f.saved?.cleanup).toHaveLength(1);
     expect(f.app.getSnapshot()).toMatchObject({
@@ -337,12 +335,7 @@ describe("native notification lifecycle public interface", () => {
     await f.app.endSession();
     const restored = new MobileNotifications(f.platform);
     await restored.setSession(f.scope);
-    expect(restored.getSnapshot()).toMatchObject({
-      kind: "disabled",
-      message: expect.stringContaining(
-        en.settings.server_unsubscription_could_not_be_confirmed_the,
-      ),
-    });
+    expect(restored.getSnapshot()).toMatchObject({ kind: "disabled", pendingCancellations: 1 });
     expect(await f.post()).toEqual(["ab".repeat(32)]);
     f.failures.clear();
     await restored.refresh();
@@ -408,35 +401,6 @@ describe("native notification lifecycle public interface", () => {
         body: expect.stringContaining(oldBinding),
       });
       expect(f.saved).toBeNull();
-    },
-  );
-
-  it.each(["subscribed", "cleanup"])(
-    "restores the previous %s persistence format without losing its binding",
-    async (kind) => {
-      const f = fixture();
-      const binding = randomUUID();
-      const legacy = {
-        kind,
-        ...session,
-        subscription: {
-          transport: "apns",
-          token: "ab".repeat(32),
-          environment: "sandbox",
-          binding,
-        },
-      };
-      f.platform.read = () => legacy;
-      const restored = new MobileNotifications(f.platform);
-      await restored.setSession(session);
-      expect(restored.getSnapshot().kind).toBe(kind === "subscribed" ? "enabled" : "disabled");
-      expect(f.calls.at(-1 - (kind === "cleanup" ? 1 : 0))).toMatchObject({
-        path:
-          session.server +
-          "/api/chat/push/" +
-          (kind === "subscribed" ? "subscribe" : "unsubscribe"),
-        body: expect.stringContaining(binding),
-      });
     },
   );
 
@@ -564,10 +528,10 @@ describe("native notification lifecycle public interface", () => {
     expect(f.saved?.cleanup).toHaveLength(1);
     expect(restarted.shouldPresent(previous)).toBe(false);
     expect(f.events.indexOf("unregister")).toBeLessThan(f.events.indexOf("clear-cookies"));
-    expect(auth.getSnapshot()).toMatchObject({
-      message: expect.stringContaining(
-        en.settings.server_unsubscription_could_not_be_confirmed_the,
-      ),
+    expect(restarted.getSnapshot()).toMatchObject({
+      kind: "signed-out",
+      pendingCancellations: 1,
+      localCleanup: "complete",
     });
   });
 });

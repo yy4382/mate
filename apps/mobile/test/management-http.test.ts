@@ -28,6 +28,7 @@ async function mobile(
     clearCookies: async () => {
       cookie = "";
     },
+    beforeClear: async () => {},
     fetch: network,
   });
   await auth.start();

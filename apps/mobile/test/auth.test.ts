@@ -1,4 +1,3 @@
-import en from "../src/locales/en.json";
 import { describe, expect, it } from "vitest";
 import { MobileAuth, type AuthPlatform } from "../src/auth.ts";
 
@@ -6,7 +5,7 @@ const server = "https://mate.example.com";
 const human = { accountId: 7, handle: "sam", displayName: "小山", role: "member", active: true };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
-function platform(saved: ReturnType<AuthPlatform["read"]> = null) {
+function platform(saved: Parameters<AuthPlatform["write"]>[0] | null = null) {
   let preferences = saved;
   let cookiesCleared = 0;
   const calls: { url: string; body: unknown }[] = [];
@@ -20,6 +19,7 @@ function platform(saved: ReturnType<AuthPlatform["read"]> = null) {
     clearCookies: async () => {
       cookiesCleared++;
     },
+    beforeClear: async () => {},
     fetch: async (url, options) => {
       calls.push({ url: String(url), body: options?.body });
       return answer(String(url));
@@ -108,7 +108,7 @@ describe("mobile authentication public interface", () => {
     await auth.login("sam", "wrong");
     expect(auth.getSnapshot()).toMatchObject({
       kind: "signed-out",
-      message: en.auth.incorrect_handle_or_password,
+      notice: "wrong-password",
     });
     p.respond(async () => {
       throw new TypeError("offline");
@@ -116,7 +116,7 @@ describe("mobile authentication public interface", () => {
     await auth.login("sam", "correct");
     expect(auth.getSnapshot()).toMatchObject({
       kind: "signed-out",
-      message: en.auth.could_not_sign_in_check_your_network,
+      notice: "network",
     });
     expect(p.preferences?.restore).toBe(false);
   });
@@ -145,7 +145,7 @@ describe("mobile authentication public interface", () => {
     await auth.revalidate();
     expect(auth.getSnapshot()).toMatchObject({
       kind: "signed-out",
-      message: en.auth.your_session_has_expired_sign_in_again,
+      notice: "expired",
     });
     const count = p.calls.length;
     const restarted = new MobileAuth(p.port);
@@ -186,7 +186,7 @@ describe("mobile authentication public interface", () => {
     await auth.logout();
     expect(auth.getSnapshot()).toMatchObject({
       kind: "signed-out",
-      message: en.auth.signed_out_on_this_device_server_session,
+      notice: "revocation-unconfirmed",
     });
     expect(p.cookiesCleared).toBe(1);
     const count = p.calls.length;
@@ -223,7 +223,7 @@ describe("mobile authentication public interface", () => {
       expect(auth.getSnapshot()).toEqual({
         kind: "signed-out",
         server,
-        message: en.auth.signed_out,
+        notice: "signed-out",
       });
       expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me", server + "/api/logout"]);
       expect(p.preferences).toEqual({ server, restore: false });
@@ -251,13 +251,13 @@ describe("mobile authentication public interface", () => {
     await auth.revalidate();
     expect(auth.getSnapshot().kind).toBe("unavailable");
     await auth.retry();
-    expect(auth.getSnapshot()).toEqual({ kind: "signed-out", server: next, message: "" });
+    expect(auth.getSnapshot()).toEqual({ kind: "signed-out", server: next, notice: null });
     expect(p.preferences).toEqual({ server: next, restore: false });
     expect(p.cookiesCleared).toBe(1);
-    expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me"]);
+    expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me", server + "/api/logout"]);
     const restarted = new MobileAuth(p.port);
     await restarted.start();
-    expect(restarted.getSnapshot()).toEqual({ kind: "signed-out", server: next, message: "" });
+    expect(restarted.getSnapshot()).toEqual({ kind: "signed-out", server: next, notice: null });
   });
 
   it("never publishes a delayed identity after logout even if the external request ignores cancellation", async () => {
@@ -276,6 +276,33 @@ describe("mobile authentication public interface", () => {
     expect(auth.getSnapshot()).toMatchObject({ kind: "signed-out" });
   });
 
+  it.each([true, false])(
+    "switching servers revokes the old session on its own server before clearing cookies (reachable: %s)",
+    async (reachable) => {
+      const p = platform({ server, restore: true });
+      const auth = new MobileAuth(p.port);
+      await auth.start();
+      let cookiesAtRevocation = -1;
+      p.respond(async () => {
+        cookiesAtRevocation = p.cookiesCleared;
+        if (!reachable) throw new TypeError("offline");
+        return new Response(null, { status: 204 });
+      });
+      const next = "https://second.example.com";
+      await auth.changeServer(next);
+      expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me", server + "/api/logout"]);
+      expect(cookiesAtRevocation).toBe(0);
+      expect(p.cookiesCleared).toBe(1);
+      expect(auth.getSnapshot()).toEqual({
+        kind: "signed-out",
+        server: next,
+        notice: reachable ? null : "revocation-unconfirmed",
+      });
+      await auth.changeServer(server);
+      expect(p.calls, "a signed-out switch has no session to revoke").toHaveLength(2);
+    },
+  );
+
   it("switching addresses drains an old login before clearing cookies and never restores either previous server identity", async () => {
     const p = platform({ server, restore: false });
     const auth = new MobileAuth(p.port);
@@ -289,15 +316,18 @@ describe("mobile authentication public interface", () => {
     expect(auth.getSnapshot()).toEqual({
       kind: "signed-out",
       server: "https://second.example.com",
-      message: "",
+      notice: null,
     });
-    expect(p.calls.map((call) => call.url)).toEqual([server + "/api/login"]);
+    expect(p.calls.map((call) => call.url)).toEqual([
+      server + "/api/login",
+      server + "/api/logout",
+    ]);
     expect(p.cookiesCleared).toBe(2);
     await auth.changeServer(server);
     const count = p.calls.length;
     const restarted = new MobileAuth(p.port);
     await restarted.start();
-    expect(restarted.getSnapshot()).toEqual({ kind: "signed-out", server, message: "" });
+    expect(restarted.getSnapshot()).toEqual({ kind: "signed-out", server, notice: null });
     expect(p.calls).toHaveLength(count);
   });
 });

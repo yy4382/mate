@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { auth } from "../../auth-native";
 import { useSessionChat } from "../../session";
-import HomeScreen from "../index";
+import { HomeScreen } from "../../home";
 import { ManagementScope } from "../../admin/session";
 import { NativeTabs } from "expo-router/native-tabs";
 import { useHuman } from "../../admin/session";

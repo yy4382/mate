@@ -1,14 +1,11 @@
-import { useTranslation } from "react-i18next";
+import { t } from "../i18n";
 import { Session } from "../session";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
 import { useColorScheme } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { AuthLifecycle } from "../lifecycle";
-import { NotificationIntegration } from "../notifications-root";
 import { useTheme } from "../theme";
 
 export default function RootLayout() {
-  const { t } = useTranslation();
   const colors = useTheme();
   const navigationTheme = useColorScheme() === "dark" ? DarkTheme : DefaultTheme;
 
@@ -28,8 +25,6 @@ export default function RootLayout() {
       }}
     >
       <Session>
-        <AuthLifecycle />
-        <NotificationIntegration />
         <StatusBar style="auto" />
         <Stack
           screenOptions={{

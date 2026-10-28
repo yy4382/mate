@@ -1,5 +1,12 @@
 import { t } from "./i18n";
-import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  type ComponentRef,
+  type ReactNode,
+  type Ref,
+} from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -139,19 +146,16 @@ export function Button({
   disabled = false,
   primary = false,
   danger = false,
-  testID,
 }: {
   title: string;
   onPress(): void;
   disabled?: boolean;
   primary?: boolean;
   danger?: boolean;
-  testID?: string;
 }) {
   const c = useTheme();
   return (
     <Pressable
-      testID={testID}
       accessibilityRole="button"
       accessibilityState={{ disabled }}
       disabled={disabled}
@@ -316,7 +320,12 @@ export function Field({
   hint,
   error,
   ...props
-}: TextInputProps & { label?: string; hint?: string; error?: string }) {
+}: TextInputProps & {
+  label?: string;
+  hint?: string;
+  error?: string;
+  ref?: Ref<ComponentRef<typeof TextInput>>;
+}) {
   const c = useTheme();
   const dark = useColorScheme() === "dark";
   return (
@@ -561,7 +570,6 @@ export const styles = StyleSheet.create({
   row: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
   input: { minHeight: 48, padding: 12, borderWidth: 1, borderRadius: 10, fontSize: 17 },
   fill: { flex: 1 },
-  muted: { fontSize: 13 },
 });
 
 export function Segmented<T extends string>({

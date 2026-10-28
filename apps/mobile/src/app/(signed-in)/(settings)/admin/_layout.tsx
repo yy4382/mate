@@ -28,9 +28,6 @@ export default function AdminLayout() {
       }}
     >
       <Stack.Screen name="index" options={{ title: t("management.manage_mate") }} />
-      <Stack.Screen name="agents/index" options={{ headerShown: false }} />
-      <Stack.Screen name="agents/create" options={{ headerShown: false }} />
-      <Stack.Screen name="agents/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="providers/[provider]" options={{ title: t("management.provider") }} />
       <Stack.Screen name="providers/catalog" options={{ title: t("management.model_catalog") }} />
       <Stack.Screen name="nodes/[id]" options={{ title: t("management.node_details") }} />
