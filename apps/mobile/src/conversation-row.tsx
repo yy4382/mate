@@ -10,7 +10,6 @@ export function ConversationRow({
   mentioned = false,
   kind,
   onPress,
-  testID,
 }: {
   title: string;
   subtitle: string;
@@ -18,7 +17,6 @@ export function ConversationRow({
   mentioned?: boolean;
   kind: NonNullable<ComponentProps<typeof Avatar>["kind"]>;
   onPress(): void;
-  testID?: string;
 }) {
   const c = useTheme();
   const large = useWindowDimensions().fontScale >= 1.5;
@@ -45,7 +43,6 @@ export function ConversationRow({
   );
   return (
     <Pressable
-      testID={testID}
       accessibilityRole="button"
       accessibilityLabel={listText(
         [

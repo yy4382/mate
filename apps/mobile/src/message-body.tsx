@@ -7,11 +7,11 @@ import { useTheme } from "./theme";
 export function MessageBody({
   text,
   accounts,
-  mentions = [],
+  mentions,
 }: {
   text: string;
   accounts: readonly AccountView[];
-  mentions?: readonly number[];
+  mentions: readonly number[];
 }) {
   const c = useTheme();
   return (

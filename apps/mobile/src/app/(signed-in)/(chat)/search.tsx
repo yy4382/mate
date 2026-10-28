@@ -1,6 +1,6 @@
 import { t, dateText, numberText } from "../../../i18n";
 import { Stack } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { ActivityIndicator, Keyboard, Text, View } from "react-native";
 import type { Entry } from "@mate/chat/contracts";
 import { useChat, useChatState } from "../../../session";
@@ -17,24 +17,15 @@ export default function Search() {
   const state = useChatState();
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<Result>({ kind: "idle" });
-  const request = useRef(0);
-  useEffect(
-    () => () => {
-      request.current++;
-    },
-    [],
-  );
   async function search() {
     const term = query.trim();
     if (!term || result.kind === "loading") return;
     Keyboard.dismiss();
-    const id = ++request.current;
     setResult({ kind: "loading", query: term });
     try {
-      const hits = await chat.search(term);
-      if (id === request.current) setResult({ kind: "ready", query: term, hits });
+      setResult({ kind: "ready", query: term, hits: await chat.search(term) });
     } catch {
-      if (id === request.current) setResult({ kind: "error", query: term });
+      setResult({ kind: "error", query: term });
     }
   }
   return (
@@ -85,7 +76,6 @@ export default function Search() {
               <Button
                 title={t("chat.clear_search")}
                 onPress={() => {
-                  request.current++;
                   setQuery("");
                   setResult({ kind: "idle" });
                 }}

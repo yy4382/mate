@@ -1,20 +1,12 @@
 import { t, dateText, numberText } from "../../../i18n";
 import { z } from "zod";
 import { useHeaderHeight } from "@react-navigation/elements";
-import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AppState,
-  FlatList,
-  KeyboardAvoidingView,
-  Pressable,
-  Text,
-  View,
-  type FlatListProps,
-} from "react-native";
+import { router, Stack, useIsFocused, useLocalSearchParams } from "expo-router";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AppState, FlatList, KeyboardAvoidingView, Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Entry, TimelineRef } from "@mate/chat/contracts";
-import { accountName, conversationLabel, timelineKey } from "../../../chat";
+import { accountName, conversationLabel, operationKey, timelineKey } from "../../../chat";
 import {
   ConversationActionsContent,
   type ConversationPresentation,
@@ -54,7 +46,7 @@ export default function ConversationScreen() {
     sourceAgent?: string;
   }>();
   const sourceAgent = z.uuid().safeParse(params.sourceAgent);
-  const agentReturn = sourceAgent.success && !params.thread ? sourceAgent.data : null;
+  const agentReturn = sourceAgent.success ? sourceAgent.data : null;
   const id = Number(params.id);
   const seq = params.seq ? Number(params.seq) : null;
   const thread = params.thread ? Number(params.thread) : null;
@@ -66,184 +58,33 @@ export default function ConversationScreen() {
       state.connection === "connecting" ||
       state.connection === "reconnecting");
   const c = useTheme();
+  const focused = useIsFocused();
   const ref: TimelineRef = thread === null ? { conversation: id } : { thread };
   const key = timelineKey(ref);
-  const listKey = `${key}/${seq ?? "latest"}`;
-  const activeList = useRef(listKey);
-  activeList.current = listKey;
   const timeline = chat.timeline(ref);
   const draft = chat.draft(ref);
   const conversation = state.conversations.find((x) => x.conversationId === id);
-  const [focused, setFocused] = useState(false);
   const [composing, setComposing] = useState(false);
-  const [bottom, setBottom] = useState(true);
-  const [readError, setReadError] = useState("");
   const [rootError, setRootError] = useState("");
+  const [rootRetry, setRootRetry] = useState(0);
   const [panel, setPanel] = useState<Panel | null>(null);
   const messageMenu = panel?.kind === "message" ? panel.entry : null;
   const task = panel?.kind === "task" ? panel.task : null;
   const sourceLocate = useRef<AbortController | null>(null);
-  useEffect(() => () => sourceLocate.current?.abort(), [key, focused, task?.taskId]);
+  useEffect(() => () => sourceLocate.current?.abort(), [seq, focused, task?.taskId]);
   const [copiedMessage, setCopiedMessage] = useState<number | null>(null);
-  const [destination, setDestination] = useState<
-    "loading" | "positioning" | "done" | "missing" | "failed"
-  >(seq === null ? "done" : "loading");
-  const [destinationRetry, setDestinationRetry] = useState(0);
-  const jump = useRef<{
-    seq: number;
-    attempts: number;
-    measured: number;
-    positioned: boolean;
-  } | null>(null);
-  const measuredEntries = useRef({ key: listKey, entries: new Set<number>() });
-  if (measuredEntries.current.key !== listKey)
-    measuredEntries.current = { key: listKey, entries: new Set<number>() };
-  const frame = useRef<number | null>(null);
-  const list = useRef<FlatList<Entry>>(null);
-  const marked = useRef("");
-  const initial = useRef(true);
   const entries = timeline.entries;
-  const currentEntries = useRef(entries);
-  currentEntries.current = entries;
-  const position = useCallback(() => {
-    const target = jump.current;
-    if (!target) return;
-    const index = [...currentEntries.current].reverse().findIndex((e) => e.seq === target.seq);
-    if (index < 0) return;
-    if (++target.attempts > 12) {
-      jump.current = null;
-      setDestination("failed");
-      return;
-    }
-    target.positioned = measuredEntries.current.entries.has(target.seq);
-    list.current?.scrollToIndex({ index, viewPosition: 1, animated: false });
-  }, []);
-  const schedulePosition = useCallback(() => {
-    if (frame.current !== null || !jump.current) return;
-    frame.current = requestAnimationFrame(() => {
-      frame.current = null;
-      position();
-    });
-  }, [position]);
-  const visibleEntries = useRef({ key: listKey, entries: new Set<number>() });
-  const viewable = useMemo<NonNullable<FlatListProps<Entry>["onViewableItemsChanged"]>>(
-    () =>
-      ({ viewableItems }) => {
-        if (activeList.current !== listKey) return;
-        visibleEntries.current = {
-          key: listKey,
-          entries: new Set(
-            viewableItems.filter((item) => item.isViewable).map((item) => item.item.seq),
-          ),
-        };
-        if (!jump.current) return;
-        if (
-          jump.current.positioned &&
-          viewableItems.some((item) => item.isViewable && item.item.seq === jump.current?.seq)
-        ) {
-          jump.current = null;
-          setDestination("done");
-        } else schedulePosition();
-      },
-    [listKey, schedulePosition],
-  );
-  const newest = entries.at(-1)?.seq ?? 0;
-  const count = state.unread.timelines.find((t) => timelineKey(t.timeline) === key)?.unread ?? 0;
   const canWrite = !!conversation?.member && !conversation.archived;
-  useFocusEffect(
-    useCallback(() => {
-      setFocused(true);
-      return () => setFocused(false);
-    }, [chat, id, thread]),
-  );
-  useEffect(() => {
-    initial.current = seq === null;
-    setBottom(seq === null);
-    marked.current = "";
-    setReadError("");
-  }, [key, seq]);
   useEffect(() => {
     if (focused && !timeline.loaded && !timeline.loading && !timeline.error && ready)
       void chat.load(ref);
   }, [focused, timeline.loaded, timeline.loading, timeline.error, ready, key, chat]);
-  useEffect(() => {
-    if (
-      !ready ||
-      !focused ||
-      !bottom ||
-      destination !== "done" ||
-      count === 0 ||
-      !timeline.loaded ||
-      AppState.currentState !== "active"
-    )
-      return;
-    const mark = `${key}/${newest}/${count}`;
-    if (marked.current === mark) return;
-    marked.current = mark;
-    void chat.markRead(ref).then(
-      () => {
-        if (activeList.current === listKey) setReadError("");
-      },
-      () => {
-        if (activeList.current !== listKey) return;
-        marked.current = "";
-        setReadError(t("chat.read_status_is_not_synced_tap_to"));
-      },
-    );
-  }, [focused, bottom, count, newest, key, timeline.loaded, ready, destination]);
   const root =
     thread === null
       ? undefined
       : chat
           .timeline({ conversation: id })
-          .entries.find(
-            (e): e is Extract<Entry, { kind: "message" }> =>
-              e.kind === "message" && e.messageId === thread,
-          );
-  useEffect(() => {
-    if (seq === null) {
-      setDestination("done");
-      return;
-    }
-    if (!Number.isSafeInteger(seq) || seq < 1) {
-      setDestination("missing");
-      return;
-    }
-    if (!focused || !ready) return;
-    if (timeline.error) {
-      setDestination("failed");
-      return;
-    }
-    if (!timeline.loaded) return;
-    const cancel = new AbortController();
-    setDestination("loading");
-    setBottom(false);
-    void chat.locate(ref, { seq }, cancel.signal).then((result) => {
-      if (cancel.signal.aborted) return;
-      if (result === "found") {
-        jump.current = { seq, attempts: 0, measured: -1, positioned: false };
-        setDestination("positioning");
-        schedulePosition();
-      } else if (result !== "cancelled")
-        setDestination(result === "missing" ? "missing" : "failed");
-    });
-    return () => {
-      cancel.abort();
-      jump.current = null;
-      if (frame.current !== null) cancelAnimationFrame(frame.current);
-      frame.current = null;
-    };
-  }, [
-    chat,
-    key,
-    seq,
-    focused,
-    timeline.loaded,
-    timeline.error,
-    ready,
-    destinationRetry,
-    schedulePosition,
-  ]);
+          .entries.find((e): e is Message => e.kind === "message" && e.messageId === thread);
   useEffect(() => {
     if (thread === null || !focused || !ready) return;
     const cancel = new AbortController();
@@ -257,8 +98,8 @@ export default function ConversationScreen() {
         );
     });
     return () => cancel.abort();
-  }, [chat, id, thread, focused, ready, destinationRetry]);
-  const tasks = new Map<number, Extract<Entry, { kind: "task" }>>();
+  }, [chat, id, thread, focused, ready, rootRetry]);
+  const tasks = new Map<number, Task>();
   for (const entry of entries) if (entry.kind === "task") tasks.set(entry.taskId, entry);
   const visibleTasks = Array.from(tasks.values());
   const taskSource = task
@@ -382,224 +223,54 @@ export default function ConversationScreen() {
               <Button
                 title={t("chat.retry_root_message")}
                 onPress={() =>
-                  void chat.retryLoad({ conversation: id }).then(() => {
-                    if (activeList.current === listKey) setDestinationRetry((x) => x + 1);
-                  })
+                  void chat.retryLoad({ conversation: id }).then(() => setRootRetry((x) => x + 1))
                 }
               />
             )}
           </View>
         )}
-        {seq !== null && destination !== "done" && (
-          <View style={{ padding: 12 }}>
-            <Label>
-              {destination === "missing"
-                ? t("chat.this_message_is_unavailable_or_not_in")
-                : destination === "failed"
-                  ? t("chat.could_not_locate_the_message_retry")
-                  : t("chat.locating_message")}
-            </Label>
-            {(destination === "failed" || destination === "missing") && (
-              <Button
-                title={t("chat.retry_locating_message")}
+        <TimelineList
+          key={`${key}/${seq ?? "latest"}`}
+          timeline={ref}
+          seq={seq}
+          focused={focused}
+          ready={ready}
+          composing={composing}
+          renderEntry={(item) =>
+            item.kind === "message" ? (
+              message(item)
+            ) : (
+              <Pressable
+                testID={`entry-${item.seq}`}
+                accessibilityRole="button"
+                accessibilityLabel={t("chat.view_named_task", { title: item.title })}
                 onPress={() =>
-                  void chat.retryLoad(ref).then(() => {
-                    if (activeList.current === listKey) setDestinationRetry((x) => x + 1);
+                  setPanel({
+                    kind: "task",
+                    task: tasks.get(item.taskId) ?? item,
+                    presentation: { transfer: false, to: null, query: "" },
                   })
                 }
-              />
-            )}
-            <Button
-              title={t("chat.view_latest_messages")}
-              onPress={() => router.setParams({ seq: undefined })}
-            />
-          </View>
-        )}
-        <FlatList
-          key={listKey}
-          ref={list}
-          data={[...entries].reverse()}
-          inverted
-          onLayout={schedulePosition}
-          keyboardDismissMode="interactive"
-          keyboardShouldPersistTaps="handled"
-          maintainVisibleContentPosition={
-            destination === "done"
-              ? { minIndexForVisible: 0, ...(seq === null ? { autoscrollToTopThreshold: 80 } : {}) }
-              : undefined
-          }
-          viewabilityConfig={{ viewAreaCoveragePercentThreshold: 30 }}
-          onViewableItemsChanged={viewable}
-          onScrollToIndexFailed={({ index, averageItemLength, highestMeasuredFrameIndex }) => {
-            if (activeList.current !== listKey) return;
-            const target = jump.current;
-            if (target) target.positioned = false;
-            if (target && highestMeasuredFrameIndex > target.measured) {
-              target.measured = highestMeasuredFrameIndex;
-              target.attempts = 0;
-            }
-            list.current?.scrollToOffset({ offset: index * averageItemLength, animated: false });
-          }}
-          keyExtractor={(entry) => String(entry.seq)}
-          onScroll={(event) => {
-            if (activeList.current !== listKey) return;
-            setBottom(event.nativeEvent.contentOffset.y < 80);
-            const target = jump.current;
-            if (target?.positioned && visibleEntries.current.entries.has(target.seq)) {
-              jump.current = null;
-              setDestination("done");
-            }
-          }}
-          scrollEventThrottle={100}
-          onContentSizeChange={() => {
-            if (activeList.current !== listKey) return;
-            if (initial.current && entries.length) {
-              list.current?.scrollToOffset({ offset: 0, animated: false });
-              initial.current = false;
-            }
-            schedulePosition();
-          }}
-          renderItem={({ item, index }) => {
-            const previous = entries[entries.length - index - 2];
-            return (
-              <View
-                onLayout={() => {
-                  if (activeList.current !== listKey) return;
-                  measuredEntries.current.entries.add(item.seq);
-                  if (jump.current?.seq === item.seq) {
-                    jump.current.positioned = false;
-                    schedulePosition();
-                  }
+                style={{
+                  paddingHorizontal: 20,
+                  paddingVertical: 12,
+                  gap: 6,
+                  backgroundColor: item.seq === seq ? c.tint : c.subtle,
                 }}
               >
-                {(!previous ||
-                  new Date(previous.at).toDateString() !== new Date(item.at).toDateString()) && (
-                  <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 }}>
-                    <Caption>
-                      {dateText(item.at, {
-                        month: "long",
-                        day: "numeric",
-                      })}
-                    </Caption>
-                  </View>
+                {item.seq === seq && (
+                  <Caption accent>{t("chat.located_message", { seq: numberText(seq) })}</Caption>
                 )}
-                {item.kind === "message" ? (
-                  message(item)
-                ) : (
-                  <Pressable
-                    testID={`entry-${item.seq}`}
-                    accessibilityRole="button"
-                    accessibilityLabel={t("chat.view_named_task", { title: item.title })}
-                    onPress={() =>
-                      setPanel({
-                        kind: "task",
-                        task: tasks.get(item.taskId) ?? item,
-                        presentation: { transfer: false, to: null, query: "" },
-                      })
-                    }
-                    style={{
-                      paddingHorizontal: 20,
-                      paddingVertical: 12,
-                      gap: 6,
-                      backgroundColor: item.seq === seq ? c.tint : c.subtle,
-                    }}
-                  >
-                    {item.seq === seq && (
-                      <Caption accent>
-                        {t("chat.located_message", { seq: numberText(seq ?? 0) })}
-                      </Caption>
-                    )}
-                    <Caption>
-                      {t(taskChangeKey[item.change], {
-                        name: accountName(state.accounts, item.actor),
-                        title: item.title,
-                      })}
-                    </Caption>
-                  </Pressable>
-                )}
-              </View>
-            );
-          }}
-          ListEmptyComponent={
-            <View style={styles.page}>
-              <Label>
-                {timeline.loading
-                  ? t("chat.loading")
-                  : timeline.error
-                    ? t("chat.could_not_load_messages")
-                    : t("chat.no_messages_yet_say_something_below")}
-              </Label>
-            </View>
-          }
-          ListHeaderComponent={
-            state.connection !== "live" ? (
-              <View style={{ padding: 12, backgroundColor: c.subtle }}>
-                <Label muted>
-                  {state.connection === "loading"
-                    ? t("chat.connecting")
-                    : state.connection === "connecting"
-                      ? t("chat.connecting_to_live_messages")
-                      : t("chat.disconnected_reconnecting_automatically_your_draft_is_kept")}
-                </Label>
-              </View>
-            ) : undefined
-          }
-          ListFooterComponent={
-            <View>
-              {timeline.error ? (
-                <View style={styles.page}>
-                  <ErrorLine text={timeline.error} />
-                  <Button
-                    title={t("chat.retry_loading")}
-                    onPress={() => void chat.retryLoad(ref, timeline.loaded)}
-                  />
-                </View>
-              ) : null}
-              {entries[0] && !timeline.exhausted && (
-                <View style={{ padding: 12 }}>
-                  <Button
-                    title={timeline.loading ? t("chat.loading") : t("chat.load_earlier_messages")}
-                    disabled={timeline.loading}
-                    onPress={() => void chat.load(ref, true)}
-                  />
-                </View>
-              )}
-            </View>
+                <Caption>
+                  {t(taskChangeKey[item.change], {
+                    name: accountName(state.accounts, item.actor),
+                    title: item.title,
+                  })}
+                </Caption>
+              </Pressable>
+            )
           }
         />
-        {readError ? (
-          <View style={{ paddingHorizontal: 16 }}>
-            <Button
-              title={readError}
-              onPress={() =>
-                void chat.markRead(ref).then(
-                  () => {
-                    if (activeList.current === listKey) setReadError("");
-                  },
-                  () => {
-                    if (activeList.current === listKey)
-                      setReadError(t("chat.read_status_is_not_synced_tap_to"));
-                  },
-                )
-              }
-            />
-          </View>
-        ) : null}
-        {!composing &&
-          (seq !== null
-            ? destination !== "missing" && destination !== "failed"
-            : !bottom && destination === "done") && (
-            <Button
-              title={count ? t("chat.unread_latest", { count }) : t("chat.back_to_latest_messages")}
-              onPress={() => {
-                if (seq !== null) router.setParams({ seq: undefined });
-                else {
-                  list.current?.scrollToOffset({ offset: 0, animated: false });
-                  setBottom(true);
-                }
-              }}
-            />
-          )}
         {canWrite ? (
           <ChatComposer
             draft={draft}
@@ -701,7 +372,7 @@ export default function ConversationScreen() {
                   testID={`create-task-${messageMenu.messageId}`}
                   onPress={() => {
                     const saved = state.operations.get(
-                      `task-create/${messageMenu.messageId}`,
+                      operationKey.taskCreation(messageMenu.messageId),
                     )?.input;
                     setPanel({
                       kind: "create-task",
@@ -759,7 +430,7 @@ export default function ConversationScreen() {
               const cancel = new AbortController();
               sourceLocate.current = cancel;
               const result = await chat.locate(ref, { messageId: sourceId }, cancel.signal);
-              if (activeList.current !== listKey || cancel.signal.aborted) return;
+              if (cancel.signal.aborted) return;
               const source = chat
                 .timeline(ref)
                 .entries.find((e) => e.kind === "message" && e.messageId === sourceId);
@@ -781,5 +452,290 @@ export default function ConversationScreen() {
         )}
       </Sheet>
     </SafeAreaView>
+  );
+}
+
+/**
+ * One list per timeline and destination: the screen keys it by both, so a new destination
+ * starts from a fresh list, position and read marker.
+ */
+function TimelineList({
+  timeline: ref,
+  seq,
+  focused,
+  ready,
+  composing,
+  renderEntry,
+}: {
+  timeline: TimelineRef;
+  seq: number | null;
+  focused: boolean;
+  ready: boolean;
+  composing: boolean;
+  renderEntry(entry: Entry): ReactNode;
+}) {
+  const chat = useChat();
+  const state = useChatState();
+  const c = useTheme();
+  const timeline = chat.timeline(ref);
+  const entries = timeline.entries;
+  const [destination, setDestination] = useState<
+    "loading" | "positioning" | "done" | "missing" | "failed"
+  >(seq === null ? "done" : "loading");
+  // A settled destination keeps the reader's position through focus, revalidation and reconnects.
+  const settled = useRef(seq === null);
+  const [retry, setRetry] = useState(0);
+  const [bottom, setBottom] = useState(seq === null);
+  const [readError, setReadError] = useState("");
+  const jump = useRef<{
+    seq: number;
+    attempts: number;
+    measured: number;
+    positioned: boolean;
+  } | null>(null);
+  const measured = useRef(new Set<number>());
+  const visible = useRef(new Set<number>());
+  const frame = useRef<number | null>(null);
+  const list = useRef<FlatList<Entry>>(null);
+  const marked = useRef("");
+  const initial = useRef(seq === null);
+  const currentEntries = useRef(entries);
+  currentEntries.current = entries;
+  const newest = entries.at(-1)?.seq ?? 0;
+  const count =
+    state.unread.timelines.find((u) => timelineKey(u.timeline) === timelineKey(ref))?.unread ?? 0;
+  function settle(value: "done" | "missing" | "failed") {
+    settled.current = true;
+    jump.current = null;
+    setDestination(value);
+  }
+  // Positioning is confirmed only here: right after a scroll to the measured target while the
+  // list reports the target viewable. A viewability change schedules another pass.
+  function position() {
+    const target = jump.current;
+    if (!target) return;
+    const index = [...currentEntries.current].reverse().findIndex((e) => e.seq === target.seq);
+    if (index < 0) return;
+    if (++target.attempts > 12) return settle("failed");
+    target.positioned = measured.current.has(target.seq);
+    list.current?.scrollToIndex({ index, viewPosition: 1, animated: false });
+    if (target.positioned && visible.current.has(target.seq)) settle("done");
+  }
+  function schedulePosition() {
+    if (frame.current !== null || !jump.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null;
+      position();
+    });
+  }
+  function markRead() {
+    void chat.markRead(ref).then(
+      () => setReadError(""),
+      () => {
+        marked.current = "";
+        setReadError(t("chat.read_status_is_not_synced_tap_to"));
+      },
+    );
+  }
+  useEffect(() => {
+    if (
+      !ready ||
+      !focused ||
+      !bottom ||
+      destination !== "done" ||
+      count === 0 ||
+      !timeline.loaded ||
+      AppState.currentState !== "active"
+    )
+      return;
+    const mark = `${newest}/${count}`;
+    if (marked.current === mark) return;
+    marked.current = mark;
+    markRead();
+  }, [focused, bottom, count, newest, timeline.loaded, ready, destination]);
+  useEffect(() => {
+    if (seq === null) return;
+    // A reloading timeline (new snapshot, or a retried first page) no longer holds the old position.
+    if (!timeline.loaded && !timeline.error) settled.current = false;
+    if (settled.current) return;
+    if (!Number.isSafeInteger(seq) || seq < 1) return settle("missing");
+    if (!focused || !ready) return;
+    if (timeline.error) return settle("failed");
+    if (!timeline.loaded) return;
+    const cancel = new AbortController();
+    setDestination("loading");
+    setBottom(false);
+    void chat.locate(ref, { seq }, cancel.signal).then((result) => {
+      if (cancel.signal.aborted) return;
+      if (result === "found") {
+        jump.current = { seq, attempts: 0, measured: -1, positioned: false };
+        setDestination("positioning");
+        schedulePosition();
+      } else if (result !== "cancelled") settle(result);
+    });
+    return () => {
+      cancel.abort();
+      jump.current = null;
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      frame.current = null;
+    };
+  }, [chat, focused, timeline.loaded, timeline.error, ready, retry]);
+  return (
+    <>
+      {seq !== null && destination !== "done" && (
+        <View style={{ padding: 12 }}>
+          <Label>
+            {destination === "missing"
+              ? t("chat.this_message_is_unavailable_or_not_in")
+              : destination === "failed"
+                ? t("chat.could_not_locate_the_message_retry")
+                : t("chat.locating_message")}
+          </Label>
+          {(destination === "failed" || destination === "missing") && (
+            <Button
+              title={t("chat.retry_locating_message")}
+              onPress={() => {
+                settled.current = false;
+                setRetry((x) => x + 1);
+                void chat.retryLoad(ref);
+              }}
+            />
+          )}
+          <Button
+            title={t("chat.view_latest_messages")}
+            onPress={() => router.setParams({ seq: undefined })}
+          />
+        </View>
+      )}
+      <FlatList
+        ref={list}
+        data={[...entries].reverse()}
+        inverted
+        onLayout={schedulePosition}
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
+        maintainVisibleContentPosition={
+          destination === "done"
+            ? { minIndexForVisible: 0, ...(seq === null ? { autoscrollToTopThreshold: 80 } : {}) }
+            : undefined
+        }
+        viewabilityConfig={{ viewAreaCoveragePercentThreshold: 30 }}
+        onViewableItemsChanged={({ viewableItems }) => {
+          visible.current = new Set(
+            viewableItems.filter((item) => item.isViewable).map((item) => item.item.seq),
+          );
+          schedulePosition();
+        }}
+        onScrollToIndexFailed={({ index, averageItemLength, highestMeasuredFrameIndex }) => {
+          const target = jump.current;
+          if (target) target.positioned = false;
+          if (target && highestMeasuredFrameIndex > target.measured) {
+            target.measured = highestMeasuredFrameIndex;
+            target.attempts = 0;
+          }
+          list.current?.scrollToOffset({ offset: index * averageItemLength, animated: false });
+        }}
+        keyExtractor={(entry) => String(entry.seq)}
+        onScroll={(event) => setBottom(event.nativeEvent.contentOffset.y < 80)}
+        scrollEventThrottle={100}
+        onContentSizeChange={() => {
+          if (initial.current && entries.length) {
+            list.current?.scrollToOffset({ offset: 0, animated: false });
+            initial.current = false;
+          }
+          schedulePosition();
+        }}
+        renderItem={({ item, index }) => {
+          const previous = entries[entries.length - index - 2];
+          return (
+            <View
+              onLayout={() => {
+                measured.current.add(item.seq);
+                if (jump.current?.seq === item.seq) schedulePosition();
+              }}
+            >
+              {(!previous ||
+                new Date(previous.at).toDateString() !== new Date(item.at).toDateString()) && (
+                <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 }}>
+                  <Caption>
+                    {dateText(item.at, {
+                      month: "long",
+                      day: "numeric",
+                    })}
+                  </Caption>
+                </View>
+              )}
+              {renderEntry(item)}
+            </View>
+          );
+        }}
+        ListEmptyComponent={
+          <View style={styles.page}>
+            <Label>
+              {timeline.loading
+                ? t("chat.loading")
+                : timeline.error
+                  ? t("chat.could_not_load_messages")
+                  : t("chat.no_messages_yet_say_something_below")}
+            </Label>
+          </View>
+        }
+        ListHeaderComponent={
+          state.connection !== "live" ? (
+            <View style={{ padding: 12, backgroundColor: c.subtle }}>
+              <Label muted>
+                {state.connection === "loading"
+                  ? t("chat.connecting")
+                  : state.connection === "connecting"
+                    ? t("chat.connecting_to_live_messages")
+                    : t("chat.disconnected_reconnecting_automatically_your_draft_is_kept")}
+              </Label>
+            </View>
+          ) : undefined
+        }
+        ListFooterComponent={
+          <View>
+            {timeline.error ? (
+              <View style={styles.page}>
+                <ErrorLine text={timeline.error} />
+                <Button
+                  title={t("chat.retry_loading")}
+                  onPress={() => void chat.retryLoad(ref, timeline.loaded)}
+                />
+              </View>
+            ) : null}
+            {entries[0] && !timeline.exhausted && (
+              <View style={{ padding: 12 }}>
+                <Button
+                  title={timeline.loading ? t("chat.loading") : t("chat.load_earlier_messages")}
+                  disabled={timeline.loading}
+                  onPress={() => void chat.load(ref, true)}
+                />
+              </View>
+            )}
+          </View>
+        }
+      />
+      {readError ? (
+        <View style={{ paddingHorizontal: 16 }}>
+          <Button title={readError} onPress={markRead} />
+        </View>
+      ) : null}
+      {!composing &&
+        (seq !== null
+          ? destination !== "missing" && destination !== "failed"
+          : !bottom && destination === "done") && (
+          <Button
+            title={count ? t("chat.unread_latest", { count }) : t("chat.back_to_latest_messages")}
+            onPress={() => {
+              if (seq !== null) router.setParams({ seq: undefined });
+              else {
+                list.current?.scrollToOffset({ offset: 0, animated: false });
+                setBottom(true);
+              }
+            }}
+          />
+        )}
+    </>
   );
 }

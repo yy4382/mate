@@ -28,7 +28,7 @@ type Pending = {
 };
 export type Draft = { text: string; pending: Pending | null; error: string };
 const emptyDraft: Draft = { text: "", pending: null, error: "" };
-export type Timeline = {
+type Timeline = {
   entries: Entry[];
   loading: boolean;
   error: string;
@@ -42,27 +42,36 @@ const emptyTimeline: Timeline = {
   loaded: false,
   exhausted: false,
 };
-export type ConversationInput =
+type ConversationInput =
   | { kind: "channel"; name: string; visibility: "public" | "private" }
   | { kind: "dm"; other: number };
-type TaskChange = { kind: "claim" | "yield" | "complete" } | { kind: "transfer"; to: number };
-type TaskInput = { messageId: number; title: string } | { taskId: number; change: TaskChange };
-type ConversationAction = "join" | "leave" | "archive" | "invite";
-export type OperationInput =
+export type TaskChange =
+  { kind: "claim" | "yield" | "complete" } | { kind: "transfer"; to: number };
+type TaskCreation = { messageId: number; title: string };
+type TaskUpdate = { taskId: number; change: TaskChange };
+export type ConversationAction = "join" | "leave" | "archive" | "invite";
+type OperationInput =
   | ConversationInput
-  | { kind: "task-create"; messageId: number; title: string }
-  | { kind: "task-change"; taskId: number; change: TaskChange }
+  | ({ kind: "task-create" } & TaskCreation)
+  | ({ kind: "task-change" } & TaskUpdate)
   | {
       kind: "conversation-action";
       conversationId: number;
       action: ConversationAction;
       invitee?: number;
     };
-export type PendingOperation = {
+type PendingOperation = {
   input: OperationInput;
   requestId: string;
   status: "sending" | "failed";
   error: string;
+};
+/** Where `ChatState.operations` keeps each unconfirmed operation, so a reopened screen finds its input. */
+export const operationKey = {
+  creation: "new-conversation",
+  conversation: (conversationId: number) => `conversation/${conversationId}`,
+  taskCreation: (messageId: number) => `task-create/${messageId}`,
+  taskChange: (taskId: number) => `task-change/${taskId}`,
 };
 export type ChatState = {
   connection: "loading" | "connecting" | "live" | "reconnecting" | "paused" | "closed";
@@ -103,6 +112,9 @@ const errorText = (error: unknown) =>
   error instanceof Refusal ? error.message : t("chat.could_not_connect_to_the_server_check");
 const merge = (old: readonly Entry[], entries: readonly Entry[]) =>
   [...new Map([...old, ...entries].map((e) => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
+/** Replaces or adds one row, keeping the server's order by ID. */
+const upsert = <T>(rows: readonly T[], row: T, id: (row: T) => number) =>
+  [...rows.filter((r) => id(r) !== id(row)), row].sort((a, b) => id(a) - id(b));
 
 /** One cookie identity owns this instance, including all in-flight work and drafts. */
 export class MobileChat {
@@ -126,7 +138,7 @@ export class MobileChat {
   private loads = new Map<string, Promise<void>>();
   private clock: Clock;
   constructor(
-    readonly server: string,
+    private readonly server: string,
     private platform: ChatPlatform,
   ) {
     this.clock = platform.clock ?? systemClock;
@@ -143,19 +155,10 @@ export class MobileChat {
     this.state = { ...this.state, ...change };
     this.listeners.forEach((listener) => listener());
   }
-  private async request<T>(
-    path: string,
-    schema: z.ZodType<T>,
-    body?: unknown,
-    cancel?: AbortSignal,
-  ): Promise<T> {
+  private async request<T>(path: string, schema: z.ZodType<T>, body?: unknown): Promise<T> {
     if (this.lifetime.signal.aborted) throw new Error("closed");
     const timeout = new AbortController();
-    const signal = AbortSignal.any([
-      this.lifetime.signal,
-      timeout.signal,
-      ...(cancel ? [cancel] : []),
-    ]);
+    const signal = AbortSignal.any([this.lifetime.signal, timeout.signal]);
     void this.clock.sleep(15_000, signal).then(() => timeout.abort());
     try {
       const response = await this.platform.fetch(this.server + path, {
@@ -283,22 +286,17 @@ export class MobileChat {
               ended = true;
               this.platform.expired();
               this.publish({ connection: "paused" });
-            } else if (event === "resnapshot") {
-              ended = true;
-              this.cursor = undefined;
-              ++this.snapshotVersion;
-              this.publish({ timelines: new Map(), connection: "loading" });
-            } else if (event === "events") {
-              const batch = LiveEvents.parse(JSON.parse(data));
-              if (batch.status === "resnapshot") {
+            } else if (event === "events" || event === "resnapshot") {
+              const batch = event === "events" ? LiveEvents.parse(JSON.parse(data)) : undefined;
+              if (batch?.status === "events") {
+                this.apply(batch);
+                failures = 0;
+                this.publish({ connection: "live", error: "" });
+              } else {
                 ended = true;
                 this.cursor = undefined;
                 ++this.snapshotVersion;
                 this.publish({ timelines: new Map(), connection: "loading" });
-              } else {
-                this.apply(batch);
-                failures = 0;
-                this.publish({ connection: "live", error: "" });
               }
             }
           },
@@ -340,15 +338,9 @@ export class MobileChat {
         const old = timelines.get(key);
         if (old) timelines.set(key, { ...old, entries: merge(old.entries, [event.entry]) });
       } else if (event.type === "account") {
-        accounts = [
-          ...accounts.filter((a) => a.accountId !== event.account.accountId),
-          event.account,
-        ];
+        accounts = upsert(accounts, event.account, (a) => a.accountId);
       } else if (event.type === "conversation") {
-        conversations = [
-          ...conversations.filter((c) => c.conversationId !== event.conversation.conversationId),
-          event.conversation,
-        ];
+        conversations = upsert(conversations, event.conversation, (c) => c.conversationId);
       }
     }
     this.cursor = batch.cursor;
@@ -360,19 +352,18 @@ export class MobileChat {
   private setTimeline(ref: TimelineRef, value: Timeline) {
     this.publish({ timelines: new Map(this.state.timelines).set(timelineKey(ref), value) });
   }
-  async load(ref: TimelineRef, older = false, cancel?: AbortSignal): Promise<void> {
-    if (this.cursor === undefined || this.lifetime.signal.aborted || cancel?.aborted) return;
+  async load(ref: TimelineRef, older = false): Promise<void> {
+    if (this.cursor === undefined || this.lifetime.signal.aborted) return;
     const key = timelineKey(ref);
     const active = this.loads.get(key);
     if (active) {
       await active;
-      if (!this.timeline(ref).loaded && !this.timeline(ref).error)
-        await this.load(ref, older, cancel);
+      if (!this.timeline(ref).loaded && !this.timeline(ref).error) await this.load(ref, older);
       return;
     }
     const old = this.timeline(ref);
     if (old.error || (!older && old.loaded) || (older && old.exhausted)) return;
-    const pending = this.loadPage(ref, older, cancel);
+    const pending = this.loadPage(ref, older);
     this.loads.set(key, pending);
     try {
       await pending;
@@ -384,7 +375,7 @@ export class MobileChat {
     this.setTimeline(ref, { ...this.timeline(ref), error: "" });
     await this.load(ref, older);
   }
-  private async loadPage(ref: TimelineRef, older: boolean, cancel?: AbortSignal): Promise<void> {
+  private async loadPage(ref: TimelineRef, older: boolean): Promise<void> {
     const version = this.snapshotVersion;
     const old = this.timeline(ref);
     this.setTimeline(ref, { ...old, loading: true, error: "" });
@@ -393,8 +384,6 @@ export class MobileChat {
       const entries = await this.request(
         `/api/chat/history?${query(ref)}&limit=50${before === undefined ? "" : `&before=${before - 1}`}`,
         z.array(Entry),
-        undefined,
-        cancel,
       );
       if (version !== this.snapshotVersion) return;
       this.setTimeline(ref, {
@@ -406,23 +395,21 @@ export class MobileChat {
       });
     } catch (error) {
       if (version !== this.snapshotVersion) return;
-      this.setTimeline(ref, {
-        ...this.timeline(ref),
-        loading: false,
-        error: cancel?.aborted ? "" : errorText(error),
-      });
+      this.setTimeline(ref, { ...this.timeline(ref), loading: false, error: errorText(error) });
     }
   }
+  /** `cancel` stops paging between pages; a page already loading may be shared, so it finishes. */
   async locate(
     ref: TimelineRef,
     target: { seq: number } | { messageId: number },
     cancel: AbortSignal,
   ): Promise<"found" | "missing" | "failed" | "cancelled"> {
     const version = this.snapshotVersion;
-    await this.load(ref, false, cancel);
+    const stale = () =>
+      cancel.aborted || this.lifetime.signal.aborted || version !== this.snapshotVersion;
+    await this.load(ref);
     for (;;) {
-      if (cancel.aborted || this.lifetime.signal.aborted || version !== this.snapshotVersion)
-        return "cancelled";
+      if (stale()) return "cancelled";
       const page = this.timeline(ref);
       if (page.error) return "failed";
       if (
@@ -441,12 +428,8 @@ export class MobileChat {
         ("seq" in target && first < target.seq)
       )
         return "missing";
-      await this.load(ref, true, cancel);
-      if (
-        !cancel.aborted &&
-        !this.timeline(ref).error &&
-        this.timeline(ref).entries[0]?.seq === first
-      )
+      await this.load(ref, true);
+      if (!stale() && !this.timeline(ref).error && this.timeline(ref).entries[0]?.seq === first)
         return "missing";
     }
   }
@@ -556,7 +539,7 @@ export class MobileChat {
     return this.request(`/api/chat/search?q=${encodeURIComponent(text)}`, z.array(Entry));
   }
   async create(input: ConversationInput) {
-    const conversation = await this.operate("new-conversation", input, (requestId) =>
+    const conversation = await this.operate(operationKey.creation, input, (requestId) =>
       this.request(
         input.kind === "channel" ? "/api/chat/channels" : "/api/chat/dms",
         ConversationView,
@@ -564,10 +547,7 @@ export class MobileChat {
       ),
     );
     this.publish({
-      conversations: [
-        ...this.state.conversations.filter((c) => c.conversationId !== conversation.conversationId),
-        conversation,
-      ],
+      conversations: upsert(this.state.conversations, conversation, (c) => c.conversationId),
     });
     return conversation;
   }
@@ -578,21 +558,18 @@ export class MobileChat {
       action,
       ...(invitee === undefined ? {} : { invitee }),
     };
-    await this.operate(`conversation/${id}`, input, (requestId) =>
+    await this.operate(operationKey.conversation(id), input, (requestId) =>
       this.request(`/api/chat/conversations/${id}/${action}`, z.unknown(), {
         requestId,
         ...(invitee === undefined ? {} : { invitee }),
       }),
     );
   }
-  async task(input: TaskInput) {
+  async task(input: TaskCreation | TaskUpdate) {
     const changing = "taskId" in input;
-    const operation: OperationInput = changing
-      ? { kind: "task-change", ...input }
-      : { kind: "task-create", ...input };
     return this.operate(
-      changing ? `task-change/${input.taskId}` : `task-create/${input.messageId}`,
-      operation,
+      changing ? operationKey.taskChange(input.taskId) : operationKey.taskCreation(input.messageId),
+      changing ? { kind: "task-change", ...input } : { kind: "task-create", ...input },
       async (requestId) => {
         const result = await this.request(
           "taskId" in input ? `/api/chat/tasks/${input.taskId}/change` : "/api/chat/tasks",
@@ -616,6 +593,16 @@ export class MobileChat {
 
 export function accountName(accounts: readonly AccountView[], id: number) {
   return accounts.find((a) => a.accountId === id)?.displayName ?? `#${id}`;
+}
+export function taskStatus(
+  task: Extract<Entry, { kind: "task" }>,
+  accounts: readonly AccountView[],
+  me: number,
+) {
+  if (task.change === "completed") return t("chat.completed");
+  if (task.owner === null) return t("chat.unclaimed");
+  const name = accountName(accounts, task.owner);
+  return t("chat.owned_by", { name: task.owner === me ? t("common.you_name", { name }) : name });
 }
 export function conversationLabel(
   conversation: ConversationView,

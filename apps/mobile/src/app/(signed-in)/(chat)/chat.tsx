@@ -13,6 +13,11 @@ export default function Conversations() {
   const unread = state.unread.timelines;
   const matching = (count: number, mention: boolean) =>
     filter === "all" || (filter === "unread" ? count > 0 : mention);
+  const unreadThreads = unread.filter(
+    (u) => u.inThread && u.unread > 0 && matching(u.unread, u.mentioned),
+  );
+  const senderName = (handle: string) =>
+    state.accounts.find((a) => a.handle === handle)?.displayName ?? handle;
   const open = (id: number, thread?: number) =>
     router.push({ pathname: "/conversation", params: { id, ...(thread ? { thread } : {}) } });
   const conversations = state.conversations.filter(
@@ -64,49 +69,33 @@ export default function Conversations() {
             {!!state.error && (
               <Button title={t("chat.retry_connection")} onPress={() => void chat.resume()} />
             )}
-            {unread.some(
-              (unreadTimeline) =>
-                unreadTimeline.inThread &&
-                unreadTimeline.unread > 0 &&
-                matching(unreadTimeline.unread, unreadTimeline.mentioned),
-            ) && (
+            {unreadThreads.length > 0 && (
               <View>
                 <Caption>{t("chat.unread_threads")}</Caption>
-                {unread
-                  .filter(
-                    (unreadTimeline) =>
-                      unreadTimeline.inThread &&
-                      unreadTimeline.unread > 0 &&
-                      matching(unreadTimeline.unread, unreadTimeline.mentioned),
-                  )
-                  .map((unreadTimeline) => {
-                    const thread =
-                      "thread" in unreadTimeline.timeline
-                        ? unreadTimeline.timeline.thread
-                        : undefined;
-                    const root = chat
-                      .timeline({ conversation: unreadTimeline.conversationId })
-                      .entries.find((e) => e.kind === "message" && e.messageId === thread);
-                    const title =
-                      root?.kind === "message"
-                        ? (root.body.split("\n")[0] ?? "").replace(/^#+\s*/, "").slice(0, 60)
-                        : t("chat.reply_from", {
-                            name:
-                              state.accounts.find((a) => a.handle === unreadTimeline.latestSender)
-                                ?.displayName ?? unreadTimeline.latestSender,
-                          });
-                    return (
-                      <ConversationRow
-                        key={JSON.stringify(unreadTimeline.timeline)}
-                        title={title || t("chat.thread")}
-                        subtitle={t("chat.thread_label", { name: unreadTimeline.label })}
-                        kind="thread"
-                        count={unreadTimeline.unread}
-                        mentioned={unreadTimeline.mentioned}
-                        onPress={() => open(unreadTimeline.conversationId, thread)}
-                      />
-                    );
-                  })}
+                {unreadThreads.map((unreadTimeline) => {
+                  const thread =
+                    "thread" in unreadTimeline.timeline
+                      ? unreadTimeline.timeline.thread
+                      : undefined;
+                  const root = chat
+                    .timeline({ conversation: unreadTimeline.conversationId })
+                    .entries.find((e) => e.kind === "message" && e.messageId === thread);
+                  const title =
+                    root?.kind === "message"
+                      ? (root.body.split("\n")[0] ?? "").replace(/^#+\s*/, "").slice(0, 60)
+                      : t("chat.reply_from", { name: senderName(unreadTimeline.latestSender) });
+                  return (
+                    <ConversationRow
+                      key={JSON.stringify(unreadTimeline.timeline)}
+                      title={title || t("chat.thread")}
+                      subtitle={t("chat.thread_label", { name: unreadTimeline.label })}
+                      kind="thread"
+                      count={unreadTimeline.unread}
+                      mentioned={unreadTimeline.mentioned}
+                      onPress={() => open(unreadTimeline.conversationId, thread)}
+                    />
+                  );
+                })}
               </View>
             )}
             {(["dm", "channel"] as const).map((kind) => {
@@ -147,11 +136,7 @@ export default function Conversations() {
                           title={conversationLabel(x, state.accounts, state.me)}
                           subtitle={
                             u?.unread
-                              ? t("chat.unread_from", {
-                                  name:
-                                    state.accounts.find((a) => a.handle === u.latestSender)
-                                      ?.displayName ?? u.latestSender,
-                                })
+                              ? t("chat.unread_from", { name: senderName(u.latestSender) })
                               : peer
                                 ? `${peer.kind === "agent" ? t("chat.agent") : t("chat.human")} · @${peer.handle}`
                                 : x.kind === "private"

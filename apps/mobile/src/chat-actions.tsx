@@ -1,7 +1,14 @@
 import { t } from "./i18n";
-import { useEffect, useRef, useState } from "react";
-import type { ConversationView, Entry } from "@mate/chat/contracts";
-import { accountName, conversationLabel } from "./chat";
+import { useState, type ReactNode } from "react";
+import type { AccountView, ConversationView, Entry } from "@mate/chat/contracts";
+import {
+  accountName,
+  conversationLabel,
+  operationKey,
+  taskStatus,
+  type ConversationAction,
+  type TaskChange,
+} from "./chat";
 import { useChat, useChatState } from "./session";
 import {
   Avatar,
@@ -17,17 +24,10 @@ import {
   Section,
 } from "./ui";
 
-export function useAction(key: string) {
+function useAction(key: string) {
   const state = useChatState();
   const operation = state.operations.get(key);
   const [error, setError] = useState("");
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
   return {
     operation,
     busy: operation?.status === "sending",
@@ -37,14 +37,60 @@ export function useAction(key: string) {
       setError("");
       try {
         await action();
-        return mounted.current;
+        return true;
       } catch (e) {
-        if (mounted.current)
-          setError(e instanceof Error ? e.message : t("chat.the_operation_failed_retry"));
+        setError(e instanceof Error ? e.message : t("chat.the_operation_failed_retry"));
         return false;
       }
     },
   };
+}
+export function AccountPicker({
+  accounts,
+  query,
+  onQuery,
+  selected,
+  onSelect,
+  title,
+  disabled = false,
+  empty,
+}: {
+  accounts: readonly AccountView[];
+  query: string;
+  onQuery(query: string): void;
+  selected: number | null;
+  onSelect(accountId: number): void;
+  title?: string;
+  disabled?: boolean;
+  empty?: ReactNode;
+}) {
+  const matches = accounts.filter((a) =>
+    `${a.displayName} ${a.handle}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+  );
+  return (
+    <>
+      <Field
+        label={t("chat.find_account")}
+        value={query}
+        onChangeText={onQuery}
+        clearButtonMode="while-editing"
+      />
+      <Section {...(title === undefined ? {} : { title })}>
+        {matches.map((a) => (
+          <Row
+            key={a.accountId}
+            title={a.displayName}
+            subtitle={`@${a.handle} · ${a.kind === "agent" ? t("chat.agent") : t("chat.human")}`}
+            selected={selected === a.accountId}
+            leading={<Avatar name={a.displayName} kind={a.kind} />}
+            disabled={disabled}
+            onPress={() => onSelect(a.accountId)}
+          />
+        ))}
+      </Section>
+      {!matches.length && empty}
+    </>
+  );
 }
 export type ConversationPresentation = {
   page: "info" | "invite" | "leave" | "archive";
@@ -66,7 +112,7 @@ export function ConversationActionsContent({
 }) {
   const chat = useChat();
   const state = useChatState();
-  const action = useAction(`conversation/${conversation.conversationId}`);
+  const action = useAction(operationKey.conversation(conversation.conversationId));
   const { page, query, invitee } = presentation;
   const setPage = (page: ConversationPresentation["page"]) => onChange({ ...presentation, page });
   const setQuery = (query: string) => onChange({ ...presentation, query });
@@ -75,16 +121,10 @@ export function ConversationActionsContent({
   const pending = action.operation?.input;
   const blocked = !!pending;
   const name = conversationLabel(conversation, state.accounts, state.me);
-  const act = async (kind: "join" | "leave" | "archive" | "invite", account?: number) => {
+  const act = async (kind: ConversationAction, account?: number) => {
     if (await action.run(() => chat.conversationAction(conversation.conversationId, kind, account)))
       onClose();
   };
-  const candidates = state.accounts.filter(
-    (a) =>
-      a.active &&
-      !conversation.members.includes(a.accountId) &&
-      `${a.displayName} ${a.handle}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
-  );
   return (
     <>
       {page !== "info" && (
@@ -189,35 +229,26 @@ export function ConversationActionsContent({
         </>
       ) : page === "invite" ? (
         <>
-          <Field
-            label={t("chat.find_account")}
-            value={query}
-            onChangeText={setQuery}
-            clearButtonMode="while-editing"
-          />
-          <Section>
-            {candidates.map((a) => (
-              <Row
-                key={a.accountId}
-                title={a.displayName}
-                subtitle={`@${a.handle} · ${a.kind === "agent" ? t("chat.agent") : t("chat.human")}`}
-                selected={invitee === a.accountId}
-                leading={<Avatar name={a.displayName} kind={a.kind} />}
-                disabled={blocked}
-                onPress={() => setInvitee(a.accountId)}
+          <AccountPicker
+            accounts={state.accounts.filter(
+              (a) => a.active && !conversation.members.includes(a.accountId),
+            )}
+            query={query}
+            onQuery={setQuery}
+            selected={invitee}
+            onSelect={setInvitee}
+            disabled={blocked}
+            empty={
+              <Empty
+                title={t("chat.no_accounts_to_invite")}
+                message={
+                  query
+                    ? t("common.try_another_keyword")
+                    : t("chat.all_active_accounts_are_already_in_this")
+                }
               />
-            ))}
-          </Section>
-          {!candidates.length && (
-            <Empty
-              title={t("chat.no_accounts_to_invite")}
-              message={
-                query
-                  ? t("common.try_another_keyword")
-                  : t("chat.all_active_accounts_are_already_in_this")
-              }
-            />
-          )}
+            }
+          />
           <Button
             title={t("chat.invite")}
             primary
@@ -260,7 +291,7 @@ export function CreateTaskContent({
   onClose(): void;
 }) {
   const chat = useChat();
-  const action = useAction(`task-create/${entry.messageId}`);
+  const action = useAction(operationKey.taskCreation(entry.messageId));
   const { title, source } = presentation;
   const setTitle = (title: string) => onChange({ ...presentation, title });
   const setSource = (source: boolean) => onChange({ ...presentation, source });
@@ -325,37 +356,18 @@ export function TaskActionsContent({
 }) {
   const chat = useChat();
   const state = useChatState();
-  const action = useAction(`task-change/${task.taskId}`);
+  const action = useAction(operationKey.taskChange(task.taskId));
   const { transfer, to, query } = presentation;
   const setTransfer = (transfer: boolean) => onChange({ ...presentation, transfer });
   const setTo = (to: number) => onChange({ ...presentation, to });
   const setQuery = (query: string) => onChange({ ...presentation, query });
-  const act = async (
-    change: { kind: "claim" | "yield" | "complete" } | { kind: "transfer"; to: number },
-  ) => {
+  const act = async (change: TaskChange) => {
     if (await action.run(() => chat.task({ taskId: task.taskId, change }))) onClose();
   };
-  const candidates = state.accounts.filter(
-    (a) =>
-      a.active &&
-      a.accountId !== state.me &&
-      `${a.displayName} ${a.handle}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
-  );
   return (
     <>
       <Heading>{task.title}</Heading>
-      <Copy>
-        {task.change === "completed"
-          ? t("chat.completed")
-          : task.owner === null
-            ? t("chat.unclaimed")
-            : t("chat.owned_by", {
-                name:
-                  task.owner === state.me
-                    ? t("common.you_name", { name: accountName(state.accounts, task.owner) })
-                    : accountName(state.accounts, task.owner),
-              })}
-      </Copy>
+      <Copy>{taskStatus(task, state.accounts, state.me)}</Copy>
       <Section title={t("chat.source_message")}>
         <Row
           title={source?.body.split("\n")[0]?.slice(0, 80) || t("chat.view_source_message")}
@@ -390,24 +402,13 @@ export function TaskActionsContent({
         ) : task.owner === state.me ? (
           transfer ? (
             <>
-              <Field
-                label={t("chat.find_account")}
-                value={query}
-                onChangeText={setQuery}
-                clearButtonMode="while-editing"
+              <AccountPicker
+                accounts={state.accounts.filter((a) => a.active && a.accountId !== state.me)}
+                query={query}
+                onQuery={setQuery}
+                selected={to}
+                onSelect={setTo}
               />
-              <Section>
-                {candidates.map((a) => (
-                  <Row
-                    key={a.accountId}
-                    title={a.displayName}
-                    subtitle={`@${a.handle} · ${a.kind === "agent" ? t("chat.agent") : t("chat.human")}`}
-                    selected={to === a.accountId}
-                    leading={<Avatar name={a.displayName} kind={a.kind} />}
-                    onPress={() => setTo(a.accountId)}
-                  />
-                ))}
-              </Section>
               <Button
                 title={t("chat.confirm_transfer")}
                 primary
