@@ -143,7 +143,7 @@ export async function startSite(): Promise<Site> {
     initialPasswordFile: passwordFile,
     webDirectory: await webDirectory(),
     clock,
-    push: async () => 201,
+    push: async () => "delivered",
   });
   const nodes: FakeNode[] = [];
   onTestFinished(async () => {

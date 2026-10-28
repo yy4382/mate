@@ -41,7 +41,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64）
 
 控制面是 `deploy/control-plane/` 里的一个镜像加两个 Compose 文件：`compose.yaml` 是日常配置，`compose.initialize.yaml` 只在第一次启动时叠加，把第一个管理员的初始密码文件和 handle 交给控制面。镜像用 `docker build --file deploy/control-plane/Dockerfile .` 从仓库根目录构建，构建出的镜像带网页前端；发布时由 CI 推到镜像仓库，用确切的版本号，不用 `latest`。
 
-镜像保留编译后的 workspace 包，由 `pnpm deploy --prod` 装入独立的生产依赖，不把服务端和第三方包合成一个 JavaScript 文件。依赖在目标架构上安装，保留原生模块和包内资源。每个 PR 和 main 都复用发布构建任务，构建 x64 Linux 镜像和 node 发布包，跳过发布步骤；下载的 Node 运行时按 `deploy/node/node-runtimes.ts` 缓存。只有 Markdown、MDX、reST、AsciiDoc、`docs/` 下的文件或根目录 LICENSE/NOTICE 变动时，跳过这个构建任务，其余检查照常；`v*` 标签始终构建并发布。node 发布包里的 JavaScript 由 tsdown 打包。
+镜像构建只安装控制面和网页需要的 workspace 包，移动端等客户端的依赖不进入镜像构建。镜像保留编译后的 workspace 包，由 `pnpm deploy --prod` 装入独立的生产依赖，不把服务端和第三方包合成一个 JavaScript 文件。依赖在目标架构上安装，保留原生模块和包内资源。每个 PR 和 main 都复用发布构建任务，构建 x64 Linux 镜像和 node 发布包，跳过发布步骤；下载的 Node 运行时按 `deploy/node/node-runtimes.ts` 缓存。只有 Markdown、MDX、reST、AsciiDoc、`docs/` 下的文件或根目录 LICENSE/NOTICE 变动时，跳过这个构建任务，其余检查照常；`v*` 标签始终构建并发布。node 发布包里的 JavaScript 由 tsdown 打包。
 
 1. 建一个只属于控制面系统账号的私有数据目录，权限 0700，放在 node 账号进不去的地方，例如 `sudo install -d -m 700 -o mate-control -g mate-control /srv/mate-control-plane/data`。Compose 不会替你建它（目录不存在就拒绝启动），因为让 Docker 建出来的会属于 root。
 2. 镜像在 GHCR 上公开，可以匿名拉取，不需要登录。
@@ -350,8 +350,6 @@ iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模�
 
 `dev.yyang.mate` 是当前 iOS bundle identifier。签名使用对应的 App ID 和 provisioning profile，控制面的 `MATE_APNS_TOPIC` 也必须与它一致。签名与自用分发方式仍待确认，本阶段不添加公开应用商店发布自动化。根 `pnpm build` 只构建已有网页和服务端包，移动端不参与控制面镜像或 node 发布包的构建。
 
-移动任务 PR 以长期集成分支 `mobile` 为 base，依赖任务可在其上堆叠。合入任务 PR 不发布移动 app，也不触发 `v*` 发布。整体 `mobile` 到 `main` 的集成另等用户批准；本阶段不合并、不打 tag、不发布、不部署。
-
 ### 6.2 原生 iOS 通知
 
 原生登记的随机 binding 使用 SDK 58 的 [expo-crypto.randomUUID](https://docs.expo.dev/versions/v58.0.0/sdk/crypto/)，不依赖浏览器的 Web Crypto 全局对象。
@@ -377,4 +375,3 @@ app config 的输入 `MATE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`。它同时
 
 实际远程投递仍需操作者确认付费 Apple Developer 资格，提供 APNs 凭据，并生成具有 Push Notifications capability 的签名 app。本任务不创建或修改 Apple Developer、EAS 账号或资源，不接触真实 key 内容，不向真实账号发送测试通知。普通 iOS 27 模拟器的正常构建、系统权限界面和 `simctl push` 注入可验证本机行为；模拟注入不是 APNs 或真机投递证明。没有凭据和签名之前，真实 APNs 投递保持未验证。
 
-合入聊天任务时保留根层的 `NotificationIntegration`，并在账号或资料入口链接 `/notifications`。点击目标是 `/conversation`，参数为 `id`、可选 `thread` 和 `seq`；聊天任务的已登录路由组持有该页面，通知任务不创建另一套聊天导航。需在整体 mobile 合入后验证最终页面与序号定位。

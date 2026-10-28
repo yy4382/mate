@@ -80,7 +80,7 @@ export {
   type UnreadSummary,
 } from "./contracts.ts";
 export type { InboxEvent } from "./inbox.ts";
-export type { PushNotice, PushSender } from "./push.ts";
+export type { PushNotice, PushOutcome, PushSender } from "./push.ts";
 
 /** Told which accounts just received inbox events. */
 export type InboxListener = (accounts: readonly number[]) => void;

@@ -117,7 +117,7 @@ function deliveryFixture() {
   const chat = new ChatApp(join(directory, "chat.sqlite"), {
     push: async (subscription) => {
       if (subscription.transport === "apns") deliveries.push(subscription.token);
-      return 200;
+      return "delivered" as const;
     },
   });
   onTestFinished(() => {

@@ -80,9 +80,10 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
         options.push ??
         ((subscription, notice) =>
           subscription.transport === "apns"
-            ? apns
+            ? // With native push turned off, keep the subscription so it works again once turned back on.
+              apns
               ? apns.send(subscription, notice)
-              : Promise.resolve(503)
+              : Promise.resolve("refused")
             : web(subscription, notice)),
     });
     closers.push(() => chat.close());

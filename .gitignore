@@ -14,7 +14,6 @@ mate.local.json
 # pnpm content-addressable store (dependency cache, never source).
 .pnpm-store/
 artifacts/
-.audit/
 decisions.tsv
 
 # Expo local state and generated native projects.

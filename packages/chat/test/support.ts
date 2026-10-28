@@ -6,6 +6,7 @@ import {
   ChatApp,
   ChatError,
   type PushNotice,
+  type PushOutcome,
   type PushSender,
   type PushSubscription,
 } from "../src/index.ts";
@@ -67,24 +68,24 @@ export function newAppWithTwo() {
   return { app, alice, bob };
 }
 
-/** What a push service answers: an HTTP status, a failed connection, or nothing until `release`. */
-export type PushAnswer = number | "unreachable" | "hang";
+/** What a push service answers: an outcome, a failed connection, or nothing until `release`. */
+export type PushAnswer = PushOutcome | "unreachable" | "hang";
 
 /**
  * The Web Push service, as the chat app's `PushSender` reaches it. It records every request with the time it arrived
- * and answers each endpoint from that endpoint's script, then with 201 Created.
+ * and answers each endpoint from that endpoint's script, then with "delivered".
  */
 export class FakePushService {
   readonly requests: { subscription: PushSubscription; notice: PushNotice; at: number }[] = [];
   readonly #scripts = new Map<string, PushAnswer[]>();
-  readonly #held: ((status: number) => void)[] = [];
+  readonly #held: ((outcome: PushOutcome) => void)[] = [];
   readonly #clock: Clock;
 
   constructor(clock: Clock) {
     this.#clock = clock;
   }
 
-  /** Answer the next requests to `endpoint` with `answers`, in order, then with 201 Created. */
+  /** Answer the next requests to `endpoint` with `answers`, in order, then with "delivered". */
   answer(endpoint: string, ...answers: PushAnswer[]): void {
     this.#scripts.set(endpoint, [...(this.#scripts.get(endpoint) ?? []), ...answers]);
   }
@@ -94,15 +95,15 @@ export class FakePushService {
     const answer =
       this.#scripts
         .get(subscription.transport === "apns" ? subscription.token : subscription.endpoint)
-        ?.shift() ?? 201;
+        ?.shift() ?? "delivered";
     if (answer === "unreachable") throw new Error("push service unreachable");
-    if (answer === "hang") return new Promise<number>((resolve) => this.#held.push(resolve));
+    if (answer === "hang") return new Promise<PushOutcome>((resolve) => this.#held.push(resolve));
     return answer;
   };
 
-  /** Answer every request held by "hang" with `status`. */
-  release(status: number): void {
-    for (const resolve of this.#held.splice(0)) resolve(status);
+  /** Answer every request held by "hang" with `outcome`. */
+  release(outcome: PushOutcome): void {
+    for (const resolve of this.#held.splice(0)) resolve(outcome);
   }
 
   /** Wait until `count` requests have arrived in all, and the chat app has taken in the answer to the last. */

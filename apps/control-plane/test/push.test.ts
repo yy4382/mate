@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createSecureServer, type IncomingHttpHeaders, type ServerHttp2Session } from "node:http2";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeClock, HumanBrowser, temporaryDirectory } from "@mate/testkit";
 import { expect, it, onTestFinished } from "vitest";
@@ -41,12 +42,11 @@ it("refuses unusable APNs credentials before serving and can restart with native
   expect((await owner.get("/api/chat/push/native")).json).toEqual({ enabled: false });
 });
 
-/** A TLS APNs protocol fixture, reached through the real provider library. No Apple endpoints are used. */
-async function fixture(configured = true) {
-  const directory = temporaryDirectory();
+/** One self-signed localhost certificate for the whole file: RSA key generation is the slow part of a fixture. */
+const tls = (() => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-apns-tls-"));
   const certFile = join(directory, "cert.pem"),
-    tlsKey = join(directory, "tls.pem"),
-    apnsKey = join(directory, "apns.p8");
+    tlsKey = join(directory, "tls.pem");
   execFileSync(
     "openssl",
     [
@@ -68,14 +68,23 @@ async function fixture(configured = true) {
     ],
     { stdio: "ignore" },
   );
+  const files = { cert: readFileSync(certFile), key: readFileSync(tlsKey) };
+  rmSync(directory, { recursive: true });
+  return files;
+})();
+
+/** A TLS APNs protocol fixture, reached through the real provider library. No Apple endpoints are used. */
+async function fixture(configured = true) {
+  const directory = temporaryDirectory();
+  const apnsKey = join(directory, "apns.p8");
   const { privateKey } = generateKeyPairSync("ec", {
     namedCurve: "prime256v1",
     privateKeyEncoding: { format: "pem", type: "pkcs8" },
     publicKeyEncoding: { format: "pem", type: "spki" },
   });
   writeFileSync(apnsKey, privateKey);
-  const cert = readFileSync(certFile);
-  const remote = createSecureServer({ cert, key: readFileSync(tlsKey) });
+  const { cert } = tls;
+  const remote = createSecureServer(tls);
   const sessions = new Set<ServerHttp2Session>();
   remote.on("session", (session) => {
     sessions.add(session);
@@ -209,7 +218,7 @@ it("validates native transport data and sends a private, scoped alert through th
   expect(request.headers.authorization).toMatch(/^bearer /);
   expect(request.body).not.toContain("private message body");
   expect(JSON.parse(request.body)).toMatchObject({
-    aps: { alert: { title: "Mate", body: "你有新的私信或提及。" } },
+    aps: { alert: { title: "Mate", "loc-key": "MATE_PUSH_ALERT" } },
     body: {
       version: 1,
       server,

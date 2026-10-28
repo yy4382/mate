@@ -1,6 +1,11 @@
 import apn from "@parse/node-apn";
-import type { PushSender } from "@mate/chat";
-import { ApnsEnvironment, NativePushNotice, PushOrigin } from "@mate/chat/contracts";
+import type { PushNotice, PushOutcome } from "@mate/chat";
+import {
+  ApnsEnvironment,
+  PushOrigin,
+  type ApnsSubscription,
+  type NativePushNotice,
+} from "@mate/chat/contracts";
 import { z } from "zod";
 
 export const ApnsConfig = z.object({
@@ -18,33 +23,38 @@ export type ApnsOptions = ApnsConfig & {
   connection?: Pick<apn.ProviderOptions, "address" | "port" | "ca">;
 };
 
+/** Token-specific refusals: only these remove a subscription. APNs 404 means a bad path, not an invalid token. */
+const GONE = new Set(["BadDeviceToken", "Unregistered", "DeviceTokenNotForTopic"]);
+
 export function openApns(options: ApnsOptions, now: () => number) {
   const config = ApnsConfig.parse(options);
   const providerOptions: apn.ProviderOptions = {
     ...options.connection,
     token: { key: config.keyFile, keyId: config.keyId, teamId: config.teamId },
     production: config.environment === "production",
-    requestTimeout: 10_000,
     // Mate's durable queue owns retries, including Retry-After responses.
     connectionRetryLimit: 0,
   };
   let provider: apn.Provider | undefined = new apn.Provider(providerOptions);
-  const send: PushSender = async (subscription, notice) => {
-    if (subscription.transport !== "apns") throw new Error("APNs requires a native subscription");
-    if (subscription.environment !== config.environment) return 400;
+  const send = async (subscription: ApnsSubscription, notice: PushNotice): Promise<PushOutcome> => {
     const expiry = Math.floor((notice.at + 86_400_000) / 1000);
-    if (expiry <= Math.floor(now() / 1000)) return 204;
+    if (expiry <= Math.floor(now() / 1000)) return "refused";
     const notification = new apn.Notification();
     notification.topic = config.topic;
     notification.pushType = "alert";
     notification.priority = 10;
     notification.expiry = expiry;
     notification.collapseId = notice.tag;
-    // iOS may display an alert while JS cannot run. Keep account/channel details out of that alert.
-    notification.alert = { title: "Mate", body: "你有新的私信或提及。" };
+    // iOS shows this alert while JS cannot run, so it carries no account or channel details. The app bundles the
+    // localized text for the key (`locales` in apps/mobile/app.config.ts).
+    notification.alert = {
+      title: "Mate",
+      "loc-key": "MATE_PUSH_ALERT",
+      body: "You have a new direct message or mention.",
+    };
     notification.sound = "default";
     notification.payload = {
-      body: NativePushNotice.parse({
+      body: {
         version: 1,
         server: config.server,
         accountId: notice.accountId,
@@ -54,9 +64,10 @@ export function openApns(options: ApnsOptions, now: () => number) {
         seq: notice.seq,
         tag: notice.tag,
         at: notice.at,
-      }),
+      } satisfies NativePushNotice,
     };
     const connection = (provider ??= new apn.Provider(providerOptions));
+    // One deadline for the whole send, connecting included: the queue waits for each delivery.
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const result = await Promise.race([
       connection.send(notification, subscription.token),
@@ -68,20 +79,12 @@ export function openApns(options: ApnsOptions, now: () => number) {
         }, 10_000);
       }),
     ]).finally(() => clearTimeout(timeout));
-    if (result.sent.length > 0) return 200;
+    if (result.sent.length > 0) return "delivered";
     const failure = result.failed[0];
     if (!failure || failure.error) throw new Error("APNs connection failed");
-    const reason = failure.response?.reason;
-    if (reason === "ExpiredProviderToken") return 503;
-    // APNs 404 means a bad path, not an invalid token. Only token-specific refusals remove a subscription.
-    if (
-      reason === "BadDeviceToken" ||
-      reason === "Unregistered" ||
-      reason === "DeviceTokenNotForTopic"
-    )
-      return 410;
-    if (failure.status === 404 || failure.status === 410) return 400;
-    return failure.status ?? 503;
+    if (GONE.has(failure.response?.reason ?? "")) return "gone";
+    const status = failure.status ?? 503;
+    return status === 429 || status >= 500 ? "retry" : "refused";
   };
   return { send, close: () => provider?.shutdown() };
 }
