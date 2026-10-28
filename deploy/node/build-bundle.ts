@@ -13,7 +13,6 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     platform: { type: "string", multiple: true },
-    arch: { type: "string", multiple: true },
     out: { type: "string", default: join(root, "dist/node-bundles") },
   },
 });
@@ -24,25 +23,20 @@ const selectedPlatforms = values.platform?.map((platform) =>
 const invalidPlatform = selectedPlatforms?.some(
   (platform) => !Object.hasOwn(bundleLayouts, platform),
 );
-const invalidArch = values.arch?.some((arch) => arch !== "x64" && arch !== "arm64");
 if (
   positionals.length !== 1 ||
   version === undefined ||
   !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version) ||
-  invalidPlatform ||
-  invalidArch
+  invalidPlatform
 ) {
   process.stderr.write(
-    "Usage: node deploy/node/build-bundle.ts <version> [--platform linux|darwin|win32] [--arch x64|arm64] [--out <dir>]\n",
+    "Usage: node deploy/node/build-bundle.ts <version> [--platform linux|darwin|win32] [--out <dir>]\n",
   );
   process.exit(2);
 }
-const runtimes = nodeRuntimes.filter((runtime) => {
-  return (
-    (selectedPlatforms === undefined || selectedPlatforms.includes(runtime.platform)) &&
-    (values.arch === undefined || values.arch.includes(runtime.arch))
-  );
-});
+const runtimes = nodeRuntimes.filter(
+  (runtime) => selectedPlatforms === undefined || selectedPlatforms.includes(runtime.platform),
+);
 
 const script = await build({
   entry: [join(root, "apps/node/src/main.ts")],

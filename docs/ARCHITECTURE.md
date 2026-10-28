@@ -602,7 +602,7 @@ data/
 ## 7. 部署
 
 - **控制面**：Docker 镜像加单服务 Compose。镜像用 `tsc` 编译 workspace 包，再用 `pnpm deploy --prod` 装入生产依赖；依赖在目标架构上安装，保留包内资源和原生模块。容器以一个专用的无登录系统账号的 UID/GID 运行，数据目录只属于它。node 账号（Agent 命令的身份）读不到模型凭据和对话库，也不在 docker 组里。
-- **node**：完整发布包，自带 Node 运行时和 `mate node` CLI，以宿主现有账号运行。Linux 用 systemd 用户服务，macOS 用当前图形登录账号的 LaunchAgent，Windows 用当前账号的登录计划任务。每个平台分别发布 x64 和 arm64 包，文件名的平台为 `linux`、`darwin`、`win`。发布包是 ustar 归档加旁边的 `.sha256`，装入已钉住官方校验和的 Node 24 二进制、tsdown 打包的程序、启动命令和清单。Windows 的官方 ZIP 只提取运行时与许可证；清单中的平台为 `win32`。CLI 校验平台和架构，不匹配就拒绝。包由管理员自行下载；自动部署仍只升级 Linux 的同机 node。
+- **node**：完整发布包，自带 Node 运行时和 `mate node` CLI，以宿主现有账号运行。Linux 用 systemd 用户服务，macOS 用当前图形登录账号的 LaunchAgent，Windows 用当前账号的登录计划任务。发布 Linux x64、macOS arm64、Windows x64 三个包，文件名的平台为 `linux`、`darwin`、`win`。发布包是 ustar 归档加旁边的 `.sha256`，装入已钉住官方校验和的 Node 24 二进制、tsdown 打包的程序、启动命令和清单。Windows 的官方 ZIP 只提取运行时与许可证；清单中的平台为 `win32`。CLI 校验平台和架构，不匹配就拒绝。包由管理员自行下载；自动部署仍只升级 Linux 的同机 node。
 - **`mate node` 不记"做到哪一步"**（第 11 节第 1 条）。程序目录（POSIX 的 `~/.local/lib/mate-node`、Windows 的 `%LOCALAPPDATA%\Mate\program`）由暂存目录改名放入、改名挪开再删，所以要么是完整的某个版本，要么不存在；`install`、`update`、`uninstall` 只看程序目录、`mate` 命令、服务定义和服务状态这几样现有状态决定做什么，配置、身份和工作区在程序目录之外，它们从不碰。清单同时说明程序目录里哪些文件是 Mate 的：有别的文件时 `update` 和 `uninstall` 拒绝，不删别人的东西。`install` 从不启动服务，`update` 只在服务完全停止时动手，之后也不启动。状态到动作的完整对照见 DEPLOYMENT §3.2。
 
 Mate 不创建用户、不切换身份、不安装系统软件、不配置 linger。Agent 自己在命令里写 `sudo` 的话，能不能成功由宿主的 sudo 策略决定。

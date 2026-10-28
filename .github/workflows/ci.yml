@@ -148,10 +148,13 @@ jobs:
           node-version: "24"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - id: host
-        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'arch=' + process.arch + '\n')"
-      - run: pnpm bundle:node 0.0.0-ci --platform ${{ matrix.platform }} --arch ${{ steps.host.outputs.arch }}
-      - run: pnpm bundle:node 0.0.0-ci-update --platform ${{ matrix.platform }} --arch ${{ steps.host.outputs.arch }} --out dist/node-update-bundles
+      # The runtimes are pinned by checksum in node-runtimes.ts, so each is fetched from nodejs.org once.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist/node-runtime
+          key: node-runtime-${{ runner.os }}-${{ hashFiles('deploy/node/node-runtimes.ts') }}
+      - run: pnpm bundle:node 0.0.0-ci --platform ${{ matrix.platform }}
+      - run: pnpm bundle:node 0.0.0-ci-update --platform ${{ matrix.platform }} --out dist/node-update-bundles
       - run: pnpm test apps/node --maxWorkers=2 --testTimeout=60000
         env:
           MATE_TEST_BUNDLE_DIRECTORY: dist/node-bundles
@@ -221,10 +224,12 @@ jobs:
           node-version: "24"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm bundle:node "${VERSION#v}"
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      # The runtimes are pinned by checksum in node-runtimes.ts, so each is fetched from nodejs.org once.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          platforms: arm64
+          path: dist/node-runtime
+          key: node-runtime-${{ runner.os }}-${{ hashFiles('deploy/node/node-runtimes.ts') }}
+      - run: pnpm bundle:node "${VERSION#v}"
       - name: Log in to the image registry
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -235,7 +240,7 @@ jobs:
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}-control-plane"
           docker buildx create --use
-          docker buildx build --file deploy/control-plane/Dockerfile --platform linux/amd64,linux/arm64 \
+          docker buildx build --file deploy/control-plane/Dockerfile --platform linux/amd64 \
             --build-arg "MATE_VERSION=${VERSION#v}" --tag "$image:${VERSION#v}" \
             --push=${{ startsWith(github.ref, 'refs/tags/v') }} .
       - name: Publish the node bundles
@@ -259,7 +264,6 @@ jobs:
       cancel-in-progress: false
     env:
       VERSION: ${{ github.ref_name }}
-      ARCH: ${{ vars.DEPLOY_NODE_ARCH || 'x64' }}
     steps:
       - name: Check that a host is configured
         id: configured
@@ -271,7 +275,7 @@ jobs:
         if: steps.configured.outputs.yes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "mate-node-${VERSION#v}-linux-$ARCH.tar.gz"
+        run: gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "mate-node-${VERSION#v}-linux-x64.tar.gz"
       - name: Upgrade the host
         if: steps.configured.outputs.yes == 'true'
         env:
@@ -283,6 +287,6 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy
           chmod 0600 ~/.ssh/deploy
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          bundle="mate-node-${VERSION#v}-linux-$ARCH.tar.gz"
+          bundle="mate-node-${VERSION#v}-linux-x64.tar.gz"
           sha=$(sha256sum "$bundle" | cut -d' ' -f1)
           ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o BatchMode=yes "$HOST" "deploy ${VERSION#v} $sha" < "$bundle"

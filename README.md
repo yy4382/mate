@@ -23,7 +23,7 @@ Mate 不替你创建账号，也不提升权限。Agent 自己在命令里写了
 
 先有一个运行中的控制面（[部署指南](docs/DEPLOYMENT.md) 第 3 节），并能用管理员账号登录网页。下面在要执行命令的机器上，用**要运行 node 的那个普通账号**操作，不需要 root。包自带 Node，不用另装 Node 或 pnpm。Windows 的步骤见[部署指南 3.2](docs/DEPLOYMENT.md)。
 
-1. **下载发布包。** 同一版本的 `.tar.gz` 和旁边的 `.sha256` 必须放在同一个目录。平台是 `linux` 或 `darwin`（macOS），架构是 `x64` 或 `arm64`（`uname -m` 为 `x86_64` 的是 `x64`，`arm64` 或 `aarch64` 的是 `arm64`）。装了 `gh` 并登录过、对仓库有权限的话：
+1. **下载发布包。** 同一版本的 `.tar.gz` 和旁边的 `.sha256` 必须放在同一个目录。x86_64 的 Linux 用 `linux-x64`，Apple 芯片的 macOS 用 `darwin-arm64`；其他架构没有发布包。装了 `gh` 并登录过、对仓库有权限的话：
 
    ```sh
    mkdir mate-node-install && cd mate-node-install

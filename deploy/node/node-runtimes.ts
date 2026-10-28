@@ -23,18 +23,6 @@ export const nodeRuntimes: readonly NodeRuntime[] = [
     sha256: "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff",
   },
   {
-    platform: "linux",
-    arch: "arm64",
-    format: "tar.gz",
-    sha256: "724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5",
-  },
-  {
-    platform: "darwin",
-    arch: "x64",
-    format: "tar.gz",
-    sha256: "1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097",
-  },
-  {
     platform: "darwin",
     arch: "arm64",
     format: "tar.gz",
@@ -45,12 +33,6 @@ export const nodeRuntimes: readonly NodeRuntime[] = [
     arch: "x64",
     format: "zip",
     sha256: "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
-  },
-  {
-    platform: "win32",
-    arch: "arm64",
-    format: "zip",
-    sha256: "8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921",
   },
 ];
 

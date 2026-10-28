@@ -34,7 +34,6 @@ flock -n 9 || { echo "another deploy is running" >&2; exit 1; }
 
 case "$(uname -m)" in
   x86_64) ARCH=x64 ;;
-  aarch64) ARCH=arm64 ;;
   *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
 bundle_of() { echo "$STATE/bundles/mate-node-$1-linux-$ARCH.tar.gz"; }

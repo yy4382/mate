@@ -277,7 +277,7 @@ node 在握手时报告的宿主平台、架构、hostname、系统版本和程�
 避免：把服务正在运行叫连上（服务管理器只知道进程在跑）。
 
 **发布包**（bundle）
-node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-node/` 一个目录（Node 运行时、打成一个脚本的 node 程序和 CLI、`mate` 启动命令、清单），旁边是它的 `.sha256`。由 `pnpm bundle:node` 构建，`mate node install`/`update` 读取。Linux、macOS、Windows 各有 x64/arm64 包；文件名分别用 linux、darwin、win，清单的 Windows 平台值为 win32。
+node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `mate-node/` 一个目录（Node 运行时、打成一个脚本的 node 程序和 CLI、`mate` 启动命令、清单），旁边是它的 `.sha256`。由 `pnpm bundle:node` 构建，`mate node install`/`update` 读取。发布 Linux x64、macOS arm64、Windows x64 三个包；文件名分别用 linux、darwin、win，清单的 Windows 平台值为 win32。
 避免：安装包、release（指 GitHub 的发布页时才用）。
 
 **自动部署**（deploy）
