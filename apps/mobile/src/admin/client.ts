@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { Admin, AgentEvent, AgentView } from "@mate/admin";
+import type { Admin, AdminErrorReason, AgentEvent, AgentView } from "@mate/admin";
 import { HumanView } from "@mate/control-plane/contracts";
 import { z } from "zod";
 import { readEvents, sendJson } from "../http";
@@ -31,7 +31,8 @@ export class ApiError extends Error {
   }
 }
 
-const refusals: Record<string, string> = {
+/** Every management refusal is worded; the shell's and chat's reasons the same routes answer are added. */
+const refusals: Record<AdminErrorReason, string> & Record<string, string> = {
   "handle-taken": t("management.this_handle_is_already_taken"),
   "name-taken": t("management.another_node_is_using_this_name"),
   "last-admin": t("management.at_least_one_active_administrator_must_remain"),
@@ -42,6 +43,7 @@ const refusals: Record<string, string> = {
   "unknown-agent": t("management.this_agent_could_not_be_found_it"),
   "unknown-account": t("management.this_human_account_could_not_be_found"),
   "unknown-node": t("management.this_node_has_not_been_paired"),
+  "unknown-provider": t("management.provider_not_found"),
   "no-credentials": t("management.save_this_providers_api_key_first"),
   "unknown-model": t("management.the_model_is_no_longer_in_the"),
   "unsupported-thinking-level": t("management.this_model_does_not_support_the_selected"),

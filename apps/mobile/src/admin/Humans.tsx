@@ -1,3 +1,4 @@
+import { passwordTooShort } from "@mate/control-plane/passwords";
 import { t } from "../i18n";
 import { HumanView, Role, type HumanView as Human } from "@mate/control-plane/contracts";
 import { randomUUID } from "expo-crypto";
@@ -25,7 +26,6 @@ import {
 } from "../ui";
 
 const roleLabel = { admin: t("settings.administrator"), member: t("settings.human_member") };
-const passwordTooShort = (value: string) => new TextEncoder().encode(value).length < 12;
 
 function AddHuman({ visible, onClose, done }: { visible: boolean; onClose(): void; done(): void }) {
   const client = useClient();

@@ -219,7 +219,10 @@
     "search_results_one": "“{{query}}” · {{count, number}} result",
     "search_results_other": "“{{query}}” · {{count, number}} results",
     "search_task": "{{name}} · Task {{title}}",
-    "mentions_list": "Mentions {{names}}"
+    "mentions_list": "Mentions {{names}}",
+    "account_not_found": "Account not found.",
+    "this_action_cannot_be_applied_to_the_target": "This action cannot be applied to the selected target.",
+    "only_human_accounts_can_do_this": "Only human accounts can perform this action."
   },
   "auth": {
     "could_not_read_local_signin_settings_save": "Could not read local sign-in settings. Save the server address again.",

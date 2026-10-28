@@ -8,6 +8,12 @@
       "mate-source": "./src/contracts.ts",
       "types": "./dist/src/contracts.d.ts",
       "default": "./dist/src/contracts.js"
+    },
+    "./passwords": {
+      "react-native": "./src/passwords.ts",
+      "mate-source": "./src/passwords.ts",
+      "types": "./dist/src/passwords.d.ts",
+      "default": "./dist/src/passwords.js"
     }
   },
   "scripts": {

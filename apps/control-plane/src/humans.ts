@@ -1,3 +1,4 @@
+import { MIN_PASSWORD_BYTES, passwordTooShort } from "./passwords.ts";
 import { createHash, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
@@ -16,7 +17,6 @@ export const INITIAL_HUMAN = "human:initial";
 /** The handle of the first human when `initialHandle` is not given. */
 export const DEFAULT_INITIAL_HANDLE = "admin";
 /** The shortest password a human may have, in bytes. */
-export const MIN_PASSWORD_BYTES = 12;
 
 /**
  * Password checks running at once. Each scrypt check takes tens of milliseconds and 32 MiB, so no more than this many
@@ -122,7 +122,7 @@ const CountRow = z.object({ n: z.number() });
 export const NewPassword = z
   .string()
   .max(1024)
-  .refine((password) => Buffer.byteLength(password) >= MIN_PASSWORD_BYTES, {
+  .refine((password) => !passwordTooShort(password), {
     message: `a password is at least ${MIN_PASSWORD_BYTES} bytes`,
   });
 
@@ -328,7 +328,7 @@ export async function bootstrapHumans(
   if (!handle.success)
     throw new Error(`the initial handle is not allowed: ${z.prettifyError(handle.error)}`);
   const password = readFileSync(initialPasswordFile, "utf8").replace(/\r?\n$/, "");
-  if (Buffer.byteLength(password) < MIN_PASSWORD_BYTES)
+  if (passwordTooShort(password))
     throw new Error(
       `the initial password in ${initialPasswordFile} is shorter than ${MIN_PASSWORD_BYTES} bytes`,
     );

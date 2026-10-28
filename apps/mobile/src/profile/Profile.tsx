@@ -1,3 +1,4 @@
+import { passwordTooShort } from "@mate/control-plane/passwords";
 import { t } from "../i18n";
 import { router, Stack } from "expo-router";
 import { useState } from "react";
@@ -92,7 +93,7 @@ export function ChangePassword() {
   const [next, setNext] = useState("");
   const [again, setAgain] = useState("");
   const [submitted, setSubmitted] = useState(false);
-  const short = new TextEncoder().encode(next).length < 12;
+  const short = passwordTooShort(next);
   const mismatch = next !== again;
   const save = () => {
     setSubmitted(true);

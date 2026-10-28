@@ -1,3 +1,4 @@
+import type { ChatErrorReason } from "@mate/chat";
 import {
   accountName,
   liveRetryDelay,
@@ -104,7 +105,7 @@ class Refusal extends Error {
     super(message);
   }
 }
-const refusals: Record<string, string> = {
+const refusals: Record<ChatErrorReason, string> = {
   "not-member": t("chat.join_the_channel_first"),
   archived: t("chat.this_channel_is_archived_and_can_only"),
   "invalid-input": t("chat.check_your_input"),
@@ -112,6 +113,9 @@ const refusals: Record<string, string> = {
   "request-conflict": t("chat.the_request_has_changed_cancel_and_try"),
   "not-found": t("chat.this_conversation_or_message_could_not_be"),
   "inactive-account": t("chat.this_account_has_been_deactivated"),
+  "unknown-account": t("chat.account_not_found"),
+  "invalid-target": t("chat.this_action_cannot_be_applied_to_the_target"),
+  "human-only": t("chat.only_human_accounts_can_do_this"),
 };
 const errorText = (error: unknown) =>
   error instanceof Refusal ? error.message : t("chat.could_not_connect_to_the_server_check");
@@ -193,7 +197,8 @@ export class MobileChat {
     throw new Refusal(
       response.status,
       error.success
-        ? (refusals[error.data.error] ?? t("chat.the_operation_did_not_finish_check_permissions"))
+        ? (refusals[error.data.error as ChatErrorReason] ??
+            t("chat.the_operation_did_not_finish_check_permissions"))
         : t("chat.the_server_cannot_process_this_right_now"),
     );
   }

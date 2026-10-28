@@ -219,7 +219,10 @@
     "search_results_one": "“{{query}}” · {{count, number}} 项结果",
     "search_results_other": "“{{query}}” · {{count, number}} 项结果",
     "search_task": "{{name}} · 任务{{title}}",
-    "mentions_list": "提及 {{names}}"
+    "mentions_list": "提及 {{names}}",
+    "account_not_found": "找不到这个账号。",
+    "this_action_cannot_be_applied_to_the_target": "无法对这个对象执行操作。",
+    "only_human_accounts_can_do_this": "只有人类账号可以执行这个操作。"
   },
   "auth": {
     "could_not_read_local_signin_settings_save": "无法读取本机登录设置，请重新保存服务器地址。",

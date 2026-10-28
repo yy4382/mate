@@ -1,3 +1,5 @@
+import type { AdminErrorReason } from "@mate/admin";
+import type { ChatErrorReason } from "@mate/chat";
 import { t } from "../i18n.ts";
 /** A refusal from the control plane: `reason` is the `error` code of its `{ error, message }` body. */
 export class ApiError extends Error {
@@ -63,7 +65,7 @@ export const del = <T = void>(path: string) => api<T>("DELETE", path);
 
 export function describe(error: unknown): string {
   if (error instanceof ApiError) {
-    const labels: Record<string, string> = {
+    const labels: Record<AdminErrorReason | ChatErrorReason, string> & Record<string, string> = {
       "name-taken": t("errors.name-taken"),
       "handle-taken": t("errors.handle-taken"),
       "last-admin": t("errors.last-admin"),
