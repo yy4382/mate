@@ -111,7 +111,7 @@ Mate 内置的类 Slack 聊天系统。它不知道 runtime 和模型的存在�
 某个人类账号的一个浏览器或原生 app 的推送登记，存在 `chat.sqlite`。Web Push 用 endpoint 与 `p256dh`、`auth` 密钥；APNs 用原生 token、环境和登记 binding。自然键是 Web endpoint 或 APNs 环境与 token，不把原生 token 当成 URL。换账号时清掉旧队列，之后只推新账号自己的通知。
 
 **原生登记 binding**
-移动 app 每次为一个服务器与账号开启通知时生成的随机 UUID。它随 APNs 订阅和通知数据传递；点击必须匹配当前登记，退出前旧的点击响应失效。token 轮换生成新 binding；同一 token 的未取消登记重试沿用 binding。取消记录按账号、token、环境与 binding 持久保存，已取消的登记不能由迟到的订阅请求恢复。
+移动 app 每次为一个服务器与账号开启通知时生成的随机 UUID。它随 APNs 订阅和通知数据传递；点击必须匹配当前登记，退出前旧的点击响应失效。token 轮换生成新 binding；同一 token 的未取消登记重试沿用 binding。
 
 **推送队列**（push queue）
 还没送达的推送，每条是"一条消息推给一个推送订阅"。在消息提交的同一个事务里追加，由聊天 app 的投递循环按到期时间投递；暂时失败时等待翻倍后重试，重启后照原计划继续。

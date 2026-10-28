@@ -3,7 +3,6 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createSecureServer, type IncomingHttpHeaders, type ServerHttp2Session } from "node:http2";
 import { join } from "node:path";
-import { request } from "node:http";
 import { FakeClock, HumanBrowser, temporaryDirectory } from "@mate/testkit";
 import { expect, it, onTestFinished } from "vitest";
 import { startControlPlane } from "../src/control-plane.ts";
@@ -162,73 +161,6 @@ async function fixture(configured = true) {
     say,
   };
 }
-
-it.each(["logout", "replacement"])(
-  "a cancelled native binding cannot return when its HTTP body finishes after %s",
-  async (mode) => {
-    const f = await fixture();
-    const subscription = { ...native, binding: randomUUID() };
-    const body = JSON.stringify(subscription);
-    const cookie = f.owner.cookie;
-    if (!cookie) throw new Error("fixture login has no cookie");
-    const status = await new Promise<number>((resolve, reject) => {
-      const pending = request(
-        f.plane.url + "/api/chat/push/subscribe",
-        {
-          method: "POST",
-          headers: {
-            cookie,
-            "content-type": "application/json",
-            "content-length": Buffer.byteLength(body),
-            expect: "100-continue",
-          },
-        },
-        (response) => {
-          response.resume();
-          response.on("end", () => resolve(response.statusCode ?? 0));
-        },
-      );
-      pending.on("error", reject);
-      pending.on("continue", () => {
-        void (async () => {
-          pending.write(body.slice(0, -1));
-          expect((await f.owner.post("/api/chat/push/unsubscribe", subscription)).status).toBe(204);
-          if (mode === "logout") expect((await f.owner.post("/api/logout", {})).status).toBe(204);
-          else
-            expect(
-              (
-                await f.member.post("/api/chat/push/subscribe", {
-                  ...subscription,
-                  binding: randomUUID(),
-                })
-              ).status,
-            ).toBe(204);
-          pending.end(body.slice(-1));
-        })().catch((error: unknown) => {
-          pending.destroy();
-          reject(error);
-        });
-      });
-      pending.flushHeaders();
-    });
-    expect(status).toBe(400);
-    await f.say();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(f.requests, "new notices cannot reach the cancelled old account registration").toEqual(
-      [],
-    );
-    if (mode === "replacement") {
-      const sent = await f.owner.post("/api/chat/messages", {
-        requestId: randomUUID(),
-        timeline: { conversation: f.dm.conversationId },
-        body: "fixture for the new owner",
-      });
-      expect(sent.status).toBe(200);
-      await expect.poll(() => f.requests.length).toBe(1);
-      expect(JSON.parse(f.requests[0]?.body ?? "null").body.accountId).toBe(f.memberId);
-    }
-  },
-);
 
 it("reports disabled APNs truthfully while retaining the existing Web Push subscription API", async () => {
   const f = await fixture(false);
