@@ -1,4 +1,4 @@
-import { t } from "../i18n.ts";
+import { t, locale } from "../i18n.ts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Bell, BellOff, CircleUser, LogOut, MessageSquare, Settings2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -82,7 +82,7 @@ function MainNav() {
             aria-label={t("common.unread", { count: unread.total })}
             className="absolute left-1/2 top-1 ml-2 md:static md:ml-auto"
           >
-            {unread.total}
+            {new Intl.NumberFormat(locale).format(unread.total)}
           </Badge>
         ) : null}
       </Link>

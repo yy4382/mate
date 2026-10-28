@@ -1,4 +1,4 @@
-import { t } from "../i18n.ts";
+import { t, locale } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { Hash, Lock, Plus, Search } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -87,7 +87,7 @@ export function ConversationList() {
               tone={mentioned ? "solid" : "inverse"}
               aria-label={t("common.unread", { count: count })}
             >
-              {count}
+              {new Intl.NumberFormat(locale).format(count)}
             </Badge>
           ) : null}
         </Link>

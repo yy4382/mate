@@ -11,15 +11,18 @@ const join = (directory: string, name: string) =>
 const parent = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ".");
 
 function formatBytes(size: number): string {
-  if (size < 1024)
-    return new Intl.NumberFormat(locale, {
-      style: "unit",
-      unit: "byte",
-      unitDisplay: "short",
-    }).format(size);
-  const trim = (value: number) =>
-    new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value);
-  return size < 1024 * 1024 ? `${trim(size / 1024)} KB` : `${trim(size / 1024 / 1024)} MB`;
+  const [value, unit] =
+    size < 1024
+      ? ([size, "byte"] as const)
+      : size < 1024 * 1024
+        ? ([size / 1024, "kilobyte"] as const)
+        : ([size / 1024 / 1024, "megabyte"] as const);
+  return new Intl.NumberFormat(locale, {
+    style: "unit",
+    unit,
+    unitDisplay: "short",
+    maximumFractionDigits: 1,
+  }).format(value);
 }
 
 const list = "divide-y divide-border overflow-hidden rounded-lg border border-border";
