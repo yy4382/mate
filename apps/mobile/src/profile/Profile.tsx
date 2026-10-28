@@ -1,7 +1,7 @@
 import { t } from "../i18n";
 import { router, Stack } from "expo-router";
 import { useState } from "react";
-import { useClient, useHuman, useOperation } from "../admin/session";
+import { useCanNavigate, useClient, useHuman, useOperation } from "../admin/session";
 import { Outcome } from "../admin/ui";
 import { Avatar, Card, Caption, Field, Row, Screen, Section } from "../ui";
 
@@ -37,6 +37,7 @@ export function EditProfile() {
   const human = useHuman();
   const client = useClient();
   const names = useOperation();
+  const canNavigate = useCanNavigate();
   const [displayName, setDisplayName] = useState(human?.displayName ?? "");
   const [handle, setHandle] = useState(human?.handle ?? "");
   const save = () => {
@@ -45,7 +46,7 @@ export function EditProfile() {
         await client.saveProfile(displayName.trim(), handle.trim());
       })
       .then((ok) => {
-        if (ok) router.back();
+        if (ok && canNavigate()) router.back();
       });
   };
   return (

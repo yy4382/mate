@@ -1,6 +1,7 @@
+import en from "../src/locales/en.json";
 import { afterEach, describe, expect, it } from "vitest";
 import { MobileAuth, type AuthPlatform } from "../src/auth";
-import { ApiError, ManagementClient } from "../src/admin/client";
+import { ApiError, errorText, ManagementClient } from "../src/admin/client";
 import type { AgentEvent } from "@mate/admin";
 
 const server = "https://mate.example.com";
@@ -10,6 +11,17 @@ const clients: ManagementClient[] = [];
 afterEach(() => clients.splice(0).forEach((client) => client.close()));
 function deferred<T>() {
   return Promise.withResolvers<T>();
+}
+/** The person sees a connection problem, not a server refusal or a cancellation. */
+async function expectConnectionFailure(pending: Promise<unknown>) {
+  const failure = await pending.then(
+    () => {
+      throw new Error("expected the operation to fail");
+    },
+    (error: unknown) => error,
+  );
+  expect(failure).not.toBeInstanceOf(ApiError);
+  expect(errorText(failure)).toBe(en.management.could_not_complete_the_request_check_your);
 }
 async function connected() {
   let me = human;
@@ -247,9 +259,7 @@ describe("mobile management requests for the current login", () => {
     env.respond(async () => {
       throw new TypeError("network offline");
     });
-    await expect(env.client.request("/api/me/password", "POST", {})).rejects.toThrow(
-      "network offline",
-    );
+    await expectConnectionFailure(env.client.request("/api/me/password", "POST", {}));
     expect(env.auth.getSnapshot().kind).toBe("signed-in");
   });
 });
@@ -345,8 +355,8 @@ describe("mobile Agent observation over the public event stream", () => {
           }),
         ),
     );
-    await expect(
+    await expectConnectionFailure(
       next.client.observe("agent", "", new AbortController().signal, () => undefined),
-    ).rejects.toThrow("disconnected");
+    );
   });
 });
