@@ -592,7 +592,7 @@ Agent 总览只显示身份、状态和运行环境，提供一个私信入口�
 
 `ManagementScope` 位于全部已登录 Tab 之上，每次登录只有一个 `ManagementClient` 与 QueryClient，切换 Tab 不创建另一份客户端或缓存。共享 `PresentationAccess` 与当前页面焦点一起控制原生 modal。React Native 在隐藏 modal 后会卸载它的子树，所以短表单、邀请和任务转交的展示草稿由 modal 外的页面持有；这些是本次页面的展示状态；聊天的未确认请求和 UUID 仍只归 `MobileChat`。`ManagementClient` 只给当前服务器和人类的这次登录发 cookie 请求。前台重验时中止旧请求、隐藏并禁止访问管理界面，选择器和危险操作确认页也随访问状态隐藏并禁止交互，但保持当前导航、表单草稿、选择器搜索条件和查询缓存挂载在内存中；连接故障时继续暂停访问，重试验证相同服务器、账号和角色后恢复原页面，重新读取数据和连接观察流；访问一直可用时的身份更新（如保存资料）不重新读取数据，也不重连观察流。登录结束、401 确认失效、服务器、账号或角色改变则关闭这次登录的界面与缓存。已取消请求的迟到响应即使在恢复后也不能交付，不持久化管理数据或草稿。HTTP 401 和 SSE 的 `login` 事件要求认证模块重新验证。资料保存响应经 `HumanView` schema 解析，`MobileAuth.updateHuman(previous, human)` 只更新提交它的同一次登录，不重新清理 cookie；密码修改继续使用服务端保留当前会话的规则。
 
-请求状态用与网页同版本的 TanStack Query，SSE 分帧用 `eventsource-parser`，长表单的键盘滚动用 Expo 58 对应的 Keyboard Controller。对话记录和模型选项用 React Native `FlatList`；其余小表单用原生输入框、按钮和确认框，不生成表单 schema 或引入整体 UI 框架。管理数据的类型从 `@mate/admin` 推导，个人身份从 `@mate/control-plane/contracts` 取得，不复制服务端协议。
+请求状态用与网页同版本的 TanStack Query，SSE 分帧用 `eventsource-parser`；聊天和管理共用 `http.ts` 的带 cookie JSON 请求和 SSE 读取循环，超时、401 处理和拒绝文案各自持有，长表单的键盘滚动用 Expo 58 对应的 Keyboard Controller。对话记录和模型选项用 React Native `FlatList`；其余小表单用原生输入框、按钮和确认框，不生成表单 schema 或引入整体 UI 框架。管理数据的类型从 `@mate/admin` 推导，个人身份从 `@mate/control-plane/contracts` 取得，不复制服务端协议。
 
 当前不做折叠屏 iPhone Duo 的专用适配，不增加折叠状态处理或专用布局。
 

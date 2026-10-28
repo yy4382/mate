@@ -2,7 +2,7 @@ import { t } from "../i18n";
 import type { Admin, AgentEvent, AgentView } from "@mate/admin";
 import { HumanView } from "@mate/control-plane/contracts";
 import { z } from "zod";
-import { createParser } from "eventsource-parser";
+import { readEvents, sendJson } from "../http";
 import type { AuthState, MobileAuth } from "../auth";
 
 export type SignedIn = Extract<AuthState, { kind: "signed-in" }>;
@@ -160,16 +160,10 @@ export class ManagementClient {
     this.requests.add(request);
     const timeout = setTimeout(abort, 20_000);
     try {
-      const response = await this.fetcher(this.server + path, {
+      const response = await sendJson(this.fetcher, this.server + path, {
         method,
-        credentials: "include",
+        body,
         signal: request.signal,
-        ...(method === "GET"
-          ? {}
-          : {
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify(body ?? {}),
-            }),
       });
       this.check(request.signal);
       if (!response.ok) return await this.refuse(response, request.signal);
@@ -216,7 +210,6 @@ export class ManagementClient {
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) abort();
     this.requests.add(request);
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const connectTimeout = setTimeout(abort, 20_000);
     let heartbeatTimeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -234,38 +227,29 @@ export class ManagementClient {
       this.check(request.signal);
       if (!response.ok) return await this.refuse(response, request.signal);
       if (!response.body) throw new Error("No event stream");
-      reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let ended = false;
-      const parser = createParser({
-        onEvent: ({ event, data }) => {
-          if (ended) return;
+      await readEvents(
+        response.body,
+        (event, data) => {
+          this.check(request.signal);
           if (event === "login") {
-            ended = true;
             void this.auth.revalidate();
-          } else if (event === "ended") {
-            ended = true;
-            receive("ended");
-          } else if (event === "events") {
-            const events: AgentEvent[] = JSON.parse(data);
-            receive(events);
+            return true;
           }
+          if (event === "ended") {
+            receive("ended");
+            return true;
+          }
+          if (event === "events") receive(JSON.parse(data) as AgentEvent[]);
         },
-      });
-      for (;;) {
-        clearTimeout(heartbeatTimeout);
-        heartbeatTimeout = setTimeout(abort, 60_000);
-        const { done, value } = await reader.read();
-        this.check(request.signal);
-        if (done) throw new Error("Event stream disconnected");
-        parser.feed(decoder.decode(value, { stream: true }));
-        if (ended) return;
-      }
+        () => {
+          clearTimeout(heartbeatTimeout);
+          heartbeatTimeout = setTimeout(abort, 60_000);
+        },
+      );
     } finally {
       clearTimeout(connectTimeout);
       clearTimeout(heartbeatTimeout);
       signal.removeEventListener("abort", abort);
-      void reader?.cancel().catch(() => undefined);
       request.abort();
       this.requests.delete(request);
     }

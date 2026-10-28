@@ -1,6 +1,6 @@
 import { t, listText } from "./i18n";
-import { createParser } from "eventsource-parser";
 import { systemClock, type Clock } from "@mate/clock";
+import { readEvents, sendJson } from "./http";
 import {
   ConversationView,
   Entry,
@@ -161,13 +161,10 @@ export class MobileChat {
     const signal = AbortSignal.any([this.lifetime.signal, timeout.signal]);
     void this.clock.sleep(15_000, signal).then(() => timeout.abort());
     try {
-      const response = await this.platform.fetch(this.server + path, {
+      const response = await sendJson(this.platform.fetch, this.server + path, {
         method: body === undefined ? "GET" : "POST",
-        credentials: "include",
+        body,
         signal,
-        ...(body === undefined
-          ? {}
-          : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
       });
       if (signal.aborted) throw new Error("cancelled");
       await this.check(response);
@@ -276,46 +273,32 @@ export class MobileChat {
         await this.check(response);
         if (!response.body) throw new Error("stream missing");
         this.publish({ connection: "live", error: "" });
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let ended = false;
-        const parser = createParser({
-          onEvent: ({ event, data }) => {
-            if (ended || signal.aborted || this.lifetime.signal.aborted) return;
+        await readEvents(
+          response.body,
+          (event, data) => {
+            if (signal.aborted || this.lifetime.signal.aborted) return true;
             if (event === "login") {
-              ended = true;
               this.platform.expired();
               this.publish({ connection: "paused" });
-            } else if (event === "events" || event === "resnapshot") {
-              const batch = event === "events" ? LiveEvents.parse(JSON.parse(data)) : undefined;
-              if (batch?.status === "events") {
-                this.apply(batch);
-                failures = 0;
-                this.publish({ connection: "live", error: "" });
-              } else {
-                ended = true;
-                this.cursor = undefined;
-                ++this.snapshotVersion;
-                this.publish({ timelines: new Map(), connection: "loading" });
-              }
+              return true;
             }
+            if (event !== "events" && event !== "resnapshot") return;
+            const batch = event === "events" ? LiveEvents.parse(JSON.parse(data)) : undefined;
+            if (batch?.status === "events") {
+              this.apply(batch);
+              failures = 0;
+              this.publish({ connection: "live", error: "" });
+              return;
+            }
+            this.cursor = undefined;
+            ++this.snapshotVersion;
+            this.publish({ timelines: new Map(), connection: "loading" });
+            return true;
           },
-        });
-        try {
-          for (;;) {
-            const { value, done } = await reader.read();
-            touch();
-            if (signal.aborted || this.lifetime.signal.aborted) return;
-            if (done) throw new Error("stream ended");
-            parser.feed(decoder.decode(value, { stream: true }));
-            if (ended) {
-              if (this.cursor !== undefined) return;
-              break;
-            }
-          }
-        } finally {
-          await reader.cancel().catch(() => undefined);
-        }
+          touch,
+        );
+        // A login event or a close ends following; a resnapshot takes a new snapshot.
+        if (this.cursor !== undefined) return;
       } catch (error) {
         if (signal.aborted || this.lifetime.signal.aborted) return;
         watchdog?.abort();
