@@ -559,7 +559,7 @@ interface Admin {
 
 移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。`lifecycle.ts` 的 `startMobileLifecycle` 启动认证，持有唯一的认证订阅和 AppState 监听：只有已登录且在前台时会话才可用，只有可用性变化才设置通知会话、暂停或恢复聊天流，身份变化才创建或关闭这次登录的 `MobileChat`；资料更新等同一会话的状态发布不重新检查通知或重连。根层 `Session` provider 只发布当前聊天实例。聊天验证遮罩不参与首页重定向，重验后保留当前会话、草稿和 sheet；验证中隐藏并禁止访问旧界面。仅真正进入 background 后回到 active 才以 `GET /api/me` 验证 cookie，权限弹窗等仅 inactive → active 的变化不重验或打断通知登记；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
 
-退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问并清理全部 app cookie，切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
+退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问；仍有可恢复的会话或在途登录时，先向旧服务器尝试 `POST /api/logout`，再清理全部 app cookie，撤销未确认时同样提示；没有会话时不联系旧服务器。切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
 
 `MobileNotifications` 在 `notifications.ts` 持有系统权限、已验证的服务器与账号、本机登记和未确认的取消登记。`notifications-native.ts` 用 SDK 58 的 `expo-notifications` 获取 APNs token、监听 token 更新、收取通知和点击响应。根层 `Session` 在设置页关闭时仍监听原生响应和 token；通知会话只由统一生命周期设置，后台的身份更新也不能恢复通知访问。首页与个人资料提供通知设置入口，设置页返回时保留个人资料草稿。只有权限允许、服务器 origin 和环境匹配、订阅请求成功才显示已登记。拒绝或撤回权限会关闭本机推送并尝试取消服务器订阅；网络和签名失败显示未完成；同一 token 登记重试沿用 binding，token 轮换生成新 binding。当前登记与待取消登记分别保存；token 轮换前先持久化旧登记的取消责任，再发新登记。取消失败不丢失旧 token，刷新、重启恢复和退出都会重试。每条待取消记录保留精确服务器、账号、token、环境与 binding，只能用同一服务器和账号的已验证身份发送，确认成功后才移除；重新成为当前登记的相同记录不会再被取消。
 

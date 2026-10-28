@@ -60,7 +60,8 @@ export class MobileAuth {
   private request: AbortController | undefined;
   private pending: Promise<void> = Promise.resolve();
   private preferences: Preferences | null = null;
-  private cleanup: { server: string; revoke: boolean } | undefined;
+  /** A cleanup that has not finished, and the server whose session it still has to revoke. */
+  private cleanup: { server: string; revoke: string | undefined } | undefined;
 
   constructor(private platform: AuthPlatform) {}
 
@@ -191,12 +192,18 @@ export class MobileAuth {
       this.publish({ kind: "server", problem: "address" });
       return;
     }
-    await this.clearLocal(server, false);
+    // A session can exist only while it would be restored or a login is in flight.
+    const revoke = this.cleanup
+      ? this.cleanup.revoke
+      : this.preferences?.restore || this.request
+        ? this.preferences?.server
+        : undefined;
+    await this.clearLocal(server, revoke);
   }
 
   async logout(): Promise<void> {
     if (!this.preferences || this.state.kind === "clearing") return;
-    await this.clearLocal(this.preferences.server, true);
+    await this.clearLocal(this.preferences.server, this.preferences.server);
   }
 
   retry(): Promise<void> {
@@ -205,7 +212,7 @@ export class MobileAuth {
     return this.preferences?.restore ? this.revalidate() : this.logout();
   }
 
-  private async clearLocal(server: string, revoke: boolean): Promise<void> {
+  private async clearLocal(server: string, revoke: string | undefined): Promise<void> {
     this.cleanup = { server, revoke };
     ++this.generation;
     this.request?.abort();
@@ -217,12 +224,12 @@ export class MobileAuth {
       this.preferences = { server, restore: false };
       await pending;
       await this.platform.beforeClear();
-      let revoked = !revoke;
-      if (revoke) {
+      let revoked = revoke === undefined;
+      if (revoke !== undefined) {
         const request = new AbortController();
         const timeout = setTimeout(() => request.abort(), 10_000);
         try {
-          const response = await this.platform.fetch(server + "/api/logout", {
+          const response = await this.platform.fetch(revoke + "/api/logout", {
             method: "POST",
             credentials: "include",
             signal: request.signal,
@@ -241,7 +248,7 @@ export class MobileAuth {
       this.publish({
         kind: "signed-out",
         server,
-        notice: !revoked ? "revocation-unconfirmed" : revoke ? "signed-out" : null,
+        notice: !revoked ? "revocation-unconfirmed" : revoke === server ? "signed-out" : null,
       });
     } catch {
       this.publish({ kind: "unavailable", server, problem: "cleanup" });
