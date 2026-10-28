@@ -203,7 +203,6 @@
     "channel_placeholder": "发送到 {{name}}…",
     "unread_count_one": "{{count, number}} 条未读",
     "unread_count_other": "{{count, number}} 条未读",
-    "conversation_accessibility": "{{title}}，{{subtitle}}，{{mention}}，{{unread}}",
     "conversation_status": "{{status}} · {{kind}}",
     "members_one": "成员 · {{count, number}}",
     "members_other": "成员 · {{count, number}}",

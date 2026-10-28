@@ -203,7 +203,6 @@
     "channel_placeholder": "Message {{name}}…",
     "unread_count_one": "{{count, number}} unread message",
     "unread_count_other": "{{count, number}} unread messages",
-    "conversation_accessibility": "{{title}}, {{subtitle}}, {{mention}}, {{unread}}",
     "conversation_status": "{{status}} · {{kind}}",
     "members_one": "Member · {{count, number}}",
     "members_other": "Members · {{count, number}}",
