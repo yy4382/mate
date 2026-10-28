@@ -6,7 +6,7 @@
 ## 1. 部署形态
 
 ```
-VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
+VPS（Ubuntu 24.04 / Debian 13，x86_64）
 │
 ├─ 控制面：一个 Docker 容器，以一个专用的无登录系统账号（例如 mate-control）的 UID/GID 运行
 │    网页、聊天 app、管理模块、Agent Manager、所有 Agent 的 runtime、node 网关
@@ -27,7 +27,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 
 ## 2. 前提
 
-1. 一台 Ubuntu 24.04 或 Debian 13 的 VPS，x86_64 或 arm64。
+1. 一台 Ubuntu 24.04 或 Debian 13 的 VPS，x86_64。
 2. 一个给 node 用的普通账号（不是 root，不在 docker 组里），例如 `sudo useradd -m -s /bin/bash mate`。node 会以它运行，Agent 的命令也以它运行，所以给它的权限就是你愿意给 Agent 的权限。
 3. 一个给控制面用的无登录系统账号，例如 `sudo useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin mate-control`。它只是数据目录的所有者，容器以它的 UID/GID 运行。
 4. 一个能用 Docker Engine 和 Docker Compose 的管理账号（root 或你自己的账号）。
@@ -41,7 +41,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 
 控制面是 `deploy/control-plane/` 里的一个镜像加两个 Compose 文件：`compose.yaml` 是日常配置，`compose.initialize.yaml` 只在第一次启动时叠加，把第一个管理员的初始密码文件和 handle 交给控制面。镜像用 `docker build --file deploy/control-plane/Dockerfile .` 从仓库根目录构建，构建出的镜像带网页前端；发布时由 CI 推到镜像仓库，用确切的版本号，不用 `latest`。
 
-镜像保留编译后的 workspace 包，由 `pnpm deploy --prod` 装入独立的生产依赖，不把服务端和第三方包合成一个 JavaScript 文件。依赖在目标架构上安装，保留原生模块和包内资源。每个 PR 和 main 都复用发布构建任务，构建 x64、arm64 Linux 镜像和 node 发布包，跳过发布步骤。只有 Markdown、MDX、reST、AsciiDoc、`docs/` 下的文件或根目录 LICENSE/NOTICE 变动时，跳过这个构建任务，其余检查照常；`v*` 标签始终构建并发布。node 发布包里的 JavaScript 由 tsdown 打包。
+镜像保留编译后的 workspace 包，由 `pnpm deploy --prod` 装入独立的生产依赖，不把服务端和第三方包合成一个 JavaScript 文件。依赖在目标架构上安装，保留原生模块和包内资源。每个 PR 和 main 都复用发布构建任务，构建 x64 Linux 镜像和 node 发布包，跳过发布步骤；下载的 Node 运行时按 `deploy/node/node-runtimes.ts` 缓存。只有 Markdown、MDX、reST、AsciiDoc、`docs/` 下的文件或根目录 LICENSE/NOTICE 变动时，跳过这个构建任务，其余检查照常；`v*` 标签始终构建并发布。node 发布包里的 JavaScript 由 tsdown 打包。
 
 1. 建一个只属于控制面系统账号的私有数据目录，权限 0700，放在 node 账号进不去的地方，例如 `sudo install -d -m 700 -o mate-control -g mate-control /srv/mate-control-plane/data`。Compose 不会替你建它（目录不存在就拒绝启动），因为让 Docker 建出来的会属于 root。
 2. 镜像在 GHCR 上公开，可以匿名拉取，不需要登录。
@@ -83,7 +83,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64 或 arm64）
 
 ### 3.2 node
 
-node 支持 Linux、macOS 和 Windows，各有 x64、arm64 发布包。安装、更新、卸载都由 `mate node` 完成，没有单独的安装脚本，也没有下载步骤。管理员把同一版本的 `mate-node-<版本>-<平台>-<架构>.tar.gz` 与旁边的 `.sha256` 下载到 node 机器上；平台名是 `linux`、`darwin`、`win`。包自带 Node 24，宿主不需要安装 Node、pnpm 或编译器。
+node 支持 x86_64 的 Linux、Apple 芯片的 macOS 和 x64 的 Windows，各有一个发布包。安装、更新、卸载都由 `mate node` 完成，没有单独的安装脚本，也没有下载步骤。管理员把同一版本的 `mate-node-<版本>-<平台>-<架构>.tar.gz` 与旁边的 `.sha256` 下载到 node 机器上；平台名是 `linux`、`darwin`、`win`。包自带 Node 24，宿主不需要安装 Node、pnpm 或编译器。
 
 **第一次安装。** 先校验再解包，运行包内的 CLI。以下版本号只是示例，用实际下载的文件名替换。
 
@@ -290,7 +290,7 @@ ssh-keygen -t ed25519 -N '' -C mate-deploy -f mate-deploy-key   # 私钥交给 G
 echo "restrict,command=\"/usr/local/sbin/mate-deploy\" $(cat mate-deploy-key.pub)" >> /root/.ssh/authorized_keys
 ```
 
-`restrict,command=` 让这把 key 只能执行 `mate-deploy`，没有 shell、转发和终端；拿到它的人最多能把这台机器升级到一个已发布的版本。GitHub 仓库里建一个 `production` 环境，放三个 secret：`DEPLOY_HOST`（例如 `root@203.0.113.7`）、`DEPLOY_SSH_KEY`（私钥）和 `DEPLOY_KNOWN_HOSTS`（`ssh-keyscan` 得到、和你已知的主机指纹核对过的那一行）。主机地址、key 和主机指纹只放在这里，不写进仓库，Action 日志里也被遮掉。不是 x86_64 时再设仓库变量 `DEPLOY_NODE_ARCH=arm64`。没有 `DEPLOY_HOST` 时 Deploy 任务什么都不做。
+`restrict,command=` 让这把 key 只能执行 `mate-deploy`，没有 shell、转发和终端；拿到它的人最多能把这台机器升级到一个已发布的版本。GitHub 仓库里建一个 `production` 环境，放三个 secret：`DEPLOY_HOST`（例如 `root@203.0.113.7`）、`DEPLOY_SSH_KEY`（私钥）和 `DEPLOY_KNOWN_HOSTS`（`ssh-keyscan` 得到、和你已知的主机指纹核对过的那一行）。主机地址、key 和主机指纹只放在这里，不写进仓库，Action 日志里也被遮掉。没有 `DEPLOY_HOST` 时 Deploy 任务什么都不做。
 
 ## 6. 在开发机上运行
 
@@ -302,7 +302,7 @@ pnpm check          # 格式、类型检查、全部测试（只跳过明确限�
 pnpm test:linux     # 在非 root 的 Linux 容器里跑 node 的测试套件（以子进程启动 node，真实的进程组与文件系统）
 ```
 
-开发机可用 `pnpm bundle:node <版本>` 构建全部六个包；`--platform linux|darwin|win32` 与 `--arch x64|arm64` 可缩小目标，产物在 `dist/node-bundles/`。自动部署继续只使用 Linux 包，macOS/Windows node 手动安装和更新。
+开发机可用 `pnpm bundle:node <版本>` 构建全部三个包；`--platform linux|darwin|win32` 可缩小目标，产物在 `dist/node-bundles/`。自动部署继续只使用 Linux 包，macOS/Windows node 手动安装和更新。
 
 控制面可以在本机启动，前端要先构建，再用 `MATE_WEB_DIRECTORY` 指给它：
 
