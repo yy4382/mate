@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 /** A refusal from the control plane: `reason` is the `error` code of its `{ error, message }` body. */
 export class ApiError extends Error {
   readonly status: number;
@@ -61,6 +62,57 @@ export const patch = <T = void>(path: string, body?: unknown) => api<T>("PATCH",
 export const del = <T = void>(path: string) => api<T>("DELETE", path);
 
 export function describe(error: unknown): string {
-  if (error instanceof ApiError) return `${error.message} (${error.reason})`;
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof ApiError) {
+    const labels: Record<string, string> = {
+      "name-taken": t("errors.name-taken"),
+      "handle-taken": t("errors.handle-taken"),
+      "last-admin": t("errors.last-admin"),
+      "admin-only": t("errors.admin-only"),
+      "wrong-password": t("errors.wrong-password"),
+      "too-many-attempts": t("errors.too-many-attempts"),
+      "invalid-input": t("errors.invalid-input"),
+      "unknown-agent": t("errors.unknown-agent"),
+      "agent-exists": t("errors.agent-exists"),
+      "unknown-node": t("errors.unknown-node"),
+      "unknown-provider": t("errors.unknown-provider"),
+      "no-credentials": t("errors.no-credentials"),
+      "unknown-model": t("errors.unknown-model"),
+      "unsupported-thinking-level": t("errors.unsupported-thinking-level"),
+      "agent-closed": t("errors.agent-closed"),
+      "unknown-assistant": t("errors.unknown-assistant"),
+      "node-offline": t("errors.node-offline"),
+      "outside-workspace": t("errors.outside-workspace"),
+      "not-found": t("errors.not-found"),
+      unreadable: t("errors.unreadable"),
+      "unknown-account": t("errors.unknown-account"),
+      "inactive-account": t("errors.inactive-account"),
+      "not-member": t("errors.not-member"),
+      archived: t("errors.archived"),
+      "invalid-target": t("errors.invalid-target"),
+      "request-conflict": t("errors.request-conflict"),
+      "human-only": t("errors.human-only"),
+      "creation-failed": t("errors.creation-failed"),
+      internal: t("errors.internal"),
+      "body-too-large": t("errors.body-too-large"),
+      "unsupported-media-type": t("errors.unsupported-media-type"),
+      "invalid-json": t("errors.invalid-json"),
+      "cross-origin": t("errors.cross-origin"),
+      "login-required": t("errors.login-required"),
+      "no-route": t("errors.no-route"),
+      "method-not-allowed": t("errors.method-not-allowed"),
+    };
+    return labels[error.reason] ?? t("errors.requestFailed", { code: error.reason });
+  }
+  if (error instanceof TypeError) return t("errors.network");
+  if (typeof error === "string") return error;
+  return error instanceof Error ? error.message : t("errors.unexpected");
+}
+
+export function taskRefusal(reason: "claimed" | "not-owner" | "completed"): string {
+  const labels = {
+    claimed: t("taskErrors.claimed"),
+    "not-owner": t("taskErrors.not-owner"),
+    completed: t("taskErrors.completed"),
+  };
+  return labels[reason];
 }

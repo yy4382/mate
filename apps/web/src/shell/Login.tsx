@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useState } from "react";
 import { Mark } from "./App.tsx";
 import { ApiError, post } from "./api.ts";
@@ -26,10 +27,10 @@ export function Login({ next }: { next: string | null }) {
               setBusy(false);
               setMessage(
                 error instanceof ApiError && error.status === 401
-                  ? "Handle 或密码不对。"
+                  ? t("Login.incorrectHandleOrPassword")
                   : error instanceof ApiError && error.status === 429
-                    ? "尝试的人太多了，请稍后再试。"
-                    : "登录失败，请重试。",
+                    ? t("Login.tooManySigninAttemptsTryAgainLater")
+                    : t("Login.signinFailedPleaseTryAgain"),
               );
             }
           }}
@@ -37,9 +38,9 @@ export function Login({ next }: { next: string | null }) {
           <CardBody className="gap-6 p-6">
             <div className="grid justify-items-start gap-4">
               <Mark className="size-10 rounded-lg text-base" />
-              <h1 className="text-2xl font-semibold tracking-tight">登录 Mate</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">{t("Login.signInToMate")}</h1>
             </div>
-            <Field label="Handle">
+            <Field label={t("common.handle")}>
               <Input
                 autoComplete="username"
                 autoCapitalize="none"
@@ -50,7 +51,7 @@ export function Login({ next }: { next: string | null }) {
                 required
               />
             </Field>
-            <Field label="密码">
+            <Field label={t("Login.password")}>
               <Input
                 type="password"
                 autoComplete="current-password"
@@ -61,7 +62,7 @@ export function Login({ next }: { next: string | null }) {
             </Field>
             <ErrorLine error={message} />
             <Button type="submit" variant="primary" disabled={busy}>
-              登录
+              {t("Login.signIn")}
             </Button>
           </CardBody>
         </form>

@@ -1,5 +1,6 @@
+import { t } from "../i18n.ts";
 import { useEffect, useState } from "react";
-import { get, post } from "./api.ts";
+import { describe, get, post } from "./api.ts";
 
 type PushState = "unsupported" | "denied" | "off" | "on" | "working";
 
@@ -51,7 +52,10 @@ export function usePush() {
     setProblem(null);
     try {
       if ((await Notification.requestPermission()) !== "granted") return setState("denied");
-      const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      const registration = await navigator.serviceWorker.register("/sw.js", {
+        scope: "/",
+        type: "module",
+      });
       await navigator.serviceWorker.ready;
       const { publicKey } = await get<{ publicKey: string }>("/api/chat/push/key");
       const subscription = await registration.pushManager.subscribe({
@@ -62,7 +66,7 @@ export function usePush() {
       await post("/api/chat/push/subscribe", { endpoint, keys });
       setState("on");
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : String(error));
+      setProblem(describe(error));
       setState("off");
     }
   };
@@ -74,15 +78,21 @@ export function usePush() {
       await unsubscribeThisBrowser();
       setState("off");
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : String(error));
+      setProblem(describe(error));
       setState("on");
     }
   };
 
   return {
     supported: state !== "unsupported",
+    enabled: state === "on",
     /** The menu item's text: the action it would take. */
-    label: state === "denied" ? "浏览器已禁止通知" : state === "on" ? "关闭通知" : "开启通知",
+    label:
+      state === "denied"
+        ? t("Push.notificationsBlockedByBrowser")
+        : state === "on"
+          ? t("Push.turnOffNotifications")
+          : t("Push.turnOnNotifications"),
     disabled: state === "working" || state === "denied",
     problem,
     toggle: () => void (state === "on" ? disable() : enable()),

@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
@@ -41,7 +42,7 @@ function Invite({
   const [invitee, setInvitee] = useState("");
   const [error, setError] = useState<unknown>(null);
   return (
-    <Dialog title="邀请加入频道" onClose={onClose}>
+    <Dialog title={t("ChatPage.inviteToChannel")} onClose={onClose}>
       <form
         className="grid gap-4"
         onSubmit={async (event) => {
@@ -57,9 +58,9 @@ function Invite({
           }
         }}
       >
-        <Field label="邀请谁">
+        <Field label={t("ChatPage.whoToInvite")}>
           <Select value={invitee} onChange={(event) => setInvitee(event.target.value)} required>
-            <option value="">选择…</option>
+            <option value="">{t("ChatPage.select")}</option>
             {accounts
               .filter((a) => a.active && !conversation.members.includes(a.accountId))
               .map((a) => (
@@ -72,7 +73,7 @@ function Invite({
         <ErrorLine error={error} />
         <div className="flex justify-end">
           <Button type="submit" variant="primary">
-            邀请
+            {t("ChatPage.invite")}
           </Button>
         </div>
       </form>
@@ -81,9 +82,9 @@ function Invite({
 }
 
 const kindLabel: Record<ConversationView["kind"], string> = {
-  dm: "私信",
-  private: "私有频道",
-  public: "公开频道",
+  dm: t("ChatPage.directMessages"),
+  private: t("ChatPage.privateChannel"),
+  public: t("ChatPage.publicChannel"),
 };
 
 type Action = "join" | "leave" | "archive";
@@ -114,7 +115,7 @@ function Header({
             size: "icon-sm",
             className: "-ml-2 md:hidden",
           })}
-          aria-label="返回会话列表"
+          aria-label={t("ChatPage.backToConversations")}
         >
           <ChevronLeft aria-hidden />
         </Link>
@@ -132,8 +133,8 @@ function Header({
           <p className="truncate text-xs text-muted">
             {kindLabel[conversation.kind]}
             {" · "}
-            {conversation.members.length} 位成员
-            {conversation.archived ? " · 已归档" : ""}
+            {t("ChatPage.memberCount", { count: conversation.members.length })}
+            {conversation.archived ? t("ChatPage.archivedSuffix") : ""}
           </p>
         </div>
         {channel && !conversation.archived ? (
@@ -147,12 +148,12 @@ function Header({
                   onClick={() => setInviting(true)}
                 >
                   <UserPlus aria-hidden />
-                  邀请
+                  {t("ChatPage.invite")}
                 </Button>
                 <Button
                   variant="secondary"
                   size="icon-sm"
-                  aria-label="邀请"
+                  aria-label={t("ChatPage.invite")}
                   className="md:hidden"
                   onClick={() => setInviting(true)}
                 >
@@ -161,13 +162,13 @@ function Header({
               </>
             ) : (
               <Button variant="secondary" size="sm" onClick={() => void act("join")}>
-                加入
+                {t("ChatPage.join")}
               </Button>
             )}
-            <Menu label="更多">
+            <Menu label={t("ChatPage.more")}>
               {conversation.member ? (
                 <MenuItem icon={<LogOut aria-hidden />} onClick={() => setConfirming("leave")}>
-                  离开频道
+                  {t("ChatPage.leaveChannel")}
                 </MenuItem>
               ) : null}
               <MenuItem
@@ -175,7 +176,7 @@ function Header({
                 tone="danger"
                 onClick={() => setConfirming("archive")}
               >
-                归档频道
+                {t("ChatPage.archiveChannel")}
               </MenuItem>
             </Menu>
           </div>
@@ -190,17 +191,17 @@ function Header({
       <ConfirmDialog
         open={confirming === "leave"}
         onOpenChange={(open) => setConfirming(open ? "leave" : null)}
-        title={`离开 ${label}？`}
-        description="离开后不再收到这个频道的消息，也不能在其中发言。之后可以重新加入。"
-        confirmLabel="离开"
+        title={t("ChatPage.leaveNamed", { name: label })}
+        description={t("ChatPage.youWillStopReceivingMessagesFromThisChannel")}
+        confirmLabel={t("ChatPage.leave")}
         onConfirm={() => void act("leave")}
       />
       <ConfirmDialog
         open={confirming === "archive"}
         onOpenChange={(open) => setConfirming(open ? "archive" : null)}
-        title={`归档 ${label}？`}
-        description="归档后这个频道只能阅读，所有成员都不能再发言，也无法恢复。"
-        confirmLabel="归档"
+        title={t("ChatPage.archiveNamed", { name: label })}
+        description={t("ChatPage.thisChannelWillBecomePermanentlyReadonlyForAll")}
+        confirmLabel={t("ChatPage.archive")}
         onConfirm={() => void act("archive")}
       />
     </>
@@ -217,7 +218,7 @@ function ConversationPanel(props: { id: number; thread: number | null; seq: numb
     return (
       <section className="grid h-full place-items-center p-6">
         <p className="text-sm text-muted" role="alert">
-          找不到这个会话。
+          {t("ChatPage.conversationNotFound")}
         </p>
       </section>
     );
@@ -233,16 +234,19 @@ function ConversationPanel(props: { id: number; thread: number | null; seq: numb
   };
   const canWrite = conversation.member && !conversation.archived;
   const readonlyReason = conversation.archived
-    ? "这个频道已归档，只能阅读。"
-    : "你还没有加入这个频道，加入后才能发言。";
+    ? t("ChatPage.thisChannelIsArchivedAndReadonly")
+    : t("ChatPage.joinThisChannelToPostMessages");
   const readonlyAction =
     conversation.member || conversation.archived ? undefined : (
       <Button variant="primary" size="sm" onClick={() => void act("join")}>
-        加入频道
+        {t("ChatPage.joinChannel")}
       </Button>
     );
   const label = conversationLabel(conversation, accounts, me);
-  const placeholder = conversation.kind === "dm" ? `发消息给 ${label}` : `发消息到 #${label}`;
+  const placeholder =
+    conversation.kind === "dm"
+      ? t("ChatPage.messagePerson", { name: label })
+      : t("ChatPage.messageChannel", { name: label });
   return (
     <div className="relative flex h-full min-h-0">
       <section className="flex min-w-0 flex-1 flex-col">
@@ -259,7 +263,7 @@ function ConversationPanel(props: { id: number; thread: number | null; seq: numb
       </section>
       {props.thread === null ? null : (
         <aside
-          aria-label="讨论串"
+          aria-label={t("ChatPage.thread")}
           className="absolute inset-0 z-10 flex flex-col bg-background transition-[opacity,translate] duration-[240ms] ease-out-expo starting:opacity-0 motion-safe:starting:translate-x-10 motion-safe:md:starting:translate-x-6 motion-reduce:transition-opacity motion-reduce:duration-[120ms] md:static md:inset-auto md:w-[400px] md:shrink-0 md:duration-[220ms] md:border-l md:border-border [html[data-input=keyboard]_&]:transition-none"
         >
           <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-4 md:justify-between">
@@ -270,12 +274,12 @@ function ConversationPanel(props: { id: number; thread: number | null; seq: numb
                 size: "icon-sm",
                 className: "-ml-2 md:order-last md:ml-0",
               })}
-              aria-label="关闭讨论串"
+              aria-label={t("ChatPage.closeThread")}
             >
               <ChevronLeft aria-hidden className="md:hidden" />
               <X aria-hidden className="max-md:hidden" />
             </Link>
-            <h2 className="text-base font-semibold">讨论串</h2>
+            <h2 className="text-base font-semibold">{t("ChatPage.thread")}</h2>
           </header>
           <Timeline
             timelineRef={{ thread: props.thread }}
@@ -284,7 +288,7 @@ function ConversationPanel(props: { id: number; thread: number | null; seq: numb
             canWrite={canWrite}
             readonlyReason={readonlyReason}
             readonlyAction={readonlyAction}
-            placeholder="回复讨论串"
+            placeholder={t("ChatPage.replyToThread")}
           />
         </aside>
       )}
@@ -315,11 +319,11 @@ function OpenDirectMessage({ handle }: { handle: string }) {
   if (account === undefined)
     return (
       <p className="p-6 text-sm text-danger" role="alert">
-        找不到 @{handle}。
+        {t("ChatPage.accountNotFound", { handle })}
       </p>
     );
   return failed === null ? (
-    <p className="p-6 text-sm text-muted">正在打开私信…</p>
+    <p className="p-6 text-sm text-muted">{t("ChatPage.openingDirectMessage")}</p>
   ) : (
     <div className="p-6">
       <ErrorLine error={failed} />
@@ -336,8 +340,8 @@ export function ChatPage() {
         <OpenDirectMessage handle={route.dm} />
       ) : route.conversation === null ? (
         <div className="grid h-full place-items-center p-6">
-          <EmptyState icon={<MessagesSquare />} title="选择一个会话">
-            从左边选一个频道或私信，或者新建一个。
+          <EmptyState icon={<MessagesSquare />} title={t("ChatPage.chooseAConversation")}>
+            {t("ChatPage.chooseAChannelOrDirectMessageFromThe")}
           </EmptyState>
         </div>
       ) : (

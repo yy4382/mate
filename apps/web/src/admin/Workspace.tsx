@@ -1,3 +1,4 @@
+import { t, locale } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, File, Folder, House, Link2 } from "lucide-react";
 import { Fragment, useState, type ReactNode } from "react";
@@ -10,8 +11,14 @@ const join = (directory: string, name: string) =>
 const parent = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ".");
 
 function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`;
-  const trim = (value: number) => value.toFixed(1).replace(/\.0$/, "");
+  if (size < 1024)
+    return new Intl.NumberFormat(locale, {
+      style: "unit",
+      unit: "byte",
+      unitDisplay: "short",
+    }).format(size);
+  const trim = (value: number) =>
+    new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value);
   return size < 1024 * 1024 ? `${trim(size / 1024)} KB` : `${trim(size / 1024 / 1024)} MB`;
 }
 
@@ -22,12 +29,12 @@ function PathBar(props: { path: string; onOpen: (path: string) => void }) {
   const crumb = "rounded-md px-1.5 py-0.5 hover:bg-border/50";
   return (
     <nav
-      aria-label="当前路径"
+      aria-label={t("Workspace.currentPath")}
       className="flex h-8 min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-md border border-border bg-subtle px-2 font-mono text-xs"
     >
       <button
         type="button"
-        aria-label="根目录"
+        aria-label={t("Workspace.rootDirectory")}
         className={`${crumb} cursor-pointer text-muted [&_svg]:size-4`}
         onClick={() => props.onOpen(".")}
       >
@@ -94,19 +101,21 @@ export function Workspace({ agentId }: { agentId: string }) {
     <div className="grid gap-4">
       <div className="flex items-center gap-2">
         <Button size="sm" disabled={path === "."} onClick={() => setPath(parent(path))}>
-          上一级
+          {t("Workspace.parentDirectory")}
         </Button>
         <PathBar path={path} onOpen={setPath} />
       </div>
       <ErrorLine error={listing.error} />
       {listing.isFetching && data === undefined ? (
-        <p className="text-sm text-muted">正在读取…</p>
+        <p className="text-sm text-muted">{t("Workspace.reading")}</p>
       ) : null}
       {data?.kind === "directory" ? (
         <>
           <ul className={list}>
             {data.entries.length === 0 ? (
-              <li className="px-4 py-6 text-center text-sm text-muted">空目录</li>
+              <li className="px-4 py-6 text-center text-sm text-muted">
+                {t("Workspace.emptyDirectory")}
+              </li>
             ) : null}
             {data.entries.map((entry) => (
               <li key={entry.name} className="flex items-center gap-3 hover:bg-subtle">
@@ -126,7 +135,9 @@ export function Workspace({ agentId }: { agentId: string }) {
               </li>
             ))}
           </ul>
-          {data.truncated ? <Notice>目录太大，只列出了一部分。</Notice> : null}
+          {data.truncated ? (
+            <Notice>{t("Workspace.thisDirectoryIsTooLargeOnlySomeEntries")}</Notice>
+          ) : null}
         </>
       ) : null}
       {data?.kind === "file" ? (
@@ -139,12 +150,14 @@ export function Workspace({ agentId }: { agentId: string }) {
               {data.content}
             </pre>
           </FileFrame>
-          {data.truncated ? <Notice>文件太大，只显示了开头。</Notice> : null}
+          {data.truncated ? (
+            <Notice>{t("Workspace.thisFileIsTooLargeOnlyTheBeginning")}</Notice>
+          ) : null}
         </>
       ) : null}
       {data?.kind === "binary" ? (
         <FileFrame path={path} size={data.size}>
-          <p className="p-4 text-sm text-muted">二进制文件，不显示内容。</p>
+          <p className="p-4 text-sm text-muted">{t("Workspace.binaryFileContentIsNotDisplayed")}</p>
         </FileFrame>
       ) : null}
     </div>

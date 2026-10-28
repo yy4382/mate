@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { LogOut } from "lucide-react";
 import { useState } from "react";
@@ -36,7 +37,7 @@ function Outcome({ saved, error }: { saved: boolean; error: string | null }) {
     );
   return saved ? (
     <p role="status" className={cx("text-sm text-muted", feedbackClass)}>
-      已保存
+      {t("Profile.saved")}
     </p>
   ) : (
     <span />
@@ -53,7 +54,7 @@ function Names({ me }: { me: HumanView }) {
   return (
     <Card>
       <form
-        aria-label="基本信息"
+        aria-label={t("Profile.basicInformation")}
         onSubmit={async (event) => {
           event.preventDefault();
           setSaved(false);
@@ -76,7 +77,7 @@ function Names({ me }: { me: HumanView }) {
         }}
       >
         <CardBody>
-          <Field label="显示名">
+          <Field label={t("Profile.displayName")}>
             <Input
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
@@ -84,8 +85,8 @@ function Names({ me }: { me: HumanView }) {
             />
           </Field>
           <Field
-            label="Handle"
-            hint="登录用，也是别人 @ 你的名字。"
+            label={t("common.handle")}
+            hint={t("Profile.usedToSignInAndForOthersTo")}
             error={handleError ?? undefined}
           >
             <Input
@@ -101,7 +102,7 @@ function Names({ me }: { me: HumanView }) {
         <CardFooter>
           <Outcome saved={saved} error={error} />
           <Button type="submit" variant="primary">
-            保存
+            {t("Profile.save")}
           </Button>
         </CardFooter>
       </form>
@@ -120,15 +121,15 @@ function ChangePassword() {
   return (
     <Card>
       <form
-        aria-label="修改密码"
+        aria-label={t("Profile.changePassword")}
         onSubmit={async (event) => {
           event.preventDefault();
           setSaved(false);
           setCurrentError(null);
           setNextError(null);
           setError(null);
-          if (tooShort(next)) return setNextError("新密码至少 12 个字节。");
-          if (next !== again) return setNextError("两次输入的新密码不一致。");
+          if (tooShort(next)) return setNextError(t("Profile.theNewPasswordMustBeAtLeast12"));
+          if (next !== again) return setNextError(t("Profile.theNewPasswordsDoNotMatch"));
           try {
             await post("/api/me/password", { current, next });
             setCurrent("");
@@ -143,7 +144,7 @@ function ChangePassword() {
         }}
       >
         <CardBody>
-          <Field label="当前密码" error={currentError ?? undefined}>
+          <Field label={t("Profile.currentPassword")} error={currentError ?? undefined}>
             <Input
               type="password"
               autoComplete="current-password"
@@ -153,8 +154,8 @@ function ChangePassword() {
             />
           </Field>
           <Field
-            label="新密码"
-            hint="至少 12 个字节。改完后，你在其他浏览器上的登录会退出。"
+            label={t("Profile.newPassword")}
+            hint={t("Profile.atLeast12BytesChangingItSignsYou")}
             error={nextError ?? undefined}
           >
             <Input
@@ -165,7 +166,7 @@ function ChangePassword() {
               required
             />
           </Field>
-          <Field label="确认新密码">
+          <Field label={t("Profile.confirmNewPassword")}>
             <Input
               type="password"
               autoComplete="new-password"
@@ -178,7 +179,7 @@ function ChangePassword() {
         <CardFooter>
           <Outcome saved={saved} error={error} />
           <Button type="submit" variant="primary">
-            修改密码
+            {t("Profile.changePassword")}
           </Button>
         </CardFooter>
       </form>
@@ -202,8 +203,8 @@ export function ProfilePage() {
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-6 md:px-8 md:py-8">
       <PageHeader
-        title="个人资料"
-        description="你在 Mate 里的名字和登录方式。"
+        title={t("Profile.profile")}
+        description={t("Profile.yourNameAndSigninDetailsInMate")}
         {...(me === undefined
           ? {}
           : {
@@ -218,19 +219,19 @@ export function ProfilePage() {
       {me === undefined ? null : (
         <>
           <section className="grid gap-4">
-            <h2 className="text-base font-semibold">基本信息</h2>
+            <h2 className="text-base font-semibold">{t("Profile.basicInformation")}</h2>
             <Names me={me} />
           </section>
           <section className="grid gap-4">
-            <h2 className="text-base font-semibold">密码</h2>
+            <h2 className="text-base font-semibold">{t("Profile.password")}</h2>
             <ChangePassword />
           </section>
           <section className="grid gap-4">
-            <h2 className="text-base font-semibold">登录状态</h2>
+            <h2 className="text-base font-semibold">{t("Profile.loginSession")}</h2>
             <div>
               <Button variant="secondary" onClick={() => void logOut()}>
                 <LogOut aria-hidden />
-                退出登录
+                {t("Profile.signOut")}
               </Button>
             </div>
           </section>

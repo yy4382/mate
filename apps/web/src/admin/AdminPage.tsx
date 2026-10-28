@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { ShieldAlert } from "lucide-react";
 import { useCurrentHuman } from "../shell/humans.ts";
 import { Link, type Route } from "../shell/router.tsx";
@@ -16,14 +17,14 @@ export function AdminPage({ route }: { route: Extract<Route, { page: "admin" }> 
       <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-6 md:px-8 md:py-8">
         <EmptyState
           icon={<ShieldAlert />}
-          title="需要管理员权限"
+          title={t("AdminPage.administratorAccessRequired")}
           action={
             <Link to="/app" className={buttonClass()}>
-              回到聊天
+              {t("AdminPage.backToChat")}
             </Link>
           }
         >
-          管理 Agent、提供商、node 和其他人类需要管理员。请联系管理员。
+          {t("AdminPage.contactAnAdministratorToManageAgentsProvidersNodes")}
         </EmptyState>
       </main>
     );

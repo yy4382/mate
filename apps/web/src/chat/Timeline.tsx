@@ -1,3 +1,4 @@
+import { t, locale } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
@@ -16,7 +17,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { describe, post } from "../shell/api.ts";
+import { describe, post, taskRefusal } from "../shell/api.ts";
 import { Link, chatPath } from "../shell/router.tsx";
 import {
   Avatar,
@@ -70,13 +71,13 @@ function tasksOf(entries: readonly Entry[]): Map<number, TaskState[]> {
   return Map.groupBy(byTask.values(), (task) => task.messageId);
 }
 
-const TASK_VERB: Record<TaskEntry["change"], string> = {
-  created: "创建了任务",
-  claimed: "认领了任务",
-  yielded: "让出了任务",
-  transferred: "转交了任务",
-  completed: "完成了任务",
-};
+const TASK_VERB = {
+  created: "Timeline.taskCreated",
+  claimed: "Timeline.taskClaimed",
+  yielded: "Timeline.taskYielded",
+  transferred: "Timeline.taskTransferred",
+  completed: "Timeline.taskCompleted",
+} as const satisfies Record<TaskEntry["change"], string>;
 
 function Body({ text, accounts }: { text: string; accounts: readonly AccountView[] }) {
   const handles = new Set(accounts.map((a) => a.handle.toLowerCase()));
@@ -110,7 +111,11 @@ function TaskBox(props: {
         requestId: crypto.randomUUID(),
         change: to === undefined ? { kind } : { kind, to },
       });
-      setNote(result.status === "refused" ? `任务操作被拒绝：${result.reason}` : null);
+      setNote(
+        result.status === "refused"
+          ? t("Timeline.taskRefused", { reason: taskRefusal(result.reason) })
+          : null,
+      );
     } catch (error) {
       setNote(describe(error));
     }
@@ -135,33 +140,33 @@ function TaskBox(props: {
             </span>
             <span className="text-xs text-muted">
               {task.completed
-                ? "已完成"
+                ? t("Timeline.completed")
                 : task.owner === null
-                  ? "无人认领"
+                  ? t("Timeline.unclaimed")
                   : accountName(accounts, task.owner)}
             </span>
             {props.canWrite && !task.completed ? (
               task.owner === null ? (
                 <Button size="sm" onClick={() => change(task.taskId, "claim")}>
-                  认领
+                  {t("Timeline.claim")}
                 </Button>
               ) : task.owner === me ? (
                 <>
                   <Button size="sm" onClick={() => change(task.taskId, "complete")}>
-                    完成
+                    {t("Timeline.complete")}
                   </Button>
                   <Button size="sm" onClick={() => change(task.taskId, "yield")}>
-                    让出
+                    {t("Timeline.yield")}
                   </Button>
                   <Select
-                    aria-label="转交给"
+                    aria-label={t("Timeline.transferTo")}
                     className="w-28 [&_select]:h-8 [&_select]:text-xs"
                     value=""
                     onChange={(event) =>
                       change(task.taskId, "transfer", Number(event.target.value))
                     }
                   >
-                    <option value="">转交…</option>
+                    <option value="">{t("Timeline.transfer")}</option>
                     {accounts
                       .filter((a) => a.active && a.accountId !== me)
                       .map((a) => (
@@ -188,7 +193,7 @@ function TaskBox(props: {
 const GROUP_MS = 5 * 60 * 1000;
 
 const clockLabel = (at: number) =>
-  new Date(at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  new Date(at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
 
 function MessageRow(props: {
   entry: MessageEntry;
@@ -227,8 +232,8 @@ function MessageRow(props: {
       <Link
         key="reply"
         to={chatPath(props.conversation, entry.messageId)}
-        aria-label="回复"
-        title="回复"
+        aria-label={t("Timeline.reply")}
+        title={t("Timeline.reply")}
         className={buttonClass({ variant: "ghost", size: "icon-sm" })}
       >
         <MessageSquareReply aria-hidden />
@@ -240,8 +245,8 @@ function MessageRow(props: {
         key="task"
         variant="ghost"
         size="icon-sm"
-        aria-label="转为任务"
-        title="转为任务"
+        aria-label={t("Timeline.createTaskFromMessage")}
+        title={t("Timeline.createTaskFromMessage")}
         onClick={() => setTitling("")}
       >
         <ListTodo aria-hidden />
@@ -284,7 +289,7 @@ function MessageRow(props: {
             to={chatPath(props.conversation, entry.messageId)}
           >
             <MessageSquare aria-hidden />
-            {`${replies} 条回复`}
+            {t("Timeline.replies", { count: replies })}
           </Link>
         ) : null}
         {titling === null ? null : (
@@ -296,18 +301,18 @@ function MessageRow(props: {
             }}
           >
             <Input
-              aria-label="任务标题"
-              placeholder="任务标题"
+              aria-label={t("Timeline.taskTitle")}
+              placeholder={t("Timeline.taskTitle")}
               className="h-8 flex-1 text-xs"
               value={titling}
               onChange={(event) => setTitling(event.target.value)}
               autoFocus
             />
             <Button variant="primary" size="sm" type="submit">
-              创建任务
+              {t("Timeline.createTask")}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => setTitling(null)}>
-              取消
+              {t("Timeline.cancel")}
             </Button>
           </form>
         )}
@@ -329,7 +334,10 @@ function TaskLine({ entry, accounts }: { entry: TaskEntry; accounts: readonly Ac
       data-seq={entry.seq}
     >
       <ListTodo aria-hidden />
-      {accountName(accounts, entry.actor)} {TASK_VERB[entry.change]}「{entry.title}」
+      {t(TASK_VERB[entry.change], {
+        actor: accountName(accounts, entry.actor),
+        title: entry.title,
+      })}
     </p>
   );
 }
@@ -379,7 +387,7 @@ function useJump(
     if (seq === null || !loaded || done.current === jumpKey) return;
     if (seq > newest || seq < 1) {
       done.current = jumpKey;
-      setNotice("找不到那条消息，已显示最新消息。");
+      setNotice(t("Timeline.messageNotFoundShowingTheLatestMessages"));
       return;
     }
     if (oldest > seq) {
@@ -426,7 +434,9 @@ function ThreadRoot(props: { entry: MessageEntry; replies: number }) {
         </div>
       </div>
       <div className="flex items-center gap-3 px-4 pt-2 text-xs text-muted md:px-6">
-        {props.replies > 0 ? `${props.replies} 条回复` : "还没有回复"}
+        {props.replies > 0
+          ? t("Timeline.replies", { count: props.replies })
+          : t("Timeline.noRepliesYet")}
         <span className="h-px flex-1 bg-border" />
       </div>
     </div>
@@ -467,7 +477,8 @@ function MessageList(props: {
         <ErrorLine error={timeline.error} />
       </div>
     );
-  if (entries === undefined) return <p className="flex-1 p-6 text-sm text-muted">正在加载…</p>;
+  if (entries === undefined)
+    return <p className="flex-1 p-6 text-sm text-muted">{t("Timeline.loading")}</p>;
   const tasks = tasksOf(entries);
   const first = entries[0];
   return (
@@ -502,7 +513,9 @@ function MessageList(props: {
               }
             }}
           >
-            {older === "failed" ? "加载失败，点此重试" : "加载更早的消息"}
+            {older === "failed"
+              ? t("Timeline.loadingFailedRetry")
+              : t("Timeline.loadEarlierMessages")}
           </Button>
         </div>
       ) : null}
@@ -511,8 +524,8 @@ function MessageList(props: {
       )}
       {entries.length === 0 && root === undefined ? (
         <div className="px-4 md:px-6">
-          <EmptyState icon={<MessageSquare />} title="还没有消息">
-            在下面说点什么，开始这段对话。
+          <EmptyState icon={<MessageSquare />} title={t("Timeline.noMessagesYet")}>
+            {t("Timeline.sendAMessageBelowToStartThisConversation")}
           </EmptyState>
         </div>
       ) : null}
@@ -579,7 +592,7 @@ function Composer({
         <Textarea
           bare
           ref={area}
-          aria-label="消息"
+          aria-label={t("Timeline.message")}
           placeholder={placeholder}
           rows={1}
           className="max-h-52 overflow-y-auto"
@@ -595,16 +608,16 @@ function Composer({
             )}
             role="status"
           >
-            {sending ? "发送中…" : failed ? "发送失败" : ""}
+            {sending ? t("Timeline.sending") : failed ? t("Timeline.sendFailed") : ""}
             {draft.error !== null ? ` ${draft.error}` : ""}
           </span>
           {failed ? (
             <>
               <Button variant="ghost" size="sm" onClick={() => abandonPending(ref)}>
-                放弃
+                {t("Timeline.discard")}
               </Button>
               <Button variant="primary" size="sm" type="submit">
-                重试发送
+                {t("Timeline.retrySend")}
               </Button>
             </>
           ) : (
@@ -612,7 +625,7 @@ function Composer({
               variant="primary"
               size="icon-sm"
               type="submit"
-              aria-label="发送"
+              aria-label={t("Timeline.send")}
               disabled={sending || draft.text.trim() === ""}
             >
               <ArrowUp aria-hidden />

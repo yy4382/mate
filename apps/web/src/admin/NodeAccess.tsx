@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { AgentView } from "@mate/admin";
 import { del, put } from "../shell/api.ts";
@@ -34,26 +35,32 @@ function NodeAccessRow({ agent, node }: { agent: ReadableAgent; node: NodeView }
         <div className="min-w-0 flex-1">
           <p className="break-all font-medium">{node.name}</p>
           <p className="mt-1 text-xs text-muted">
-            {node.online ? "在线" : "离线"}
+            {node.online ? t("NodeAccess.online") : t("NodeAccess.offline")}
             {node.system === null ? "" : ` · ${node.system.platform} · ${node.system.arch}`}
           </p>
         </div>
         {home ? (
-          <Badge>主 node</Badge>
+          <Badge>{t("NodeAccess.homeNode")}</Badge>
         ) : (
           <Button size="sm" disabled={change.isPending} onClick={() => change.mutate(!granted)}>
-            {change.isPending ? "更新中…" : granted ? "收回授权" : "授权访问"}
+            {change.isPending
+              ? t("NodeAccess.updating")
+              : granted
+                ? t("NodeAccess.revokeAccess")
+                : t("NodeAccess.grantAccess")}
           </Button>
         )}
       </div>
       {home ? (
-        <p className="text-xs text-muted">工作区和 MEMORY.md 在这里，始终可以访问。</p>
+        <p className="text-xs text-muted">
+          {t("NodeAccess.theWorkspaceAndMemorymdAreHereAccessIs")}
+        </p>
       ) : null}
       {change.isSuccess ? (
         <p role="status" className={cx("text-xs text-success", feedbackClass)}>
           {change.variables
-            ? "已授权，从下一次调用起可以访问。"
-            : "已收回授权，已启动的命令继续运行。"}
+            ? t("NodeAccess.accessGrantedForSubsequentCalls")
+            : t("NodeAccess.accessRevokedCommandsAlreadyStartedWillContinueRunning")}
         </p>
       ) : null}
       <ErrorLine error={change.error} />
@@ -64,13 +71,12 @@ function NodeAccessRow({ agent, node }: { agent: ReadableAgent; node: NodeView }
 export function NodeAccess({ agent }: { agent: ReadableAgent }) {
   const nodes = useNodes(true);
   return (
-    <Card role="region" aria-label="Node 访问">
+    <Card role="region" aria-label={t("NodeAccess.nodeAccess")}>
       <CardBody>
         <div className="grid gap-1.5">
-          <h2 className="font-medium">Node 访问</h2>
+          <h2 className="font-medium">{t("NodeAccess.nodeAccess")}</h2>
           <p className="text-sm text-muted">
-            授权后，Agent 可以在其他 node
-            账号的主目录里执行命令、读写文件。授权和收回只影响之后开始的调用。
+            {t("NodeAccess.onceGrantedAccessTheAgentCanRunCommands")}
           </p>
         </div>
         <ErrorLine error={nodes.error} />

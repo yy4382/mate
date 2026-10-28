@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentView, CatalogModel, NodeStatusResult, ProviderView } from "@mate/admin";
 import { get } from "../shell/api.ts";
@@ -52,9 +53,22 @@ export function totalTokens(agent: Extract<AgentView, { usage: unknown }>): numb
   return total;
 }
 
+export function thinkingLabel(level: string): string {
+  const labels: Record<string, string> = {
+    off: t("thinking.off"),
+    minimal: t("thinking.minimal"),
+    low: t("thinking.low"),
+    medium: t("thinking.medium"),
+    high: t("thinking.high"),
+    xhigh: t("thinking.xhigh"),
+    max: t("thinking.max"),
+  };
+  return labels[level] ?? level;
+}
+
 export const STATE_LABEL: Record<string, string> = {
-  open: "运行中",
-  paused: "已暂停",
-  closed: "已关闭",
-  unreadable: "读不出",
+  open: t("data.running"),
+  paused: t("data.paused"),
+  closed: t("data.closed"),
+  unreadable: t("data.unreadable"),
 };

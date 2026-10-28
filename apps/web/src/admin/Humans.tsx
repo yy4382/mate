@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleUser, KeyRound, Plus, ShieldCheck, ShieldOff, UserX } from "lucide-react";
 import { useState } from "react";
@@ -42,19 +43,20 @@ function AddHuman({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   return (
     <Dialog
-      title="添加人类"
-      description="给他一个 handle 和初始密码，他用这个登录，之后可以自己改。"
+      title={t("Humans.addHuman")}
+      description={t("Humans.giveThemAHandleAndInitialPasswordTo")}
       onClose={onClose}
     >
       <form
         className="grid gap-4"
-        aria-label="添加人类"
+        aria-label={t("Humans.addHuman")}
         onSubmit={async (event) => {
           event.preventDefault();
           setHandleError(null);
           setPasswordError(null);
           setError(null);
-          if (tooShort(password)) return setPasswordError("初始密码至少 12 个字节。");
+          if (tooShort(password))
+            return setPasswordError(t("Humans.theInitialPasswordMustBeAtLeast12"));
           try {
             await post("/api/humans", {
               requestId,
@@ -73,14 +75,14 @@ function AddHuman({ onClose }: { onClose: () => void }) {
           }
         }}
       >
-        <Field label="显示名">
+        <Field label={t("Humans.displayName")}>
           <Input
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
             required
           />
         </Field>
-        <Field label="Handle" error={handleError ?? undefined}>
+        <Field label={t("common.handle")} error={handleError ?? undefined}>
           <Input
             value={handle}
             onChange={(event) => setHandle(event.target.value)}
@@ -90,7 +92,11 @@ function AddHuman({ onClose }: { onClose: () => void }) {
             required
           />
         </Field>
-        <Field label="初始密码" hint="至少 12 个字节。" error={passwordError ?? undefined}>
+        <Field
+          label={t("Humans.initialPassword")}
+          hint={t("Humans.atLeast12Bytes")}
+          error={passwordError ?? undefined}
+        >
           <Input
             type="password"
             autoComplete="new-password"
@@ -99,7 +105,7 @@ function AddHuman({ onClose }: { onClose: () => void }) {
             required
           />
         </Field>
-        <Field label="角色">
+        <Field label={t("Humans.role")}>
           <Select value={role} onChange={(event) => setRole(event.target.value as Role)}>
             <option value="member">{ROLE_LABEL.member}</option>
             <option value="admin">{ROLE_LABEL.admin}</option>
@@ -108,7 +114,7 @@ function AddHuman({ onClose }: { onClose: () => void }) {
         <ErrorLine error={error} />
         <div className="flex justify-end">
           <Button type="submit" variant="primary">
-            添加
+            {t("Humans.add")}
           </Button>
         </div>
       </form>
@@ -122,18 +128,19 @@ function ResetPassword({ human, onClose }: { human: ListedHuman; onClose: () => 
   const [error, setError] = useState<string | null>(null);
   return (
     <Dialog
-      title={`重置 ${human.displayName} 的密码`}
-      description="他所有的登录会话会退出，需要用新密码重新登录。"
+      title={t("Humans.resetNamed", { name: human.displayName })}
+      description={t("Humans.allTheirLoginSessionsWillEndTheyWill")}
       onClose={onClose}
     >
       <form
         className="grid gap-4"
-        aria-label="重置密码"
+        aria-label={t("Humans.resetPassword")}
         onSubmit={async (event) => {
           event.preventDefault();
           setPasswordError(null);
           setError(null);
-          if (tooShort(password)) return setPasswordError("新密码至少 12 个字节。");
+          if (tooShort(password))
+            return setPasswordError(t("Humans.theNewPasswordMustBeAtLeast12"));
           try {
             await post(`/api/humans/${human.accountId}/password`, { password });
             onClose();
@@ -142,7 +149,11 @@ function ResetPassword({ human, onClose }: { human: ListedHuman; onClose: () => 
           }
         }}
       >
-        <Field label="新密码" hint="至少 12 个字节。" error={passwordError ?? undefined}>
+        <Field
+          label={t("Humans.newPassword")}
+          hint={t("Humans.atLeast12Bytes")}
+          error={passwordError ?? undefined}
+        >
           <Input
             type="password"
             autoComplete="new-password"
@@ -154,7 +165,7 @@ function ResetPassword({ human, onClose }: { human: ListedHuman; onClose: () => 
         <ErrorLine error={error} />
         <div className="flex justify-end">
           <Button type="submit" variant="primary">
-            重置密码
+            {t("Humans.resetPassword")}
           </Button>
         </div>
       </form>
@@ -191,39 +202,39 @@ function HumanRow({
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
         <span className="truncate text-sm font-medium">{human.displayName}</span>
         <span className="text-sm text-muted">@{human.handle}</span>
-        {isMe ? <Badge tone="accent">你</Badge> : null}
+        {isMe ? <Badge tone="accent">{t("Humans.you")}</Badge> : null}
         {human.active ? (
           <Badge tone={human.role === "admin" ? "accent" : "neutral"}>
             {ROLE_LABEL[human.role]}
           </Badge>
         ) : (
-          <Badge tone="danger">已停用</Badge>
+          <Badge tone="danger">{t("Humans.deactivated")}</Badge>
         )}
       </div>
       {human.active ? (
-        <Menu label={`更多：${human.displayName}`}>
+        <Menu label={t("common.moreFor", { name: human.displayName })}>
           {isMe ? (
             <MenuItem icon={<CircleUser aria-hidden />} onClick={() => navigate("/app/profile")}>
-              编辑个人资料
+              {t("Humans.editProfile")}
             </MenuItem>
           ) : null}
           <MenuItem
             icon={other === "admin" ? <ShieldCheck aria-hidden /> : <ShieldOff aria-hidden />}
             onClick={() => run(() => post(`/api/humans/${human.accountId}/role`, { role: other }))}
           >
-            设为{ROLE_LABEL[other]}
+            {t("Humans.setRole", { role: ROLE_LABEL[other] })}
           </MenuItem>
           {isMe ? null : (
             <>
               <MenuItem icon={<KeyRound aria-hidden />} onClick={() => setResetting(true)}>
-                重置密码
+                {t("Humans.resetPassword")}
               </MenuItem>
               <MenuItem
                 tone="danger"
                 icon={<UserX aria-hidden />}
                 onClick={() => setConfirming(true)}
               >
-                停用
+                {t("Humans.deactivate")}
               </MenuItem>
             </>
           )}
@@ -233,9 +244,9 @@ function HumanRow({
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}
-        title={`停用 ${human.displayName}？`}
-        description="他会立即退出所有登录，也不能再登录，无法恢复。他发过的消息会保留。"
-        confirmLabel="停用"
+        title={t("Humans.deactivateNamed", { name: human.displayName })}
+        description={t("Humans.allTheirLoginSessionsWillEndImmediatelyAnd")}
+        confirmLabel={t("Humans.deactivate")}
         onConfirm={() => run(() => post(`/api/humans/${human.accountId}/deactivate`))}
       />
     </li>
@@ -250,12 +261,12 @@ export function Humans() {
   return (
     <>
       <PageHeader
-        title="人类"
-        description="能登录 Mate 的人。管理员还能管理 Agent、提供商、node 和其他人类，普通人类只聊天。"
+        title={t("Humans.humans")}
+        description={t("Humans.peopleWhoCanSignInToMateAdministrators")}
         actions={
           <Button variant="primary" onClick={() => setAdding(true)}>
             <Plus aria-hidden />
-            添加人类
+            {t("Humans.addHuman")}
           </Button>
         }
       />

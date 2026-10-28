@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Bell, BellOff, CircleUser, LogOut, MessageSquare, Settings2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -69,16 +70,16 @@ function MainNav() {
   const admin = route.page === "admin";
   return (
     <nav
-      aria-label="主导航"
+      aria-label={t("App.mainNavigation")}
       className={cx(bar, "col-start-1 row-start-3 flex md:flex-col md:gap-0.5 md:p-2")}
     >
       <Link to="/app" aria-current={admin ? undefined : "page"} className={navItem}>
         <MessageSquare aria-hidden />
-        聊天
+        {t("App.chat")}
         {unread !== undefined && unread.total > 0 ? (
           <Badge
             tone="accent"
-            aria-label={`${unread.total} 条未读`}
+            aria-label={t("common.unread", { count: unread.total })}
             className="absolute left-1/2 top-1 ml-2 md:static md:ml-auto"
           >
             {unread.total}
@@ -88,7 +89,7 @@ function MainNav() {
       {isAdmin ? (
         <Link to="/app/admin/agents" aria-current={admin ? "page" : undefined} className={navItem}>
           <Settings2 aria-hidden />
-          管理
+          {t("App.administration")}
         </Link>
       ) : null}
     </nav>
@@ -98,7 +99,7 @@ function MainNav() {
 function AccountMenu() {
   const push = usePush();
   const me = useCurrentHuman().data;
-  const name = me?.displayName ?? "账号";
+  const name = me?.displayName ?? t("App.account");
   return (
     <div className={cx(bar, "col-start-2 row-start-3 flex md:flex-col md:p-2")}>
       <Menu
@@ -126,7 +127,7 @@ function AccountMenu() {
         )}
         {push.supported ? (
           <MenuItem
-            icon={push.label === "关闭通知" ? <BellOff aria-hidden /> : <Bell aria-hidden />}
+            icon={push.enabled ? <BellOff aria-hidden /> : <Bell aria-hidden />}
             disabled={push.disabled}
             onClick={push.toggle}
           >
@@ -134,10 +135,10 @@ function AccountMenu() {
           </MenuItem>
         ) : null}
         <MenuItem icon={<CircleUser aria-hidden />} onClick={() => navigate("/app/profile")}>
-          个人资料
+          {t("App.profile")}
         </MenuItem>
         <MenuItem icon={<LogOut aria-hidden />} onClick={() => void logOut()}>
-          退出
+          {t("App.signOut")}
         </MenuItem>
       </Menu>
       {push.problem === null ? null : (
@@ -187,9 +188,9 @@ function Pages() {
         {route.page === "profile" ? <ProfilePage /> : null}
         {route.page === "none" ? (
           <main className="mx-auto grid max-w-4xl gap-4 px-4 py-6 md:px-8 md:py-8">
-            <h1 className="text-2xl font-semibold tracking-tight">找不到这个页面</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">{t("App.pageNotFound")}</h1>
             <Link to="/app" className={buttonClass({ className: "w-fit" })}>
-              回到聊天
+              {t("App.backToChat")}
             </Link>
           </main>
         ) : null}

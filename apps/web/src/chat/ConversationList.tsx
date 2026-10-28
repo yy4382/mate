@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { Hash, Lock, Plus, Search } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -80,9 +81,12 @@ export function ConversationList() {
           <span className="min-w-0 flex-1 truncate">
             {conversationLabel(conversation, accounts, me)}
           </span>
-          {conversation.archived ? <Badge>已归档</Badge> : null}
+          {conversation.archived ? <Badge>{t("ConversationList.archived")}</Badge> : null}
           {count > 0 ? (
-            <Badge tone={mentioned ? "solid" : "inverse"} aria-label={`${count} 条未读`}>
+            <Badge
+              tone={mentioned ? "solid" : "inverse"}
+              aria-label={t("common.unread", { count: count })}
+            >
               {count}
             </Badge>
           ) : null}
@@ -93,12 +97,17 @@ export function ConversationList() {
   const channels = conversations.filter((c) => c.kind !== "dm");
   const dms = conversations.filter((c) => c.kind === "dm");
   return (
-    <nav aria-label="会话" className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-6 md:p-2">
-      <h1 className="pb-4 text-2xl font-semibold tracking-tight md:hidden">聊天</h1>
+    <nav
+      aria-label={t("ConversationList.conversations")}
+      className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-6 md:p-2"
+    >
+      <h1 className="pb-4 text-2xl font-semibold tracking-tight md:hidden">
+        {t("ConversationList.chat")}
+      </h1>
       <form
         className="relative"
         role="search"
-        aria-label="搜索消息"
+        aria-label={t("ConversationList.searchMessages")}
         onSubmit={(event) => {
           event.preventDefault();
           const query = new FormData(event.currentTarget).get("q");
@@ -113,8 +122,8 @@ export function ConversationList() {
         <Input
           name="q"
           type="search"
-          aria-label="搜索消息"
-          placeholder="搜索消息"
+          aria-label={t("ConversationList.searchMessages")}
+          placeholder={t("ConversationList.searchMessages")}
           className="pl-9"
         />
       </form>
@@ -124,17 +133,17 @@ export function ConversationList() {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="新建会话"
+              aria-label={t("ConversationList.newConversation")}
               onClick={() => setCreating(true)}
             >
               <Plus aria-hidden />
             </Button>
           }
         >
-          频道
+          {t("ConversationList.channels")}
         </Heading>
         <ul className="m-0 grid list-none gap-0.5 p-0">{channels.map(row)}</ul>
-        <Heading>私信</Heading>
+        <Heading>{t("ConversationList.directMessages")}</Heading>
         <ul className="m-0 grid list-none gap-0.5 p-0">{dms.map(row)}</ul>
       </div>
       {creating ? <NewConversation onClose={() => setCreating(false)} /> : null}
@@ -176,7 +185,7 @@ function NewConversation({ onClose }: { onClose: () => void }) {
     }
   };
   return (
-    <Dialog title="新建会话" onClose={onClose}>
+    <Dialog title={t("ConversationList.newConversation")} onClose={onClose}>
       <form
         className="grid gap-4"
         onSubmit={(event) => {
@@ -188,29 +197,29 @@ function NewConversation({ onClose }: { onClose: () => void }) {
           value={mode}
           onValueChange={(value) => setMode(value as "channel" | "dm")}
           items={[
-            { value: "channel", label: "频道" },
-            { value: "dm", label: "私信" },
+            { value: "channel", label: t("ConversationList.channels") },
+            { value: "dm", label: t("ConversationList.directMessages") },
           ]}
         />
         {mode === "channel" ? (
           <>
-            <Field label="频道名称">
+            <Field label={t("ConversationList.channelName")}>
               <Input value={name} onChange={(event) => setName(event.target.value)} required />
             </Field>
-            <Field label="可见性">
+            <Field label={t("ConversationList.visibility")}>
               <Select
                 value={visibility}
                 onChange={(event) => setVisibility(event.target.value as "public" | "private")}
               >
-                <option value="public">公开</option>
-                <option value="private">私有</option>
+                <option value="public">{t("ConversationList.public")}</option>
+                <option value="private">{t("ConversationList.private")}</option>
               </Select>
             </Field>
           </>
         ) : (
-          <Field label="对方">
+          <Field label={t("ConversationList.recipient")}>
             <Select value={other} onChange={(event) => setOther(event.target.value)} required>
-              <option value="">选择…</option>
+              <option value="">{t("ConversationList.select")}</option>
               {accounts
                 .filter((a) => a.active && a.accountId !== me)
                 .map((a) => (
@@ -224,7 +233,9 @@ function NewConversation({ onClose }: { onClose: () => void }) {
         <ErrorLine error={error} />
         <div className="flex justify-end">
           <Button type="submit" variant="primary">
-            {mode === "channel" ? "创建频道" : "打开私信"}
+            {mode === "channel"
+              ? t("ConversationList.createChannel")
+              : t("ConversationList.openDirectMessage")}
           </Button>
         </div>
       </form>

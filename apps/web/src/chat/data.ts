@@ -1,3 +1,4 @@
+import { t, locale } from "../i18n.ts";
 import { queryOptions, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { get } from "../shell/api.ts";
 import {
@@ -128,5 +129,7 @@ export function conversationLabel(
   if (conversation.kind !== "dm") return conversation.name ?? "";
   const others = conversation.members.filter((id) => id !== me);
   const names = others.map((id) => accountName(accounts, id));
-  return names.length === 0 ? "（空私信）" : names.join("、");
+  return names.length === 0
+    ? t("data.emptyDirectMessage")
+    : new Intl.ListFormat(locale, { style: "short", type: "conjunction" }).format(names);
 }

@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { get, redirectToLogin } from "../shell/api.ts";
@@ -89,6 +90,6 @@ export function ChatLive({ children }: { children: ReactNode }) {
     };
   }, [qc, generation]);
 
-  if (phase === "loading") return <p className="splash">正在加载…</p>;
+  if (phase === "loading") return <p className="splash">{t("live.loading")}</p>;
   return <Fragment key={generation}>{children}</Fragment>;
 }

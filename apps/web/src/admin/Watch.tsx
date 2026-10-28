@@ -1,15 +1,10 @@
+import { t } from "../i18n.ts";
 import { EyeOff } from "lucide-react";
 import { useEffect, useReducer, useState } from "react";
 import type { AgentEvent } from "@mate/admin";
 import { get, redirectToLogin } from "../shell/api.ts";
 import { Badge, EmptyState, ErrorLine, Field, Notice, Select, cx } from "../shell/ui.tsx";
-import { describeEntry, initial, reduce } from "./watch.ts";
-
-const ROLE: Record<string, string> = {
-  user: "输入",
-  assistant: "Agent",
-  toolResult: "工具结果",
-};
+import { describeEntry, initial, reduce, watchLabel } from "./watch.ts";
 
 function Line(props: { role: string; streaming?: boolean; text: string }) {
   return (
@@ -20,11 +15,11 @@ function Line(props: { role: string; streaming?: boolean; text: string }) {
       )}
     >
       <span className="flex items-center gap-1.5 self-start pt-px text-xs text-muted">
-        {ROLE[props.role] ?? props.role}
+        {watchLabel(props.role)}
         {props.streaming === true ? (
           <span
             role="img"
-            aria-label="正在写"
+            aria-label={t("Watch.writing")}
             className="size-1.5 rounded-full bg-accent motion-safe:animate-pulse"
           />
         ) : null}
@@ -65,15 +60,16 @@ export function Watch({ agentId, open }: { agentId: string; open: boolean }) {
     });
     source.addEventListener("login", () => redirectToLogin());
     source.addEventListener("error", () => {
-      if (source.readyState === EventSource.CLOSED && !received) setProblem("无法观察这个 Agent。");
+      if (source.readyState === EventSource.CLOSED && !received)
+        setProblem(t("Watch.unableToObserveThisAgent"));
     });
     return () => source.close();
   }, [agentId, assistant, open]);
 
   if (!open)
     return (
-      <EmptyState icon={<EyeOff />} title="Agent 没有在运行">
-        没有可观察的对话。恢复它之后再来看。
+      <EmptyState icon={<EyeOff />} title={t("Watch.agentIsNotRunning")}>
+        {t("Watch.thereIsNoConversationToObserveResumeThe")}
       </EmptyState>
     );
   const tools = Object.entries(state.tools);
@@ -84,25 +80,29 @@ export function Watch({ agentId, open }: { agentId: string; open: boolean }) {
   return (
     <div className="grid gap-6">
       {assistants.length > 0 ? (
-        <Field label="观察" className="max-w-xs">
+        <Field label={t("Watch.observe")} className="max-w-xs">
           <Select value={assistant} onChange={(event) => setAssistant(event.target.value)}>
-            <option value="">Agent 本身</option>
+            <option value="">{t("Watch.mainConversation")}</option>
             {assistants.map((name) => (
               <option key={name} value={name}>
-                工作助手 {name}
+                {t("Watch.workAssistant", { name })}
               </option>
             ))}
           </Select>
         </Field>
       ) : null}
       <ErrorLine error={problem} />
-      {state.ended ? <Notice>观察已结束（Agent 已暂停或删除）。</Notice> : null}
+      {state.ended ? (
+        <Notice>{t("Watch.observationEndedTheAgentWasPausedOrDeleted")}</Notice>
+      ) : null}
       <ol
         className="divide-y divide-border overflow-hidden rounded-lg border border-border"
         data-testid="transcript"
       >
         {lines.length === 0 && streaming.length === 0 ? (
-          <li className="px-4 py-6 text-center text-sm text-muted">还没有对话内容。</li>
+          <li className="px-4 py-6 text-center text-sm text-muted">
+            {t("Watch.noConversationContentYet")}
+          </li>
         ) : null}
         {lines.map((line) => (
           <Line key={line.key} role={line.role} text={line.text} />
@@ -113,7 +113,7 @@ export function Watch({ agentId, open }: { agentId: string; open: boolean }) {
       </ol>
       {tools.length > 0 ? (
         <section className="grid gap-3">
-          <h2 className="text-base font-semibold">工具调用</h2>
+          <h2 className="text-base font-semibold">{t("Watch.toolCalls")}</h2>
           <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
             {tools.map(([id, run]) => (
               <li key={id} className="grid gap-2 px-4 py-3">
@@ -126,12 +126,14 @@ export function Watch({ agentId, open }: { agentId: string; open: boolean }) {
                     {run.args}
                   </code>
                   <Badge tone={run.done ? "neutral" : "accent"}>
-                    {run.done ? "完成" : "运行中"}
+                    {run.done ? t("Watch.complete") : t("Watch.running")}
                   </Badge>
                 </div>
                 {run.output === "" ? null : (
                   <details>
-                    <summary className="cursor-pointer text-xs text-muted">输出</summary>
+                    <summary className="cursor-pointer text-xs text-muted">
+                      {t("Watch.output")}
+                    </summary>
                     <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-subtle p-3 font-mono text-xs leading-5">
                       {run.output}
                     </pre>
