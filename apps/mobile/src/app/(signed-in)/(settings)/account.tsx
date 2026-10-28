@@ -5,8 +5,7 @@ import { Avatar, Row, Screen, Section } from "../../../ui";
 export default function SettingsScreen() {
   const human = useHuman();
   const client = useClient();
-  const access = client.getSnapshot();
-  if (!human || access.kind === "closed") return null;
+  if (!human) return null;
   return (
     <Screen>
       <Section>
@@ -32,7 +31,7 @@ export default function SettingsScreen() {
       <Section title={t("management.connection")}>
         <Row
           title={t("settings.account_and_connection")}
-          subtitle={new URL(access.session.server).host}
+          subtitle={new URL(client.server).host}
           onPress={() => router.push("/connection")}
         />
       </Section>

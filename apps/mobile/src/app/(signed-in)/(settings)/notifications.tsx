@@ -2,11 +2,11 @@ import { t } from "../../../i18n";
 import { useState, useSyncExternalStore } from "react";
 import { Linking, View } from "react-native";
 import { notifications } from "../../../notifications-native";
-import { useClient, useHuman, useOperation } from "../../../admin/session";
-import { Outcome } from "../../../admin/ui";
+import { useClient, useHuman } from "../../../admin/session";
 import { Button, Caption, Copy, Heading, Row, Screen, Section, Sheet } from "../../../ui";
 import type { NotificationState } from "../../../notifications";
 
+const openSettings = () => void Linking.openSettings();
 const summaries = {
   "signed-out": {
     title: t("settings.sign_in_first_2"),
@@ -36,7 +36,7 @@ const summaries = {
     title: t("settings.system_notifications_off"),
     description: t("settings.allow_notifications_in_ios_settings_then_return"),
     action: t("settings.open_ios_settings"),
-    run: () => {},
+    run: openSettings,
   },
   unavailable: {
     title: t("settings.remote_notifications_unavailable"),
@@ -72,9 +72,7 @@ export default function NotificationSettings() {
   const client = useClient();
   const human = useHuman();
   const [details, setDetails] = useState(false);
-  const settings = useOperation();
   const summary = summaries[state.kind];
-  const openSettings = () => void settings.run(() => Linking.openSettings(), "");
   const description =
     state.kind === "unavailable" && state.server === "unconfigured"
       ? t("settings.apple_push_is_not_configured_on_the")
@@ -92,14 +90,7 @@ export default function NotificationSettings() {
           </Caption>
         )}
       </View>
-      {summary.action !== "" && (
-        <Button
-          title={summary.action}
-          primary
-          onPress={state.kind === "denied" ? openSettings : summary.run}
-        />
-      )}
-      <Outcome operation={settings} />
+      {summary.action !== "" && <Button title={summary.action} primary onPress={summary.run} />}
       <Section title={t("chat.more")}>
         <Row
           title={t("settings.notification_details")}
@@ -126,7 +117,9 @@ export default function NotificationSettings() {
             value={registrationLabel[state.registration]}
           />
         </Section>
-        <Copy muted>{state.message}</Copy>
+        {state.localCleanup === "unconfirmed" && (
+          <Copy muted>{t("settings.local_notification_cleanup_is_unconfirmed_turn_off")}</Copy>
+        )}
         <Section title={t("settings.current_account")}>
           <Row title={t("settings.server")} subtitle={client.server} />
           <Row
@@ -172,7 +165,6 @@ export default function NotificationSettings() {
           disabled={state.kind === "checking" || state.kind === "signed-out"}
           onPress={() => void notifications.refresh()}
         />
-        <Button title={t("settings.open_ios_settings")} onPress={openSettings} />
       </Sheet>
     </Screen>
   );

@@ -1,22 +1,33 @@
-import { t, noticeText } from "./i18n";
 import { HumanView, LoginResult, type LoginInput } from "@mate/control-plane/contracts";
+import { z } from "zod";
+
+/** Why the login form is shown again; screens translate it. */
+export type SignedOutNotice =
+  | "signed-out"
+  | "revocation-unconfirmed"
+  | "wrong-password"
+  | "expired"
+  | "rate-limited"
+  | "network";
 
 export type AuthState =
   | { kind: "starting" }
-  | { kind: "server"; message: string }
-  | { kind: "signed-out"; server: string; message: string }
+  | { kind: "server"; problem: "settings" | "address" | null }
+  | { kind: "signed-out"; server: string; notice: SignedOutNotice | null }
   | { kind: "logging-in"; server: string }
   | { kind: "checking"; server: string }
   | { kind: "clearing"; server: string }
   | { kind: "signed-in"; server: string; human: HumanView }
-  | { kind: "unavailable"; server: string; message: string };
+  | { kind: "unavailable"; server: string; problem: "cleanup" | "connection" };
 
-type Preferences = { server: string; restore: boolean };
+const Preferences = z.object({ server: z.url(), restore: z.boolean() });
+type Preferences = z.output<typeof Preferences>;
 export type AuthPlatform = {
-  read(): Preferences | null;
+  read(): unknown;
   write(preferences: Preferences): void;
   clearCookies(): Promise<unknown>;
-  beforeClear?(): Promise<string>;
+  /** Ends notification access before cookies change. */
+  beforeClear(): Promise<void>;
   fetch: typeof fetch;
 };
 
@@ -31,7 +42,7 @@ function serverAddress(input: string): string {
     url.search ||
     url.hash
   )
-    throw new Error(t("auth.enter_an_https_server_address_without_credentials"));
+    throw new TypeError("not an HTTPS origin");
   return url.origin;
 }
 
@@ -49,7 +60,8 @@ export class MobileAuth {
   private request: AbortController | undefined;
   private pending: Promise<void> = Promise.resolve();
   private preferences: Preferences | null = null;
-  private cleanup: { server: string; revoke: boolean } | undefined;
+  /** A cleanup that has not finished, and the server whose session it still has to revoke. */
+  private cleanup: { server: string; revoke: string | undefined } | undefined;
 
   constructor(private platform: AuthPlatform) {}
 
@@ -75,22 +87,19 @@ export class MobileAuth {
   async start(): Promise<void> {
     if (this.state.kind !== "starting") return;
     try {
-      this.preferences = this.platform.read();
+      this.preferences = Preferences.nullable().parse(this.platform.read());
       if (this.preferences === null) {
         await this.platform.clearCookies();
-        this.publish({ kind: "server", message: "" });
+        this.publish({ kind: "server", problem: null });
       } else if (this.preferences.restore) {
         await this.revalidate();
       } else {
-        const message = (await this.platform.beforeClear?.()) ?? "";
+        await this.platform.beforeClear();
         await this.platform.clearCookies();
-        this.publish({ kind: "signed-out", server: this.preferences.server, message });
+        this.publish({ kind: "signed-out", server: this.preferences.server, notice: null });
       }
     } catch {
-      this.publish({
-        kind: "server",
-        message: t("auth.could_not_read_local_signin_settings_save"),
-      });
+      this.publish({ kind: "server", problem: "settings" });
     }
   }
 
@@ -141,47 +150,30 @@ export class MobileAuth {
       } catch (error) {
         if (generation !== this.generation) return;
         if (error instanceof Refusal && error.status === 401) {
-          let notificationMessage = "";
           try {
             this.platform.write({ server, restore: false });
             this.preferences = { server, restore: false };
-            notificationMessage = (await this.platform.beforeClear?.()) ?? "";
+            await this.platform.beforeClear();
             await this.platform.clearCookies();
           } catch {
             if (generation === this.generation)
-              this.publish({
-                kind: "unavailable",
-                server,
-                message: t("auth.could_not_clear_local_signin_settings_try"),
-              });
+              this.publish({ kind: "unavailable", server, problem: "cleanup" });
             return;
           }
           if (generation === this.generation)
             this.publish({
               kind: "signed-out",
               server,
-              message: noticeText(
-                input
-                  ? t("auth.incorrect_handle_or_password")
-                  : t("auth.your_session_has_expired_sign_in_again"),
-                notificationMessage,
-              ),
+              notice: input ? "wrong-password" : "expired",
             });
         } else if (input) {
           this.publish({
             kind: "signed-out",
             server,
-            message:
-              error instanceof Refusal && error.status === 429
-                ? t("auth.too_many_people_are_trying_try_again")
-                : t("auth.could_not_sign_in_check_your_network"),
+            notice: error instanceof Refusal && error.status === 429 ? "rate-limited" : "network",
           });
         } else {
-          this.publish({
-            kind: "unavailable",
-            server,
-            message: t("auth.could_not_connect_to_or_verify_the"),
-          });
+          this.publish({ kind: "unavailable", server, problem: "connection" });
         }
       } finally {
         clearTimeout(timeout);
@@ -197,18 +189,21 @@ export class MobileAuth {
     try {
       server = serverAddress(input);
     } catch {
-      this.publish({
-        kind: "server",
-        message: t("auth.enter_an_https_server_address_such_as"),
-      });
+      this.publish({ kind: "server", problem: "address" });
       return;
     }
-    await this.clearLocal(server, false);
+    // A session can exist only while it would be restored or a login is in flight.
+    const revoke = this.cleanup
+      ? this.cleanup.revoke
+      : this.preferences?.restore || this.request
+        ? this.preferences?.server
+        : undefined;
+    await this.clearLocal(server, revoke);
   }
 
   async logout(): Promise<void> {
     if (!this.preferences || this.state.kind === "clearing") return;
-    await this.clearLocal(this.preferences.server, true);
+    await this.clearLocal(this.preferences.server, this.preferences.server);
   }
 
   retry(): Promise<void> {
@@ -217,7 +212,7 @@ export class MobileAuth {
     return this.preferences?.restore ? this.revalidate() : this.logout();
   }
 
-  private async clearLocal(server: string, revoke: boolean): Promise<void> {
+  private async clearLocal(server: string, revoke: string | undefined): Promise<void> {
     this.cleanup = { server, revoke };
     ++this.generation;
     this.request?.abort();
@@ -228,13 +223,13 @@ export class MobileAuth {
       this.platform.write({ server, restore: false });
       this.preferences = { server, restore: false };
       await pending;
-      const notificationMessage = (await this.platform.beforeClear?.()) ?? "";
-      let revoked = !revoke;
-      if (revoke) {
+      await this.platform.beforeClear();
+      let revoked = revoke === undefined;
+      if (revoke !== undefined) {
         const request = new AbortController();
         const timeout = setTimeout(() => request.abort(), 10_000);
         try {
-          const response = await this.platform.fetch(server + "/api/logout", {
+          const response = await this.platform.fetch(revoke + "/api/logout", {
             method: "POST",
             credentials: "include",
             signal: request.signal,
@@ -253,21 +248,10 @@ export class MobileAuth {
       this.publish({
         kind: "signed-out",
         server,
-        message: noticeText(
-          revoked
-            ? revoke
-              ? t("auth.signed_out")
-              : ""
-            : t("auth.signed_out_on_this_device_server_session"),
-          notificationMessage,
-        ),
+        notice: !revoked ? "revocation-unconfirmed" : revoke === server ? "signed-out" : null,
       });
     } catch {
-      this.publish({
-        kind: "unavailable",
-        server,
-        message: t("auth.could_not_clear_local_signin_settings_try"),
-      });
+      this.publish({ kind: "unavailable", server, problem: "cleanup" });
     }
   }
 }

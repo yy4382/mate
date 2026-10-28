@@ -555,17 +555,17 @@ interface Admin {
 
 移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.config.ts` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。当前覆盖 HTTPS 服务器选择、cookie 登录与恢复、频道和私信、讨论串、搜索、提及、消息任务和未读，以及完整管理、Agent 观察、个人资料与通知设置。分发、签名与真实 APNs 送达仍需 Apple 环境验证。
 
-移动端入口 `apps/mobile/index.ts` 在加载路由之前同步读取 `expo-localization` 的设备语言偏好。按顺序匹配中文或英文，所有 zh 变体使用简体中文，en 变体使用英文，无匹配时回退英文。`i18next/react-i18next` 的端内 JSON 资源随构建打包，插值与复数由库处理，日期、数字和列表由匹配 locale 的 Intl 格式化，Hermes 缺少的 `Intl.Locale`、`Intl.PluralRules` 和 `Intl.ListFormat` 由 FormatJS 按依赖顺序同步提供，复数与列表只打包中英文数据。iOS 配置声明英文和简体中文；系统改语言后重启 app，不增加前台监听、应用语言选择器或持久化语言覆盖。用户与 Agent 内容、协议值和服务器通知 payload 保持原文。
+移动端入口 `apps/mobile/index.ts` 在加载路由之前同步读取 `expo-localization` 的设备语言偏好。按顺序匹配中文或英文，所有 zh 变体使用简体中文，en 变体使用英文，无匹配时回退英文。`i18next` 的端内 JSON 资源随构建打包，界面直接调用模块级 `t`，插值与复数由库处理，日期、数字和列表由匹配 locale 的 Intl 格式化，Hermes 缺少的 `Intl.Locale`、`Intl.PluralRules` 和 `Intl.ListFormat` 由 FormatJS 按依赖顺序同步提供，复数与列表只打包中英文数据。iOS 配置声明英文和简体中文；系统改语言后重启 app，不增加前台监听、应用语言选择器或持久化语言覆盖。用户与 Agent 内容、协议值和服务器通知 payload 保持原文。
 
-移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。根层 `lifecycle.tsx` 统一持有认证启动和唯一的 AppState 监听，同时暂停后台聊天流；聊天 provider 只订阅身份，不另行启动认证或重验。聊天验证遮罩不参与首页重定向，重验后保留当前会话、草稿和 sheet；验证中隐藏并禁止访问旧界面。仅真正进入 background 后回到 active 才以 `GET /api/me` 验证 cookie，权限弹窗等仅 inactive → active 的变化不重验或打断通知登记；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
+移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。`lifecycle.ts` 的 `startMobileLifecycle` 启动认证，持有唯一的认证订阅和 AppState 监听：只有已登录且在前台时会话才可用，只有可用性变化才设置通知会话、暂停或恢复聊天流，身份变化才创建或关闭这次登录的 `MobileChat`；资料更新等同一会话的状态发布不重新检查通知或重连。根层 `Session` provider 只发布当前聊天实例。聊天验证遮罩不参与首页重定向，重验后保留当前会话、草稿和 sheet；验证中隐藏并禁止访问旧界面。仅真正进入 background 后回到 active 才以 `GET /api/me` 验证 cookie，权限弹窗等仅 inactive → active 的变化不重验或打断通知登记；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
 
-退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问并清理全部 app cookie，切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
+退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问；仍有可恢复的会话或在途登录时，先向旧服务器尝试 `POST /api/logout`，再清理全部 app cookie，撤销未确认时同样提示；没有会话时不联系旧服务器。切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
 
-`MobileNotifications` 在 `notifications.ts` 持有系统权限、已验证的服务器与账号、本机登记和未确认的取消登记。`notifications-native.ts` 用 SDK 58 的 `expo-notifications` 获取 APNs token、监听 token 更新、收取通知和点击响应。根层 `NotificationIntegration` 在设置页关闭时仍监听原生响应和 token，并同步认证状态；它不另行启动认证或监听前台。后台暂停由统一生命周期处理，后台的身份更新也不能恢复通知访问。首页与个人资料提供通知设置入口，设置页返回时保留个人资料草稿。只有权限允许、服务器 origin 和环境匹配、订阅请求成功才显示已登记。拒绝或撤回权限会关闭本机推送并尝试取消服务器订阅；网络和签名失败显示未完成；同一 token 登记重试沿用 binding，token 轮换生成新 binding。当前登记与待取消登记分别保存；token 轮换前先持久化旧登记的取消责任，再发新登记。取消失败不丢失旧 token，刷新、重启恢复和退出都会重试。每条待取消记录保留精确服务器、账号、token、环境与 binding，只能用同一服务器和账号的已验证身份发送，确认成功后才移除；重新成为当前登记的相同记录不会再被取消。旧的单条登记设置格式仍可读取，不改变 SQLite 表结构。
+`MobileNotifications` 在 `notifications.ts` 持有系统权限、已验证的服务器与账号、本机登记和未确认的取消登记。`notifications-native.ts` 用 SDK 58 的 `expo-notifications` 获取 APNs token、监听 token 更新、收取通知和点击响应。根层 `Session` 在设置页关闭时仍监听原生响应和 token；通知会话只由统一生命周期设置，后台的身份更新也不能恢复通知访问。首页与个人资料提供通知设置入口，设置页返回时保留个人资料草稿。只有权限允许、服务器 origin 和环境匹配、订阅请求成功才显示已登记。拒绝或撤回权限会关闭本机推送并尝试取消服务器订阅；网络和签名失败显示未完成；同一 token 登记重试沿用 binding，token 轮换生成新 binding。当前登记与待取消登记分别保存；token 轮换前先持久化旧登记的取消责任，再发新登记。取消失败不丢失旧 token，刷新、重启恢复和退出都会重试。每条待取消记录保留精确服务器、账号、token、环境与 binding，只能用同一服务器和账号的已验证身份发送，确认成功后才移除；重新成为当前登记的相同记录不会再被取消。
 
-`MobileAuth` 的可选 `beforeClear` 屏障在取消登记结束后才允许退出请求和 cookie 清理。退出、更换服务器、401 都使旧请求和点击响应失效，并调用系统取消注册、移除已展示通知。认证验证中或网络不可用时暂停通知展示和导航。冷启动点击等待身份验证；通知必须匹配精确 origin、账号和 binding，且未超过一天。导航只产生 `/conversation?id=<会话>&thread=<讨论串>&seq=<序号>` 的站内参数，忽略 payload 中的 URL。目标页面位于同一个根导航的已登录聊天组，分页定位旧序号并保持讨论串上下文。跨导航组或冷启动的会话页保留原生返回按钮，有历史时返回来源页，没有历史时进入聊天列表。
+`MobileAuth` 的 `beforeClear` 屏障在取消登记结束后才允许退出请求和 cookie 清理。认证和通知只发布状态事实，例如回到登录页的原因、待取消数量和本机清理结果，由界面翻译；登录页从通知快照提示取消或本机清理未确认。退出、更换服务器、401 都使旧请求和点击响应失效，并调用系统取消注册、移除已展示通知。认证验证中或网络不可用时暂停通知展示和导航。冷启动点击等待身份验证；通知必须匹配精确 origin、账号和 binding，且未超过一天。导航只产生 `/conversation?id=<会话>&thread=<讨论串>&seq=<序号>` 的站内参数，忽略 payload 中的 URL。目标页面位于同一个根导航的已登录聊天组，分页定位旧序号并保持讨论串上下文。跨导航组或冷启动的会话页保留原生返回按钮，有历史时返回来源页，没有历史时进入聊天列表。
 
-通知设置首屏只显示当前接收状态与对应动作，权限、服务器推送能力、本机登记和待取消登记移入「通知详情」。这些结构化事实由 `MobileNotifications` 在原有权限、能力、登记与清理流程中发布，界面不解析提示文字，也不另发诊断请求。保存过但尚未确认的登记显示「待确认」，只有订阅应答成功才显示「已完成」与「已开启」。未知条件保持「待检查」。
+通知设置首屏只显示当前接收状态与对应动作，权限、服务器推送能力、本机登记和待取消登记移入「通知详情」。`MobileNotifications` 在权限、能力、登记与清理流程中只发布这些结构化事实，不拼提示文字；界面按事实翻译，也不另发诊断请求。保存过但尚未确认的登记显示「待确认」，只有订阅应答成功才显示「已完成」与「已开启」。未知条件保持「待检查」。
 
 离线取消不保证服务器停止发送，也不能收回已由 APNs 接受的通知。此时保留 cleanup 记录，在同一账号再次验证时重试；本机立即禁止旧通知导航并尝试向系统取消注册。重新注册后，旧服务器仍可能送来通用提示，所以界面明确说明取消未确认。真实 APNs 投递需要 Apple 凭据和具备推送能力的签名；simctl 注入只验证原生接收和点击，不证明远程投递。
 
@@ -578,7 +578,7 @@ Web 外壳的登录与人类契约 `Role`、`HumanView`、`LoginInput` 和 `Logi
 `@mate/chat/contracts` 是不依赖 SQLite 或 Node 的公开契约入口。账号、会话、条目、未读、读取、发送、任务、实时数据和推送订阅形状只在这里定义；聊天 app 内部也从这里导入，不经各模块转发；后端继续消费同一份定义，原生端在网络边界解析它们。`@mate/clock` 同时提供原生入口，聊天重连和超时共用已有时钟接口。
 
 原生导航使用 Expo Router，消息虚拟列表使用 React Native `FlatList`，键盘避让使用 `KeyboardAvoidingView` 和导航栏实际高度。连接状态放在可滚动的消息列表中，不占用输入区上方的固定高度。Markdown 由 `react-native-enriched-markdown` 渲染为原生文本，支持选择、代码块、表格、链接与 Dynamic Type；关闭数学、视频和语法高亮附加模块，不增加编辑或附件上传协议。`/conversation` 接受正整数 `id`（会话 ID）、可选 `thread`（根消息 ID）和 `seq`（目标时间线内序号）。没有 `thread` 时定位频道或私信，存在时定位讨论串；通过现有历史分页加载目标并滚动到可见位置，定位开始就保留回到最新消息按钮的空间，等目标条目和列表视口完成实际测量后再确认定位，长消息从开头显示，定位完成后保留当前可见位置以接收实时任务变化。加载或定位失败可重试，不可用目标明确提示，离开页面或切换身份取消未完成定位。搜索结果缺少会话位置、历史消息缺少完整回复数、任务没有独立列表接口的限制与网页相同。
-登录后进入聊天 Tab。管理员使用聊天、Agent、设置三个原生 Tab，普通人类使用聊天和设置。各 Tab 有独立 Stack。Agent Tab 的实际路径是 `/agents`；旧 `/admin/agents`、创建和详情 URL 在有角色保护的管理 Stack 中保留兼容入口，管理员重定向到 Agent Tab，普通人类显示权限说明。原生外部 `/agents/**` 链接先通过 `+native-intent` 进入既有 `/admin/agents?target=` 角色保护入口，管理员再转到 `target` 指定的 `/agents` 路径，普通人类停在权限说明。这样隐藏 Agent Tab 时不会由 NativeTabs 静默回退聊天；不增加旧管理子路由树。三个既有兼容入口共用 `AgentRedirect`，跨 Tab 转发前先在设置 Stack 内退回已有 `/account`，下一原生帧再切换到 Agent，让原生设置栈先提交移除兼容入口的变化，避免再次选择设置时停在空白入口或重复转发。`/chat`、`/conversation`、`/profile` 等旧 URL 不变。设置提供个人资料、通知、账号与连接和管理员的管理 Mate 入口。Agent 详情的「发消息」使用同一登录下的聊天操作打开该 Agent 聊天账号的私信，再进入 `/conversation?id=`，不直接发送消息。来自 Agent 总览时额外传 `sourceAgent=<Agent UUID>`，会话的原生返回按钮先移除这次聊天详情，再用 `navigate` 回到 `/agents/[id]`，禁用跨 Tab 的侧滑返回；普通聊天与讨论串保留默认返回行为。新 Agent 子路由统一放在 `/agents/**`，不扩充旧管理路径的兼容路由树。根 Stack 上方保留登录所属的聊天 provider。
+登录后进入聊天 Tab。管理员使用聊天、Agent、设置三个原生 Tab，普通人类使用聊天和设置。各 Tab 有独立 Stack。Agent Tab 的路径是 `/agents`，Agent 子路由都在 `/agents/**`。设置提供个人资料、通知、账号与连接和管理员的管理 Mate 入口。Agent 详情的「发消息」使用同一登录下的聊天操作打开该 Agent 聊天账号的私信，再进入 `/conversation?id=`，不直接发送消息。来自 Agent 总览时额外传 `sourceAgent=<Agent UUID>`，会话的原生返回按钮先移除这次聊天详情，再用 `navigate` 回到 `/agents/[id]`，禁用跨 Tab 的侧滑返回；普通聊天与讨论串保留默认返回行为。根 Stack 上方保留登录所属的聊天 provider。
 
 原生管理路由在 `apps/mobile/src/app/(signed-in)` 的 Agent 与设置 Tab 内，功能在 `src/admin` 与 `src/profile`。管理员可创建 Agent，修改模型、思考级别和说明文字，暂停、恢复和删除 Agent，管理提供商 key 与接口地址，查看模型目录，生成和复制 Node 配对命令、改名、授权与收回访问，以及添加人类、修改角色、重置密码和永久停用。Agent 显示名与 Handle 没有独立修改端点，主 Node 创建后不变；人类停用后不提供重新启用。普通人类能修改自己的显示名、Handle 和密码，不能进入管理功能。服务端仍负责每次请求的角色检查。创建 Agent 的草稿是 `ManagementScope` 里这次登录的状态，与 `ManagementClient` 一同建立和丢弃：普通返回、关闭管理或同一身份前台重验保留输入和发送请求前生成的 Agent ID，继续创建时原样提交这个 ID；如果上一次请求已在服务器完成，则从 Agent 列表确认同一个 ID 后完成恢复；创建成功后保留可查看结果的完成回执，开始下一次创建时重置。这次登录结束或服务器、账号、角色改变时，草稿随旧客户端一起卸载，新客户端从空草稿开始，所以迟到的旧登录回调写不到新草稿。进行中的创建状态也随草稿保留。草稿仅在进程内存中，不承诺跨进程恢复。
 
@@ -596,7 +596,7 @@ Agent 总览只显示身份、状态和运行环境，提供一个私信入口�
 
 当前不做折叠屏 iPhone Duo 的专用适配，不增加折叠状态处理或专用布局。
 
-移动端依赖和 TypeScript 配置由 `@mate/mobile` 自己持有。它使用 Expo 的 TypeScript 基础配置和默认 Metro workspace 支持，保留 pnpm 的隔离安装；不继承服务端的 NodeNext 配置，也不改网页的 React 版本。根 `typecheck` 包含移动端；iOS bundle 检查走独立的 `bundle:check` 命令。移动端没有 `build` 脚本，因此根递归 `build`、控制面构建和 node 发布包都不要求 Xcode 或签名凭据。运行命令见 [开发机运行](DEPLOYMENT.md#6-在开发机上运行)。
+移动端依赖和 TypeScript 配置由 `@mate/mobile` 自己持有。它使用 Expo 的 TypeScript 基础配置和默认 Metro workspace 支持，保留 pnpm 的隔离安装；iOS bundle 不包含 `react-dom`，声明它只为让 Expo 的可选 peer 与移动端 React 版本一致，否则 pnpm 会接上网页的版本；不继承服务端的 NodeNext 配置，也不改网页的 React 版本。根 `typecheck` 包含移动端；iOS bundle 检查走独立的 `bundle:check` 命令。移动端没有 `build` 脚本，因此根递归 `build`、控制面构建和 node 发布包都不要求 Xcode 或签名凭据。运行命令见 [开发机运行](DEPLOYMENT.md#6-在开发机上运行)。
 
 ## 5. 关键流程
 

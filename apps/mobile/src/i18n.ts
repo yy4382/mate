@@ -6,7 +6,6 @@ import "@formatjs/intl-listformat/polyfill.js";
 import "@formatjs/intl-listformat/locale-data/en.js";
 import "@formatjs/intl-listformat/locale-data/zh.js";
 import { createInstance } from "i18next";
-import { initReactI18next } from "react-i18next";
 import en from "./locales/en.json";
 import zh from "./locales/zh.json";
 
@@ -17,8 +16,8 @@ declare module "i18next" {
   }
 }
 
-export const i18n = createInstance();
-void i18n.use(initReactI18next).init({
+const i18n = createInstance();
+void i18n.init({
   resources: { en: { translation: en }, zh: { translation: zh satisfies typeof en } },
   lng: "en",
   fallbackLng: "en",
@@ -26,7 +25,6 @@ void i18n.use(initReactI18next).init({
   load: "languageOnly",
   initAsync: false,
   interpolation: { escapeValue: false },
-  react: { useSuspense: false },
 });
 export const t = i18n.t;
 let locale = "en-US";
@@ -77,6 +75,3 @@ export const thinkingText = (value: string): string => {
   const key = thinkingKeys[value];
   return key ? t(key) : value;
 };
-
-export const noticeText = (...messages: readonly string[]): string =>
-  messages.filter(Boolean).join("\n\n");
