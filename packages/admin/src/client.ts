@@ -6,7 +6,7 @@ import type { AgentEvent, SnapshotEvent } from "@mate/runtime";
 
 export type Entry = SnapshotEvent["entries"][number];
 type Block = Extract<NonNullable<Entry["model"]>[number], { role: "assistant" }>["content"][number];
-export type ObservedTool = {
+type ObservedTool = {
   name: string;
   args: unknown;
   output: string;

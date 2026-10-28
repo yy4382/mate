@@ -40,8 +40,6 @@ export function useDraft(ref: TimelineRef): Draft {
 export const setDraftText = (ref: TimelineRef, text: string) =>
   update(timelineKey(ref), (draft) => ({ ...draft, text }));
 
-/** The accounts a message's `@handle` words name: the only way a message mentions someone. */
-
 async function deliver(ref: TimelineRef): Promise<void> {
   const key = timelineKey(ref);
   const pending = drafts.get(key)?.pending;

@@ -16,7 +16,6 @@ export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const INITIAL_HUMAN = "human:initial";
 /** The handle of the first human when `initialHandle` is not given. */
 export const DEFAULT_INITIAL_HANDLE = "admin";
-/** The shortest password a human may have, in bytes. */
 
 /**
  * Password checks running at once. Each scrypt check takes tens of milliseconds and 32 MiB, so no more than this many
