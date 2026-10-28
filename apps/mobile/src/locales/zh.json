@@ -338,7 +338,10 @@
     "not_performed_yet": "尚未执行",
     "model_providers_nodes_and_humans": "模型提供商、Node、人类",
     "pending_cancellations_one": "{{count, number}} 项待确认",
-    "pending_cancellations_other": "{{count, number}} 项待确认"
+    "pending_cancellations_other": "{{count, number}} 项待确认",
+    "closed": "已关闭",
+    "completed": "已完成",
+    "none": "无"
   },
   "management": {
     "submitting": "正在提交",

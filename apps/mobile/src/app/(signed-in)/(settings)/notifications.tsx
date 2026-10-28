@@ -51,7 +51,7 @@ const summaries = {
 const permissionLabel = {
   unknown: t("settings.not_checked"),
   undetermined: t("settings.not_allowed_yet"),
-  denied: t("management.closed"),
+  denied: t("settings.closed"),
   allowed: t("settings.allowed"),
   quiet: t("settings.deliver_quietly"),
 };
@@ -64,7 +64,7 @@ const serverLabel = {
 const registrationLabel = {
   none: t("settings.not_registered"),
   unconfirmed: t("settings.unconfirmed"),
-  registered: t("chat.completed"),
+  registered: t("settings.completed"),
 };
 
 export default function NotificationSettings() {
@@ -146,7 +146,7 @@ export default function NotificationSettings() {
             value={
               state.pendingCancellations
                 ? t("settings.pending_cancellations", { count: state.pendingCancellations })
-                : t("observation.none")
+                : t("settings.none")
             }
           />
           <Row
@@ -155,7 +155,7 @@ export default function NotificationSettings() {
               state.localCleanup === "unknown"
                 ? t("settings.not_performed_yet")
                 : state.localCleanup === "complete"
-                  ? t("chat.completed")
+                  ? t("settings.completed")
                   : t("settings.unconfirmed")
             }
           />

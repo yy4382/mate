@@ -338,7 +338,10 @@
     "not_performed_yet": "Not performed yet",
     "model_providers_nodes_and_humans": "Model providers, Nodes and humans",
     "pending_cancellations_one": "{{count, number}} awaiting confirmation",
-    "pending_cancellations_other": "{{count, number}} awaiting confirmation"
+    "pending_cancellations_other": "{{count, number}} awaiting confirmation",
+    "closed": "Closed",
+    "completed": "Completed",
+    "none": "None"
   },
   "management": {
     "submitting": "Submitting",
