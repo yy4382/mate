@@ -1,4 +1,4 @@
-import { t } from "../i18n";
+import { t, listText } from "../i18n";
 import type { AgentView, CatalogModel, NodeStatusResult } from "@mate/admin";
 import { router, Stack, useIsFocused } from "expo-router";
 import { useEffect, useRef } from "react";
@@ -90,7 +90,11 @@ export function AgentList() {
                     : `@${agent.handle ?? t("management.unknown")} · ${agent.nodeName}`
                 }
                 value={stateLabel[agent.state]}
-                accessibilityLabel={`${agent.displayName ?? agent.agentId}，${stateLabel[agent.state]}${agent.handle ? `，@${agent.handle}` : ""}`}
+                accessibilityLabel={listText([
+                  agent.displayName ?? agent.agentId,
+                  stateLabel[agent.state],
+                  ...(agent.handle ? [`@${agent.handle}`] : []),
+                ])}
                 onPress={() =>
                   router.push({ pathname: "/agents/[id]", params: { id: agent.agentId } })
                 }

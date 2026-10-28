@@ -1,4 +1,4 @@
-import { t, numberText } from "./i18n";
+import { t, numberText, listText } from "./i18n";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import type { ComponentProps } from "react";
 import { Avatar, Caption } from "./ui";
@@ -47,12 +47,14 @@ export function ConversationRow({
     <Pressable
       testID={testID}
       accessibilityRole="button"
-      accessibilityLabel={t("chat.conversation_accessibility", {
-        title,
-        subtitle,
-        mention: mentioned ? t("chat.mentioned_you") : "",
-        unread: count ? t("chat.unread_count", { count }) : "",
-      })}
+      accessibilityLabel={listText(
+        [
+          title,
+          subtitle,
+          mentioned ? t("chat.mentioned_you") : "",
+          count ? t("chat.unread_count", { count }) : "",
+        ].filter(Boolean),
+      )}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 68,
