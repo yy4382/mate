@@ -2,7 +2,6 @@ import apn from "@parse/node-apn";
 import type { PushNotice, PushOutcome } from "@mate/chat";
 import {
   ApnsEnvironment,
-  PushOrigin,
   type ApnsSubscription,
   type NativePushNotice,
 } from "@mate/chat/contracts";
@@ -14,7 +13,6 @@ export const ApnsConfig = z.object({
   teamId: z.string().regex(/^[A-Z0-9]{10}$/),
   topic: z.string().min(1).max(255),
   environment: ApnsEnvironment,
-  server: PushOrigin,
 });
 export type ApnsConfig = z.output<typeof ApnsConfig>;
 
@@ -58,8 +56,6 @@ export function openApns(options: ApnsOptions, now: () => number) {
     notification.payload = {
       body: {
         version: 1,
-        server: config.server,
-        accountId: notice.accountId,
         binding: subscription.binding,
         conversationId: notice.conversationId,
         threadId: "thread" in notice.timeline ? notice.timeline.thread : null,

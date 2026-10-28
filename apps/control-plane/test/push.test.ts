@@ -11,7 +11,6 @@ import { expect, it, onTestFinished } from "vitest";
 import { startControlPlane } from "../src/control-plane.ts";
 
 const password = "disposable notification fixture password";
-const server = "https://mate.example.com";
 const native = {
   transport: "apns",
   token: "ab".repeat(32),
@@ -33,7 +32,6 @@ it("refuses unusable APNs credentials before serving and can restart with native
         teamId: "TESTTEAM01",
         topic: "dev.yyang.mate",
         environment: "sandbox",
-        server,
       },
     }),
   ).rejects.toThrow();
@@ -127,7 +125,6 @@ async function fixture(configured = true) {
             teamId: "TESTTEAM01",
             topic: "dev.yyang.mate",
             environment: "sandbox",
-            server,
             connection: { address: "localhost", port: address.port, ca: [cert] },
           },
         }
@@ -223,8 +220,6 @@ it("validates native transport data and sends a private, scoped alert through th
     aps: { alert: { title: "Mate", "loc-key": "MATE_PUSH_ALERT" } },
     body: {
       version: 1,
-      server,
-      accountId: f.ownerId,
       binding: native.binding,
       conversationId: f.dm.conversationId,
       threadId: null,
@@ -249,7 +244,7 @@ it("only lets a human unsubscribe their own native binding and drops old queued 
     body: "new owner",
   });
   await expect.poll(() => f.requests.length).toBe(2);
-  expect(JSON.parse(f.requests[1]!.body).body.accountId).toBe(f.memberId);
+  expect(JSON.parse(f.requests[1]!.body).body.seq, "the new owner's own message").toBe(2);
 });
 
 it.each([
