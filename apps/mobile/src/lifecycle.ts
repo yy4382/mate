@@ -5,8 +5,9 @@ import type { MobileNotifications } from "./notifications";
 type Chat = { pause(): void; resume(): Promise<void>; close(): void };
 
 /**
- * The only auth subscription and app-state listener: a signed-in session is available only in the
- * foreground, and only availability changes pause or resume notifications and the chat stream.
+ * The one app-state listener, and the auth subscription that drives notifications and chat: a
+ * signed-in session is available only in the foreground, and only availability changes pause or
+ * resume notifications and the chat stream. Management keeps its own login scope.
  */
 export function startMobileLifecycle<C extends Chat>({
   auth,
