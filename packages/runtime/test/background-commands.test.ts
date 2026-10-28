@@ -50,6 +50,9 @@ describe("background commands", () => {
     const build = await agent.workspace.nextCall();
     const ls = await agent.workspace.nextCall();
     expect(ls.request.arguments["command"], "a second command ran beside the first").toBe("ls");
+    expect(build.request.conversationId, "both share the conversation's directory").toBe(
+      ls.request.conversationId,
+    );
     ls.resolve(text("Makefile"));
 
     expect(await input.settled(), "the run ended while the command still runs").toBe("done");

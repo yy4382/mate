@@ -24,6 +24,7 @@ export type Background = "running" | "finished";
 
 export type CommandProcess = {
   child: ChildProcessByStdio<null, Readable, Readable>;
+  metadata?: Readable;
   kill(): { ok: true } | { ok: false; reason: string };
   background(): Background;
 };
@@ -32,6 +33,11 @@ export type ShellRequest = {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  launch?: {
+    executable: string;
+    args: string[];
+    metadata: { frames: number; maxBytes: number };
+  };
 };
 
 export type ServiceState = {

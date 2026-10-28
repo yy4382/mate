@@ -51,7 +51,12 @@ export function backgroundCommands(
         const signal = AbortSignal.any([closing, runtime.signal]);
         const { node: target, ...args } = command.input;
         const result = await node.run(
-          { tool: "bash", arguments: args, ...(target === undefined ? {} : { node: target }) },
+          {
+            tool: "bash",
+            arguments: args,
+            conversationId: runtime.conversationId,
+            ...(target === undefined ? {} : { node: target }),
+          },
           () => undefined,
           signal,
         );

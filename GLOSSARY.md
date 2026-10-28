@@ -302,6 +302,12 @@ Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准
 **工作区**（workspace）
 Agent 在某个 node 上的工作目录，路径为该 node 的 `<工作区根>/<agentId>`。每个已授权 node 上各有独立工作区，文件不跨 node 同步。主工作区在创建 Agent 时初始化目录与 MEMORY.md，执行时缺少目录就报错；访问工作区在授权或首次在线调用时准备，不初始化 MEMORY.md，已有文件保持原样。
 
+**启动快照**（startup snapshot）
+Linux/macOS node 每个进程捕获一次的账号 Bash/zsh 交互启动结果（选项、变量、函数、别名），存在数据目录，每条命令先 `source` 它。见 [ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)。
+
+**命令目录**（command directory）
+node 在内存里按 Agent 和对话记住的目录：该对话下一条命令从这里开始，前台命令结束时更新，后台命令不更新。初始为工作区，node 重启清空。文件工具不受它影响。
+
 **命令进程组**（command process group）
 node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Windows 活 shell 的进程树，追踪与停止的范围见 [ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)。
 

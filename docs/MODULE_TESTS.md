@@ -300,8 +300,11 @@
 
 ### 8.1 命令
 
-- 命令交给所在平台的 shell：Linux/macOS 为 `/bin/sh -c`，Windows 为 PowerShell 5.1。`home` 调用的工作目录和 HOME 是该 Agent 的工作目录；Windows 也验证 `$HOME`、原生程序的退出码和后续成功命令不沿用旧失败码。
-- `visit` 准备 Agent 的工作区，不初始化 MEMORY.md，`home` 使用已有主工作区；两者用同一目录作为真实工作目录、PWD 和 HOME。Windows 在 node 没有 HOME 时也设置 PowerShell 的 `$HOME`。
+- 命令交给所在平台的 shell：Linux/macOS 为账号配置的 Bash/zsh（不看可变的 SHELL），Windows 为 PowerShell 5.1。首次命令在该 Agent 的工作目录；HOME 在 Linux/macOS 是账号主目录，在 Windows 是工作目录。Windows 也验证 `$HOME`、原生程序的退出码和后续成功命令不沿用旧失败码。
+- `visit` 准备 Agent 的工作区，不初始化 MEMORY.md，`home` 使用已有主工作区；两者共用上面的初始目录和 HOME 规则。Windows 在 node 没有 HOME 时也设置 PowerShell 的 `$HOME`。
+- 启动文件设置的变量、数组、只读值、导出、别名、函数（含 zsh 的 fpath 自动加载和模块）和选项在每条命令里可用；终端和启动文件相关的选项不恢复。启动文件的输出不混进命令输出，每个 node 进程只执行一次，之后的修改和命令里的改动都不影响快照；BASH_ENV/ENV 不会被执行。超过 4 MiB 的快照失败且不执行命令；失败保留到 node 重启。
+- 停止等待捕获的调用不影响其他调用，也不让捕获失败；之后的调用照常使用快照。
+- 前台命令的 cd 对同一对话的下一条命令生效，非零退出也算；路径里的空白和换行保留，输出重定向和占着描述符的后台进程不妨碍记录。exit、exec、信号让目录保持不变，结果不变。同时进行的前台命令中最后结束的决定目录。后台命令从记住的目录开始但不改它；不同对话、不同 Agent 互不影响；node 重连保留，重启从工作区开始。记住的目录被删时从工作区开始并说明；缺少工作区时仍要求重新准备。
 - POSIX 上 Agent 自己写的 `sudo` 原样执行，成败由宿主决定；node 从不自己加提权命令。
 - 三个平台都验证正常退出与 shell 退出码、超时、停止、没能启动（例如命令含 NUL）。POSIX 另外验证被信号终止。
 - 输出超过上限时截断，并在结果里标明。

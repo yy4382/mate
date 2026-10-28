@@ -21,7 +21,7 @@ export function gatewayWorkspaces(
           return access === undefined ? [] : [{ node, access }];
         });
       return {
-        async run({ node: name, tool, arguments: args }, output, signal) {
+        async run({ node: name, tool, arguments: args, conversationId }, output, signal) {
           const accessible = accessibleNodes();
           const target = accessible.find(({ node }) =>
             name === undefined ? node.nodeId === homeNodeId : node.name === name,
@@ -47,7 +47,7 @@ export function gatewayWorkspaces(
           return gateway.runTool(
             node.nodeId,
             agentId,
-            { tool, arguments: args, access },
+            { tool, arguments: args, access, conversationId },
             output,
             signal,
           );

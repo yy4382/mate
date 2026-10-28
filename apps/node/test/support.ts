@@ -41,11 +41,13 @@ export type NodeProcess = {
     args: Record<string, JsonValue>,
     onOutput?: (chunk: string) => void,
     access?: NodeAccess,
+    conversationId?: number,
   ): Promise<ToolResult>;
 };
 
 export type StartOptions = {
   gateway?: FakeGateway;
+  home?: string;
   env?: NodeJS.ProcessEnv;
   pairingToken?: string;
   /** Wraps the node's command line, for a test that must start it inside something else. */
@@ -58,7 +60,7 @@ export async function startNodeProcess(options: StartOptions = {}): Promise<Node
     await gateway.start();
     onTestFinished(() => gateway.close());
   }
-  const home = realpathSync(mkdtempSync(join(tmpdir(), "mate-node-")));
+  const home = options.home ?? realpathSync(mkdtempSync(join(tmpdir(), "mate-node-")));
   onTestFinished(() => rmSync(home, { recursive: true, force: true }));
   const workspacesRoot = join(home, "agents");
   const configDirectory = nodeConfigDirectory(home);
@@ -108,8 +110,8 @@ export async function startNodeProcess(options: StartOptions = {}): Promise<Node
       if (prepared.isError) throw new Error(prepared.content[0]?.text);
       return { agentId, workspace: join(workspacesRoot, agentId) };
     },
-    run: (agentId, tool, args, onOutput, access) =>
-      node.gateway.runTool(randomUUID(), agentId, tool, args, onOutput, access),
+    run: (agentId, tool, args, onOutput, access, conversationId) =>
+      node.gateway.runTool(randomUUID(), agentId, tool, args, onOutput, access, conversationId),
   };
   return node;
 }

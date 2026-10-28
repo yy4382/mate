@@ -54,7 +54,7 @@ export async function startNode(options: NodeOptions, signal: AbortSignal): Prom
   };
   options.onLink?.(false);
 
-  const executor = new Executor(options.workspacesRoot, clock);
+  const executor = new Executor(options.workspacesRoot, options.dataDirectory, clock);
   try {
     let retryMs = INITIAL_RETRY_MS;
     while (!signal.aborted) {

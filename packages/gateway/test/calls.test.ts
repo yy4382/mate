@@ -6,7 +6,7 @@ import { deferred, eventually, never, startGateway, text, toolResult, within } f
 
 describe("node gateway tool calls (MODULE_TESTS 7)", () => {
   it.each(["home", "visit"] as const)(
-    "sends %s access unchanged over the WebSocket",
+    "sends %s access and the calling conversation unchanged over the WebSocket",
     async (access) => {
       const under = await startGateway();
       const arrived: GatewayRunTool[] = [];
@@ -17,7 +17,12 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
           return { outputs: [], result: toolResult("done") };
         },
       });
-      const request = { access, tool: "bash" as const, arguments: { command: "echo hello" } };
+      const request = {
+        access,
+        conversationId: 1,
+        tool: "bash" as const,
+        arguments: { command: "echo hello" },
+      };
       expect(await under.gateway.runTool(node.nodeId, "agent-1", request, () => {}, never)).toEqual(
         toolResult("done"),
       );

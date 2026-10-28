@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { userInfo } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
   connectedNode,
@@ -25,7 +26,7 @@ import {
 } from "./support.ts";
 
 describe("node commands (MODULE_TESTS 8.1)", () => {
-  it("uses the system shell with the workspace as working directory and HOME", async () => {
+  it("uses the account shell with the workspace as initial directory and platform HOME", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     const result = await node.run(agentId, "bash", {
@@ -35,11 +36,11 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
     });
     expect(result.isError, textOf(result)).toBe(false);
     const [shell, cwd, home] = textOf(result).split(/\r?\n/);
-    expect(shell).toBe(windows ? "5" : "/bin/sh");
+    expect(shell).toBe(windows ? "5" : userInfo().shell);
     expect(realpathSync.native(cwd!), "the shell is in the workspace directory").toBe(
       realpathSync.native(workspace),
     );
-    expect(home, "HOME keeps the configured workspace path").toBe(workspace);
+    expect(home).toBe(windows ? workspace : node.home);
   });
 
   it.skipIf(windows)(

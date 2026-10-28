@@ -99,11 +99,13 @@ describe("workspace targets", () => {
 
   it("offers node_list to work assistants", async () => {
     const agent = await testAgent();
+    agent.workspace.answerAll(() => text("done"));
     const primaryReady = Promise.withResolvers<void>();
     const finished = Promise.withResolvers<void>();
     agent.provider
       .step("primary spawns the reader", (request) => {
         request.call([
+          { name: "bash", arguments: { command: "pwd" } },
           {
             name: "assistant",
             arguments: { action: "spawn", name: "reader", message: "check available nodes" },
@@ -123,14 +125,18 @@ describe("workspace targets", () => {
       .step("assistant can list nodes", async (request) => {
         await primaryReady.promise;
         expect(request.toolNames()).toContain("node_list");
-        request.text("I can list the available nodes");
-      });
+        request.call([{ name: "bash", arguments: { command: "pwd" } }]);
+      })
+      .step("assistant answers", (request) => request.text("I can list the available nodes"));
     const { runtime } = await agent.open();
 
     await runtime.submit("delegate the check", { requestId: "m1" });
     await finished.promise;
     await runtime.idle();
 
+    const [primary, assistant] = agent.workspace.calls.map((call) => call.conversationId);
+    expect(primary, "each command names its conversation").toEqual(expect.any(Number));
+    expect(assistant, "the assistant's commands keep their own directory").not.toBe(primary);
     agent.provider.assertComplete();
   });
 });

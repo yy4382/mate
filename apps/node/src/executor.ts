@@ -12,15 +12,18 @@ import {
 import { browseWorkspace } from "./browse.ts";
 import { Commands } from "./commands.ts";
 import { runFileTool } from "./files.ts";
+import { Shells } from "./shells.ts";
 
 /** Executes tools and retains command handles for stopping and shutdown. */
 export class Executor {
   readonly #root: string;
   readonly #commands: Commands;
+  readonly #shells: Shells;
 
-  constructor(workspacesRoot: string, clock: Clock) {
+  constructor(workspacesRoot: string, dataDirectory: string, clock: Clock) {
     this.#root = workspacesRoot;
     this.#commands = new Commands(clock);
+    this.#shells = new Shells(this.#commands, dataDirectory);
   }
 
   /** Run one tool call to its end. `signal` stops it: the Agent was stopped or nobody waits for the result any more. */
@@ -41,8 +44,18 @@ export class Executor {
     if (call.tool !== "bash") return runFileTool(call.tool, call.arguments, directory, signal);
     const args = parseBashArguments(call.arguments);
     if (!args.ok) return failure(args.error);
+    if (process.platform !== "win32")
+      return this.#shells.run(
+        {
+          session: `${call.agentId}/${call.conversationId ?? ""}`,
+          workspace: directory,
+          arguments: args.arguments,
+        },
+        onOutput,
+        signal,
+      );
     const env = { ...process.env, PWD: directory, HOME: directory };
-    return this.#commands.run(
+    const outcome = await this.#commands.run(
       {
         command: args.arguments.command,
         directory,
@@ -52,6 +65,7 @@ export class Executor {
       onOutput,
       signal,
     );
+    return outcome.result;
   }
 
   /** Read a path in the Agent's workspace for an admin, changing nothing. */

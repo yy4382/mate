@@ -102,7 +102,13 @@ const { $schema: _, ...bashParameters } = z.toJSONSchema(BashArgumentsSchema, { 
 export const bashTool = {
   name: "bash",
   description:
-    "Run a command with the node's system shell (/bin/sh -c on Linux and macOS, PowerShell on Windows) in your workspace, which is both the working directory and HOME. Returns " +
+    "Run a command in a fresh process. On Linux and macOS the shell is the node account's Bash or zsh, with the " +
+    "aliases, functions, variables and options its interactive startup files set, read once per node start; HOME is " +
+    "the account's home. A command starts where this conversation's last foreground command on that node ended, at " +
+    "first your workspace, and the result names the new directory when a foreground command changes it. Background " +
+    "commands never change it, and other shell changes such as exports last only for the call. File-tool paths stay " +
+    "rooted in the workspace. On Windows, PowerShell 5.1 runs without profiles in your workspace, which is also HOME, " +
+    "every time. Returns " +
     `the combined stdout and stderr; only the last ${BASH_KEPT_OUTPUT_BYTES / 1024}KB are kept, and the result says ` +
     "how much was dropped before them. A nonzero exit, a kill by signal, and a timeout are errors. When the command " +
     "returns while processes it started in the background still run, the result says so; if they still hold the " +
@@ -309,6 +315,8 @@ export const GatewayRunToolSchema = z.object({
   requestId,
   agentId,
   access: NodeAccessSchema,
+  /** The calling conversation, numbered within its Agent, which keys the node's remembered command directory. Absent from an older control plane. */
+  conversationId: z.number().int().nonnegative().optional(),
   tool: ToolNameSchema,
   arguments: z.record(z.string(), z.json()),
 });
