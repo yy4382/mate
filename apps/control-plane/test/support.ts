@@ -78,7 +78,7 @@ export function environment(options: { webDirectory?: string } = {}) {
         clock,
         push: async (subscription, notice) => {
           pushes.push({ subscription, notice });
-          return 201;
+          return "delivered" as const;
         },
         ...options,
         ...overrides,

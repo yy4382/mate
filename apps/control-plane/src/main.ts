@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
 import { z } from "zod";
+import { ApnsConfig } from "./apns.ts";
 import { startControlPlane } from "./control-plane.ts";
 
 const Environment = z.object({
@@ -10,6 +11,11 @@ const Environment = z.object({
   MATE_INITIAL_PASSWORD_FILE: z.string().min(1).optional(),
   MATE_INITIAL_HANDLE: z.string().min(1).optional(),
   MATE_WEB_DIRECTORY: z.string().min(1).optional(),
+  MATE_APNS_KEY_FILE: z.string().min(1).optional(),
+  MATE_APNS_KEY_ID: z.string().min(1).optional(),
+  MATE_APNS_TEAM_ID: z.string().min(1).optional(),
+  MATE_APNS_TOPIC: z.string().min(1).optional(),
+  MATE_APNS_ENVIRONMENT: z.enum(["sandbox", "production"]).optional(),
   MATE_VAPID_SUBJECT: z
     .string()
     .regex(/^(mailto|https):/, "a mailto: or https: URL")
@@ -23,6 +29,24 @@ if (!parsed.success) {
 }
 const env = parsed.data;
 
+const apnsInput = {
+  keyFile: env.MATE_APNS_KEY_FILE,
+  keyId: env.MATE_APNS_KEY_ID,
+  teamId: env.MATE_APNS_TEAM_ID,
+  topic: env.MATE_APNS_TOPIC,
+  environment: env.MATE_APNS_ENVIRONMENT,
+};
+const apns = Object.values(apnsInput).some((value) => value !== undefined)
+  ? ApnsConfig.safeParse(apnsInput)
+  : undefined;
+if (apns && !apns.success) {
+  // Do not include environment values, paths or key contents in a configuration error.
+  console.error(
+    "mate control plane: APNs requires MATE_APNS_KEY_FILE, MATE_APNS_KEY_ID, MATE_APNS_TEAM_ID, MATE_APNS_TOPIC and MATE_APNS_ENVIRONMENT",
+  );
+  process.exit(2);
+}
+
 const controlPlane = await startControlPlane({
   dataDirectory: resolve(env.MATE_DATA_DIRECTORY),
   port: env.MATE_PORT,
@@ -31,6 +55,7 @@ const controlPlane = await startControlPlane({
   initialHandle: env.MATE_INITIAL_HANDLE,
   webDirectory: env.MATE_WEB_DIRECTORY,
   vapidSubject: env.MATE_VAPID_SUBJECT,
+  apns: apns?.data,
 });
 console.log(`mate control plane listening on ${controlPlane.url}`);
 

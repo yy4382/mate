@@ -1,3 +1,4 @@
+import { passwordTooShort } from "@mate/control-plane/passwords";
 import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleUser, KeyRound, Plus, ShieldCheck, ShieldOff, UserX } from "lucide-react";
@@ -9,9 +10,8 @@ import {
   ROLE_LABEL,
   currentHumanKey,
   refusalText,
-  tooShort,
   useCurrentHuman,
-  type ListedHuman,
+  type HumanView,
   type Role,
 } from "../shell/humans.ts";
 import {
@@ -55,7 +55,7 @@ function AddHuman({ onClose }: { onClose: () => void }) {
           setHandleError(null);
           setPasswordError(null);
           setError(null);
-          if (tooShort(password))
+          if (passwordTooShort(password))
             return setPasswordError(t("Humans.theInitialPasswordMustBeAtLeast12"));
           try {
             await post("/api/humans", {
@@ -122,7 +122,7 @@ function AddHuman({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ResetPassword({ human, onClose }: { human: ListedHuman; onClose: () => void }) {
+function ResetPassword({ human, onClose }: { human: HumanView; onClose: () => void }) {
   const [password, setPassword] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -139,7 +139,7 @@ function ResetPassword({ human, onClose }: { human: ListedHuman; onClose: () => 
           event.preventDefault();
           setPasswordError(null);
           setError(null);
-          if (tooShort(password))
+          if (passwordTooShort(password))
             return setPasswordError(t("Humans.theNewPasswordMustBeAtLeast12"));
           try {
             await post(`/api/humans/${human.accountId}/password`, { password });
@@ -178,7 +178,7 @@ function HumanRow({
   isMe,
   onError,
 }: {
-  human: ListedHuman;
+  human: HumanView;
   isMe: boolean;
   onError: (error: string | null) => void;
 }) {

@@ -1,9 +1,9 @@
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
+import { ConversationKind, TimelineRef, UnreadSummary } from "./contracts.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
-import { ConversationKind } from "./conversations.ts";
 import { Id } from "./identifiers.ts";
-import { TimelineRef, timelineRefOf } from "./timelines.ts";
+import { timelineRefOf } from "./timelines.ts";
 
 /**
  * Notify, in the same transaction as the message, every active account other than its author that follows the
@@ -105,28 +105,6 @@ export function inboxEvents(
       inThread: row.root_entry_id !== null,
     }));
 }
-
-export const UnreadSummary = z.object({
-  /** Unread entries by other accounts across all listed timelines. */
-  total: z.number(),
-  /** Unread messages that mention the account. */
-  mentions: z.number(),
-  timelines: z.array(
-    z.object({
-      conversationId: Id,
-      timeline: TimelineRef,
-      kind: ConversationKind,
-      /** The channel's name; for a DM, the handle of the other member (both, comma-separated, for a non-member). */
-      label: z.string(),
-      inThread: z.boolean(),
-      unread: z.number(),
-      mentioned: z.boolean(),
-      /** Handle of the author of the newest unread entry. */
-      latestSender: z.string(),
-    }),
-  ),
-});
-export type UnreadSummary = z.output<typeof UnreadSummary>;
 
 const SummaryRow = z.object({
   conversation_id: Id,

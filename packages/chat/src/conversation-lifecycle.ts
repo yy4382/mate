@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { targetAccount, type Actor } from "./accounts.ts";
 import { ChatError } from "./chat-error.ts";
+import type { ConversationView } from "./contracts.ts";
 import {
   conversationById,
   conversationView,
@@ -8,7 +9,6 @@ import {
   readableConversation,
   requireWritable,
   type Conversation,
-  type ConversationView,
 } from "./conversations.ts";
 import type { ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";

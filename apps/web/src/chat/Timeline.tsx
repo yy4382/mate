@@ -1,3 +1,4 @@
+import { accountName, timelineKey } from "@mate/chat/client";
 import { t, locale } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -33,7 +34,6 @@ import {
   timeLabel,
 } from "../shell/ui.tsx";
 import {
-  accountName,
   avatarOf,
   loadOlder,
   useMe,
@@ -43,14 +43,13 @@ import {
   useUnread,
 } from "./data.ts";
 import { abandonPending, sendDraft, setDraftText, useDraft } from "./drafts.ts";
-import {
-  timelineKey,
-  type AccountView,
-  type Entry,
-  type MessageEntry,
-  type TaskEntry,
-  type TaskResult,
-  type TimelineRef,
+import type {
+  AccountView,
+  Entry,
+  MessageEntry,
+  TaskEntry,
+  TaskResult,
+  TimelineRef,
 } from "./types.ts";
 
 /** A task as the loaded entries last left it. */

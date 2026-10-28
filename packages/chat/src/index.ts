@@ -10,9 +10,22 @@ import {
   requireActor,
   requireHuman,
   EnsureAccountInput,
-  type AccountView,
 } from "./accounts.ts";
 import { ChatError, parseInput } from "./chat-error.ts";
+import {
+  ConversationView,
+  PushAddress,
+  PushSubscription,
+  ReadPage,
+  SendResult,
+  TaskResult,
+  TimelineRef,
+  type AccountView,
+  type Entry,
+  type LiveEvents,
+  type LiveSnapshot,
+  type UnreadSummary,
+} from "./contracts.ts";
 import {
   archiveChannel,
   ChannelInput,
@@ -22,10 +35,9 @@ import {
   leave,
   openDm,
 } from "./conversation-lifecycle.ts";
-import { listConversations, ConversationView } from "./conversations.ts";
+import { listConversations } from "./conversations.ts";
 import { ChatDatabase } from "./database.ts";
-import { type Entry } from "./entries.ts";
-import { readForward, DEFAULT_BUDGET, Budget, ReadPage } from "./forward-reading.ts";
+import { readForward, DEFAULT_BUDGET, Budget } from "./forward-reading.ts";
 import { Id, RequestId } from "./identifiers.ts";
 import {
   inboxEvents,
@@ -34,56 +46,41 @@ import {
   unreadSummary,
   InboxQuery,
   type InboxEvent,
-  type UnreadSummary,
 } from "./inbox.ts";
-import {
-  liveEvents,
-  liveMark,
-  liveSnapshot,
-  pruneLive,
-  type LiveEvents,
-  type LiveSnapshot,
-} from "./live.ts";
+import { liveEvents, liveMark, liveSnapshot, pruneLive } from "./live.ts";
 import {
   enqueuePushes,
   PushDelivery,
-  PushEndpoint,
-  PushSubscription,
   subscribePush,
   unsubscribePush,
   type PushSender,
 } from "./push.ts";
 import { idempotent } from "./receipts.ts";
-import {
-  HistoryQuery,
-  readHistory,
-  search,
-  SearchQuery,
-  send,
-  SendRequest,
-  SendResult,
-} from "./send.ts";
-import {
-  changeTask,
-  createTask,
-  CreateTaskRequest,
-  TaskChangeRequest,
-  TaskResult,
-} from "./tasks.ts";
-import { resolveTimeline, TimelineRef } from "./timelines.ts";
+import { HistoryQuery, readHistory, search, SearchQuery, send, SendRequest } from "./send.ts";
+import { changeTask, createTask, CreateTaskRequest, TaskChangeRequest } from "./tasks.ts";
+import { resolveTimeline } from "./timelines.ts";
 
 export { ChatError, type ChatErrorReason } from "./chat-error.ts";
 export { ChatStoreIncompatible } from "./database.ts";
-export { AccountKind, AccountNames, type AccountView } from "./accounts.ts";
-export type { ConversationView } from "./conversations.ts";
-export type { Entry, MessageEntry, TaskEntry } from "./entries.ts";
-export type { ReadPage } from "./forward-reading.ts";
-export type { InboxEvent, UnreadSummary } from "./inbox.ts";
-export type { LiveEvent, LiveEvents, LiveSnapshot } from "./live.ts";
-export type { PushNotice, PushSender, PushSubscription } from "./push.ts";
-export type { SendResult, SentMessage, HeldMessage } from "./send.ts";
-export type { Task, TaskResult } from "./tasks.ts";
-export type { TimelineRef } from "./timelines.ts";
+export { AccountNames } from "./accounts.ts";
+export {
+  AccountKind,
+  type AccountView,
+  type ConversationView,
+  type Entry,
+  type LiveEvent,
+  type LiveEvents,
+  type LiveSnapshot,
+  type PushSubscription,
+  type ReadPage,
+  type SendResult,
+  type Task,
+  type TaskResult,
+  type TimelineRef,
+  type UnreadSummary,
+} from "./contracts.ts";
+export type { InboxEvent } from "./inbox.ts";
+export type { PushNotice, PushOutcome, PushSender } from "./push.ts";
 
 /** Told which accounts just received inbox events. */
 export type InboxListener = (accounts: readonly number[]) => void;
@@ -460,9 +457,8 @@ export class ChatApp {
   // ── Push ────────────────────────────────────────────────────────────────────
 
   /**
-   * Push the human's DMs and mentions to this browser from now on. Idempotent on the endpoint rather than on a
-   * requestId: the endpoint is the subscription's natural key, so subscribing again refreshes its keys and, from
-   * another human, moves it to that human.
+   * Push this human's DMs and mentions to a browser or native app. The transport address is its natural key;
+   * subscribing from another human moves it to that human and drops the old human's pending deliveries.
    */
   subscribePush(account: number, subscription: z.input<typeof PushSubscription>): void {
     const human = requireHuman(this.#db, account);
@@ -471,13 +467,13 @@ export class ChatApp {
   }
 
   /**
-   * Stop pushing to the human's own subscription at the endpoint, dropping its queued pushes. An unknown endpoint, or
-   * one subscribed by another human, changes nothing and is answered the same way.
+   * Remove this human's own subscription and its queued pushes; a native one only under the binding it names. Another
+   * human's subscription, or a newer binding of the same token, is answered the same way and stays.
    */
-  unsubscribePush(account: number, request: z.input<typeof PushEndpoint>): void {
+  unsubscribePush(account: number, request: z.input<typeof PushAddress>): void {
     const human = requireHuman(this.#db, account);
-    const { endpoint } = parseInput(PushEndpoint, request);
-    this.#write(() => unsubscribePush(this.#db, human, endpoint));
+    const address = parseInput(PushAddress, request);
+    this.#write(() => unsubscribePush(this.#db, human, address));
   }
 
   close(): void {

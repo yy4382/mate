@@ -81,7 +81,8 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 | `packages/admin`（`@mate/admin`） | 管理模块：Agent 的生命周期和设置、提供商的 API key、模型目录、node 配对、观察 Agent；它打开 Agent Manager，并把 node 网关接成工作区宿主 |
 | `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |
 | `apps/control-plane`（`@mate/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
-| `apps/web`（`@mate/web`） | 前端 |
+| `apps/web`（`@mate/web`） | Vite 网页客户端 |
+| `apps/mobile`（`@mate/mobile`） | Expo 原生 iOS 客户端，包含认证、聊天、管理、Agent 观察、个人资料和原生通知 |
 | `apps/node`（`@mate/node`） | node 进程和 `mate node` CLI |
 | `tests/system`（`@mate/system-tests`） | 起真实控制面和 node 进程的系统场景（MODULE_TESTS 第 12 节） |
 
@@ -166,8 +167,8 @@ interface ChatApp {
   // 实时信号：每个提交后追加了实时事件的写操作触发一次，不带参数；触发时机和监听者出错的处理同 watchInbox
   watchLive(listener: () => void): () => void
   // 人类账号的推送订阅（规则 8），记在订阅它的账号名下。以 endpoint 幂等，再订阅一次更新密钥，由另一个人类账号再订阅则归到那个账号，并丢掉原账号在这个订阅上还在排队的推送；只接受 https 的 endpoint
-  subscribePush(account, { endpoint, keys: { p256dh, auth } })
-  unsubscribePush(account, { endpoint }) // 删除这个账号自己的订阅，连同它还在排队的推送；不认识的、或别的账号订阅的 endpoint 什么都不改，回答相同
+  subscribePush(account, { endpoint, keys: { p256dh, auth } } | { transport: "apns", token, environment, binding })
+  unsubscribePush(account, { endpoint } | { transport: "apns", token, environment, binding }) // 删除这个账号自己的订阅（原生订阅还要 binding 相同），连同它还在排队的推送；不认识的、别的账号订阅的或 binding 不同的什么都不改，回答相同
 }
 ```
 
@@ -197,15 +198,19 @@ interface ChatApp {
      - 第 2 条的新鲜度检查同样覆盖任务操作：自上次读取以来，别人新建或认领了任务，你的任务操作或发言就会被拦下，并返回这些变化。
    - 任务条目不产生收件事件，也就是不会单独触发通知，但会出现在读取结果里，并参与新鲜度检查。
    - 已经不是任务主人的人迟到的"让出"，不会撤销别人新的认领。只有当前主人能转交。
-8. **推送（Web Push）只给人类账号，每个订阅只推它自己账号的通知。**
+8. **推送只给人类账号，每个订阅只推它自己账号的通知。**
    - **哪些消息推送：** 对一个订阅，通知了它的账号（产生了该账号的收件事件）、并且是发给该账号的私信或 @ 了该账号的消息，而且该账号仍然有效（已停用的账号的订阅什么也收不到：入队时不排，已经排着的也在发送前再查一次，停用了就丢弃）。推送是通知的一部分，"谁会被通知"仍只有一个定义：没加入的频道里 @ 某个人类账号的顶层消息不通知它，也就不推送；自己的消息不通知自己，也不推送；发给 A 的私信只推 A 的订阅，不推 B 的。提及只来自 `send` 的 `mentions`（账号 ID），正文里的文字不算，所以邮箱地址里的 `@owner` 不是提及。
    - **推送队列：** 在消息提交的同一个事务里，为每个推送订阅追加一条待投递记录。被拦下的发送、回滚、按回执返回的重复调用都不追加。
-   - **投递：** 聊天 app 里的投递循环按到期时间逐条投递，经调用方给的 `PushSender` 发出（Web 外壳用 VAPID 密钥加密签名），用时钟等待。推送服务回 2xx 算送达；回 404 或 410 说明订阅已失效，删除这个订阅和它的待投递记录；连不上、408、429、5xx 是暂时失败，30 秒后重试，之后每次等待翻倍，一共失败 10 次就放弃；其他状态码不重试。重试时间存在队列里，重启后照原计划继续；关闭时正在发送的那条留在队列里，重启后以同一个 tag 重发。记录投递结果时存储出错，投递循环报告错误，30 秒后再试，不会就此停下。投递只改推送队列和订阅，永远不会影响已提交的消息。`PushSender` 必须在有限时间内返回（例如设请求超时），因为投递是一条一条进行的。
+   - **投递：** 聊天 app 里的投递循环按到期时间逐条投递，经调用方给的 `PushSender` 发出（Web 外壳用 VAPID 密钥加密签名），用时钟等待。`PushSender` 回答送达、失效、重试或拒绝。失效时删除这个订阅和它的待投递记录；连不上或重试是暂时失败，30 秒后重试，之后每次等待翻倍，一共失败 10 次就放弃；拒绝时丢弃这条推送、保留订阅。重试时间存在队列里，重启后照原计划继续；关闭时正在发送的那条留在队列里，重启后以同一个 tag 重发。记录投递结果时存储出错，投递循环报告错误，30 秒后再试，不会就此停下。投递只改推送队列和订阅，永远不会影响已提交的消息。`PushSender` 必须在有限时间内返回（例如设请求超时），因为投递是一条一条进行的。
    - **推送内容不含消息正文**，只带定位和显示所需的：消息 ID、会话、时间线、序号、会话类型、频道名、发送者的 handle、是否 @ 了这个订阅的账号、消息的发送时间，以及 `tag`。同一条消息的每次投递 tag 相同，重复投递只会替换通知，不会叠加。
 9. **实时事件流只给人类账号。** 人类账号能读所有会话，所以除已读位置外的事件不按账号过滤；已读位置属于前进的那个人类账号，只出现在它自己的事件里（受众）。读取时按受众过滤，游标不过滤：它仍是全局位置。
    - 事件只记下它的对象（条目、会话、账号、已读位置所在的时间线），内容在读取时从对象现查：条目不可变，所以带全文；其他种类带对象现在的样子，旧的或重复的事件套用到客户端上，结果都一样。
    - 游标是一个不透明字符串，由**纪元**和事件 ID 组成，可以直接用作 SSE 的事件 ID。纪元在新建 `chat.sqlite` 时随机生成，之后不变：数据重置（换了新文件）后纪元不同，旧游标随之作废。
    - 事件保留一天，过期的在之后的写操作里删掉。游标的纪元不对、早于保留的事件、超前于库里最新的事件（例如恢复了旧备份）或者根本不是游标，`liveEvents` 都回答 `resnapshot`，客户端重新拉快照。恢复旧备份只在库里的事件追上客户端的游标之前能被发现；追上之后同一个纪元下的事件 ID 已经指向别的变化，所以恢复备份后应当让浏览器重新加载。
+
+**原生传输。** 订阅和原生通知数据的 Zod 契约在 `@mate/chat/contracts`（4.8）。浏览器继续提交 endpoint 和 keys；iOS 提交 `transport: "apns"`、十六进制 token、`sandbox | production` 环境和本次登记的随机 `binding`。两者共用收件规则和每条消息的持久队列。订阅的自然键是浏览器 endpoint 或 APNs 环境与 token。换账号或换原生 binding 时删除旧订阅再新增，旧队列随之删除，迟到的投递回答不能影响新订阅。原生取消订阅同时匹配账号和 binding，旧的取消请求不能撤销新登记。退出之后才到达的登记请求由 Web 外壳以 401 拒绝（4.7 路由），聊天 app 不另记取消。推送内容增加接收账号 ID，仍然不含消息正文。
+
+聊天库第 5 版把 Web Push 的 endpoint 和 keys 迁为 `subscription_key` 与 `subscription_json`，保留订阅 ID、账号、AUTOINCREMENT 计数和推送队列。升级验证继续使用已发布版本的存储夹具。
 
 **持久化：** `data/chat.sqlite`，包括推送订阅（带订阅它的账号）、推送队列和实时事件（带受众）。
 
@@ -520,15 +525,17 @@ interface Admin {
 - **组装。** 先打开外壳自己在控制库里的表（模块名 `shell`），再 `new ChatApp(chat.sqlite, { clock, push })`，建 `Humans`，第一次启动时创建第一个人类（见"登录"），建网关并把 HTTP 服务器上路径为 `/api/nodes/connect` 的 upgrade 交给 `handleUpgrade`（别的路径直接断开），最后 `openAdmin`。关闭时先停止 HTTP 服务（断开所有连接，事件流随之结束），再依次关闭管理模块、网关、聊天 app 和外壳的表。启动中途失败时，已打开的部分按相反顺序关闭。
 - **登录。** 谁能登录由外壳自己的 `humans` 表管（`Humans`，控制库里的模块 `shell`）：每行一个人类，以聊天账号的 `externalId` 为键，带角色（`admin` 或 `member`）、scrypt 密码哈希和是否有效；显示名、handle 和账号种类在聊天账号里，聊天 app 不知道登录和角色，两边靠 `externalId` 对上。登录用 handle 加密码：控制面先让聊天 app 按 handle 找到人类账号（`findHuman`），再检查这个人类的密码。handle 不存在、是 Agent 的、或这个人类已停用，都和密码错了一样回 401 `wrong-password`（状态和正文都相同），并且照样做一次 scrypt 校验（对一个固定的假哈希），所以从回答和耗时都看不出哪些 handle 存在。**第一次启动**（`humans` 表是空的）：从 `initialPasswordFile` 读初始密码（去掉末尾换行，至少 12 字节；没有这个文件就拒绝启动），用 `initialHandle`（`MATE_INITIAL_HANDLE`，缺省 `admin`，要符合聊天账号的 handle 规则，否则拒绝启动）建聊天账号（`externalId: "human:initial"`，`kind: "human"`，显示名同 handle），再插入管理员行；两步都以这个固定的 `externalId` 为键，所以停在两步之间，下一次启动会补完。有了第一个人类之后再也不读这个文件。同时进行的密码校验最多 2 个，更多的按到达顺序排队（先进先出，空出的名额直接交给队首），不拒绝；队列最长 64，超出的立即回 429（`Retry-After: 1`）；排队超过 10 秒仍未轮到的也回 429。不做锁定，也不按客户端计数，所以连续输错再多次，正确的密码也进得来。上限是有意的取舍：几十个并发客户端持续把 64 的队列填满时，一次正确的登录也可能回 429，重试即可；已有的登录会话不受影响，也不会因此被锁定或泄露什么。密码对了之后才开会话，而且这一步要求这个人类仍然有效、密码哈希和角色仍是检查时的那一份（插入会话的语句本身带这个条件），所以在队列里等待期间被改了密码、改了角色或被停用的人类，那次登录回 401 `wrong-password`。登录成功发一个随机令牌，cookie 为 `__Host-mate_session`（`HttpOnly; Secure; SameSite=Lax; Path=/`），库里只存令牌的 SHA-256 和它属于哪个人类；登录会话从登录起 30 天有效，不随使用延长，跨重启保留，并且只对有效的人类有效。退出登录删掉这一行，令牌立即失效，别的登录会话不受影响。**会话是人类权限的快照**：角色变了（改角色，或自己降级）、密码被重置、人类被停用，都结束这个人类的全部登录会话（改自己的密码时当前这个除外），所以降级的管理员开着的管理事件流在下一个事件或心跳以 `login` 结束，旧 cookie 回 401；设成原来就有的角色什么都不改。
 - **人类的管理。** 每个人类可以改自己的显示名、handle 和密码；管理员还能添加人类、改人类的角色（包括自己的，只要不是最后一个管理员；改完自己的会话随之结束，前端的下一个请求回 401 就跳到登录页）、重置别人的密码和停用别人。任何时候至少有一个有效的管理员：降级或停用最后一个有效管理员回 409 `last-admin`，什么都不改。停用是永久的（同聊天的 `deactivateAccount`）：先在外壳标记无效并删掉这个人所有的登录会话，再停用聊天账号，所以这个人开着的事件流在下一个事件或心跳发出前就以 `login` 结束，登录也立即不可能；已经标记无效而聊天账号还没停用（中途崩溃）时，重做同一个请求会补完。其消息照常可读。添加人类以管理员给的 `requestId` 幂等：externalId 是 `human:request:<requestId>`，外壳里已有这一行就原样返回这个人类，不再改动（包括这个人后来自己改的名字）；没有就先建聊天账号（handle 被占用在任何外壳写入之前就拒绝），再插入外壳的行，两步之间崩溃，重发同一个请求会补完。
-- **路由。** 除了 `POST /api/login`（`{ handle, password, next? }`，回 `{ next }`：`next` 是站内 `/app` 下的路径时原样返回，否则是 `/app`）和 `POST /api/logout`，`/api/*` 都要登录，未登录回 401。页面请求：前端目录里存在的文件（脚本、样式、图标）不需要登录；`/` 跳到 `/app`；`/app` 及其下的页面未登录时跳到 `/login?next=<原地址>`；其余页面路径都回前端的 `index.html`，由前端路由。没有前端目录时页面回 404，API 照常工作。
+- **路由。** 除了 `POST /api/login`（`{ handle, password, next? }`，回 `{ next }`：`next` 是站内 `/app` 下的路径时原样返回，否则是 `/app`）和 `POST /api/logout`，`/api/*` 都要登录，未登录回 401。登录会话在整个请求（含请求体）收完之后才查，所以请求体在退出登录之后才收完的请求同样回 401，什么都不改。没有退出登录时，迟到的请求仍按当时的会话执行：例如同一 APNs token 已被另一账号重新登记后，原账号迟到的登记会把它拿回去；这个窗口只有客户端放弃请求后服务器仍在等待请求体的那段时间。页面请求：前端目录里存在的文件（脚本、样式、图标）不需要登录；`/` 跳到 `/app`；`/app` 及其下的页面未登录时跳到 `/login?next=<原地址>`；其余页面路径都回前端的 `index.html`，由前端路由。没有前端目录时页面回 404，API 照常工作。
   - `/api/chat/*` 一个路由对应聊天 app 的一个操作，账号固定为发出请求的人类自己的账号：每个人类读到全部会话，有自己的实时视图、未读摘要和推送订阅。读：`GET snapshot`（可带 `conversation=` 或 `thread=`）、`conversations`、`unread`、`history`（`conversation=`/`thread=`、`before`、`limit`）、`search?q=`。写都带浏览器生成的 `requestId`：`POST read`（读未读，推进这个人类的已读位置）、`messages`、`channels`、`dms`、`conversations/:id/join|leave|archive|invite`、`tasks`、`tasks/:id/change`。发送和任务操作总是关闭新鲜度检查（4.1 规则 2），请求里不接受这一项。推送：`GET push/key`（VAPID 公钥）、`POST push/subscribe`、`POST push/unsubscribe`。
   - `/api/me`：`GET` 回 `{ accountId, handle, displayName, role }`；`PATCH { displayName, handle }` 改自己的名字（经聊天 app 的 `ensureAccount`，handle 被占用回 409 `handle-taken`）；`POST password { current, next }` 改自己的密码（`current` 不对回 403 `wrong-password`，`next` 至少 12 字节），自己其他的登录会话随之结束，当前这个保留。
   - `/api/humans`（只有管理员）：`GET` 回每个人类的 `{ accountId, handle, displayName, role, active }`；`POST { requestId, handle, displayName, password, role }` 添加；`POST :accountId/role { role }`（结束那个人类所有的登录会话）、`POST :accountId/password { password }`（结束那个人类所有的登录会话）、`POST :accountId/deactivate`。
   - `/api/admin/*`（只有管理员）一个路由对应管理模块的一个操作：`GET|POST agents`、`POST agents/:id/pause|resume`、`DELETE agents/:id`、`PUT agents/:id/settings`、`PUT|DELETE agents/:id/nodes/:nodeId`（授权或收回，成功均为 204）、`GET agents/:id/assistants`、`GET agents/:id/events`（事件流，可带 `assistant=`）、`GET agents/:id/workspace?path=`、`GET providers`、`PUT|DELETE providers/:provider/credentials`、`GET models`、`GET nodes`、`PUT nodes/:id`（`{ name }`，改名字）、`POST pairing-tokens`。
   - **跨站防护。** 请求体必须声明 `content-type: application/json`（可带 charset），否则回 415 `unsupported-media-type`：别的站点的表单或不预检的 `fetch` 只能发 `text/plain` 之类，所以带着人类的 cookie 也伪造不出请求。带 `Origin` 头的非 GET 请求，`Origin` 的 host 必须等于请求的 `Host`，否则回 403 `cross-origin`（登录、退出也一样）；没有 `Origin`（脚本、curl）不是浏览器页面发的，放行。路径参数里不合法的百分号编码回 400 `invalid-input`。
-  - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`human-only`、`outside-workspace` 为 403；`archived`、`request-conflict`、`handle-taken`、`name-taken`、`no-credentials`、`agent-closed`、`agent-exists` 为 409；`unreadable` 为 422；`node-offline` 为 503。外壳自己的拒绝：`admin-only`（普通人类调用管理员的路由，在读请求体之前）403，`wrong-password` 在登录时 401、在改密码时 403，`last-admin` 409，`too-many-attempts` 429，`unknown-account`（`:accountId` 不是人类）404。创建 Agent 在文件改名之前中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做；没有创建任何东西的拒绝（不合法的名字、handle 被占用、ID 已存在）回上面各自的状态，不带 `agentId`。成功的操作回 200 加结果，没有结果的回 204。
+  - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`human-only`、`outside-workspace` 为 403；`archived`、`request-conflict`、`handle-taken`、`name-taken`、`no-credentials`、`agent-closed`、`agent-exists` 为 409；`unreadable` 为 422；`node-offline` 为 503。外壳自己的拒绝：`admin-only`（普通人类调用管理员的路由，在解析请求体之前）403，`wrong-password` 在登录时 401、在改密码时 403，`last-admin` 409，`too-many-attempts` 429，`unknown-account`（`:accountId` 不是人类）404。创建 Agent 在文件改名之前中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做；没有创建任何东西的拒绝（不合法的名字、handle 被占用、ID 已存在）回上面各自的状态，不带 `agentId`。成功的操作回 200 加结果，没有结果的回 204。
 - **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, cursor, unread }`），SSE 的 id 是这批读到的游标 `cursor`，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前、读聊天 app 之前都查一次登录会话；会话已过期、已退出登录或这个人类已被停用，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
-- **推送发送器。** VAPID 密钥对在第一次启动时生成，存在外壳的表里，之后不变：浏览器用公钥订阅，换了密钥所有订阅都会失效。`PushSender` 用 `web-push` 发出（加密、VAPID 签名、TTL 一天、请求超时 10 秒），推送服务的回答原样作为状态码交回聊天 app，连不上时抛错。VAPID 的联系地址来自 `MATE_VAPID_SUBJECT`，缺省为 `mailto:owner@mate.invalid`。
+- **推送发送器。** VAPID 密钥对在第一次启动时生成，存在外壳的表里，之后不变：浏览器用公钥订阅，换了密钥所有订阅都会失效。`PushSender` 用 `web-push` 发出（加密、VAPID 签名、TTL 一天、请求超时 10 秒），按 RFC 8030 把推送服务的回答交回聊天 app：2xx 送达，404、410 失效，408、429、5xx 重试，其他拒绝；连不上时抛错。VAPID 的联系地址来自 `MATE_VAPID_SUBJECT`，缺省为 `mailto:owner@mate.invalid`。
+
+**原生推送发送器。** `apns.ts` 用 `@parse/node-apn` 直接访问 APNs，不经过 Expo 推送服务。配置来自 `ControlPlaneOptions.apns` 或 DEPLOYMENT 6.2 的环境变量；不配置时 Web Push 照常运行。`GET /api/chat/push/native` 对已登录人类报告是否配置，并在配置时给出环境。`POST push/subscribe` 接受两种传输；未配置的原生登记回 503，环境不匹配回 409。取消登记不要求 APNs 仍然开启。发送器持有 provider，单次发送（含建立连接）总期限 10 秒，库内重试关闭。只有 `BadDeviceToken`、`Unregistered` 和 `DeviceTokenNotForTopic` 算失效；APNs 的 BadPath 404 和 provider 配置错误是拒绝，保留订阅。429、5xx 和连接失败（包括过期 provider token）重试。APNs 关闭时原生投递被拒绝，订阅保留，重新开启后继续可用。expiry 固定为消息时间加一天，重试不延长；已过期不再交给 APNs。collapse ID 沿用消息 tag。系统提示只有通用文案，用 `loc-key` 指向 app 打包的英文和简体中文字符串（`app.config.ts` 的 `locales`），由 iOS 按系统语言显示；数据带定位与 binding，不含消息正文。
 
 **前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。样式用 Tailwind CSS v4，对话框、菜单、标签页等交互组件用 Base UI，界面原语集中在 `src/shell/ui.tsx`；外观和交互规则见 [界面规范](DESIGN.md)。页面在 `/login` 和 `/app` 下：聊天（`/app`、`/app/c/…`）、搜索、个人资料（`/app/profile`：改显示名和 handle、改密码、退出）、管理（`/app/admin/agents|providers|nodes|humans`，人类页让管理员添加人类、改角色、重置密码、停用）。当前人类来自 `GET /api/me`，导航据此显示名字和头像，普通人类不显示管理入口，直接打开管理地址显示"需要管理员权限"；当前人类自己的账号在实时流里变化时这份数据重新获取。`apps/web` 用 Vite 构建，`MATE_WEB_DIRECTORY` 指向构建产物（`apps/web/dist`）。
 
@@ -541,6 +548,55 @@ interface Admin {
 - **本地化。** `apps/web/src/locales/{zh,en}.json` 按功能保存应用文案，i18next/react-i18next 处理插值和复数，日期、数字和列表用匹配语言的 Intl。首次渲染前同步加载打包资源，按浏览器 `navigator.languages` / `navigator.language` 的偏好顺序匹配中文或英文：`zh` 变体用简体中文，`en` 变体用英文，无匹配回退英文，并同步文档 `lang`。只从 navigator 检测，不读取 URL、cookie 或本地存储的语言覆盖，不添加选择器。错误码和枚举值只在视图映射显示名，不改变协议；用户和 Agent 的内容原样展示。构建同时生成本地化 PWA manifest 和保持 classic 类型的独立 `/sw.js` 脚本，通知用同一份资源和本地语言检测。
 - **推送。** 开启通知时注册 `sw.js`，用 `GET push/key` 的公钥订阅，再 `POST push/subscribe`。退出登录时先取消这个浏览器的订阅（`POST push/unsubscribe`，再取消浏览器自己的订阅），失败也照常退出，所以同一个浏览器上下一个登录的人类不会收到上一个人类的通知；服务端另有保底：另一个人类再订阅同一个 endpoint 时订阅归这个人类，前一个人类排队的推送被丢弃。通知点开后进 `/app/c/:会话[/t/:讨论串]?seq=N`；那条消息不在时回到最新消息并提示。
 - **提醒后端的缺口**（前端据此降级）：历史条目不带回复数，所以讨论串的回复数只统计本次页面见过的回复；搜索结果不带会话和时间线，所以不能点进去；没有列出任务的接口，任务只在所属消息和时间线上显示。
+
+### 4.8 客户端边界
+
+网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑：两端都用的纯逻辑放在所属包不依赖 Node 的 `client` 入口（`@mate/chat/client` 的时间线键、条目合并、提及解析、发送后草稿余下的文字和重连退避；`@mate/admin/client` 的观察归约和 node 配对命令），网页的 Vite 构建和原生端都按 `mate-source` 条件从源码引用；文案仍由各端翻译。API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
+
+移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.config.ts` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。当前覆盖 HTTPS 服务器选择、cookie 登录与恢复、频道和私信、讨论串、搜索、提及、消息任务和未读，以及完整管理、Agent 观察、个人资料与通知设置。分发、签名与真实 APNs 送达仍需 Apple 环境验证。
+
+移动端入口 `apps/mobile/index.ts` 在加载路由之前同步读取 `expo-localization` 的设备语言偏好。按顺序匹配中文或英文，所有 zh 变体使用简体中文，en 变体使用英文，无匹配时回退英文。`i18next` 的端内 JSON 资源随构建打包，界面直接调用模块级 `t`，插值与复数由库处理，日期、数字和列表由匹配 locale 的 Intl 格式化，Hermes 缺少的 `Intl.Locale`、`Intl.PluralRules` 和 `Intl.ListFormat` 由 FormatJS 按依赖顺序同步提供，复数与列表只打包中英文数据。iOS 配置声明英文和简体中文；系统改语言后重启 app，不增加前台监听、应用语言选择器或持久化语言覆盖。用户与 Agent 内容、协议值和服务器通知 payload 保持原文。
+
+移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。`lifecycle.ts` 的 `startMobileLifecycle` 启动认证，持有唯一的认证订阅和 AppState 监听：只有已登录且在前台时会话才可用，只有可用性变化才设置通知会话、暂停或恢复聊天流，身份变化才创建或关闭这次登录的 `MobileChat`；资料更新等同一会话的状态发布不重新检查通知或重连。根层 `Session` provider 只发布当前聊天实例。聊天验证遮罩不参与首页重定向，重验后保留当前会话、草稿和 sheet；验证中隐藏并禁止访问旧界面。仅真正进入 background 后回到 active 才以 `GET /api/me` 验证 cookie，权限弹窗等仅 inactive → active 的变化不重验或打断通知登记；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
+
+退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问；仍有可恢复的会话或在途登录时，先向旧服务器尝试 `POST /api/logout`，再清理全部 app cookie，撤销未确认时同样提示；没有会话时不联系旧服务器。切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
+
+`MobileNotifications` 在 `notifications.ts` 持有系统权限、已验证的服务器与账号、本机登记和未确认的取消登记。`notifications-native.ts` 用 SDK 58 的 `expo-notifications` 获取 APNs token、监听 token 更新、收取通知和点击响应。根层 `Session` 在设置页关闭时仍监听原生响应和 token；通知会话只由统一生命周期设置，后台的身份更新也不能恢复通知访问。首页与个人资料提供通知设置入口，设置页返回时保留个人资料草稿。只有权限允许、环境匹配、订阅请求成功才显示已登记。拒绝或撤回权限会关闭本机推送并尝试取消服务器订阅；网络和签名失败显示未完成；同一 token 登记重试沿用 binding，token 轮换生成新 binding。当前登记与待取消登记分别保存；token 轮换前先持久化旧登记的取消责任，再发新登记。取消失败不丢失旧 token，刷新、重启恢复和退出都会重试。每条待取消记录保留精确服务器、账号、token、环境与 binding，只能用同一服务器和账号的已验证身份发送，确认成功后才移除；重新成为当前登记的相同记录不会再被取消。
+
+`MobileAuth` 的 `beforeClear` 屏障在取消登记结束后才允许退出请求和 cookie 清理。认证和通知只发布状态事实，例如回到登录页的原因、待取消数量和本机清理结果，由界面翻译；登录页从通知快照提示取消或本机清理未确认。退出、更换服务器、401 都使旧请求和点击响应失效，并调用系统取消注册、移除已展示通知。认证验证中或网络不可用时暂停通知展示和导航。冷启动点击等待身份验证；通知必须带当前登记的 binding（登记记录了服务器和账号，且属于当前已验证身份），且未超过一天。导航只产生 `/conversation?id=<会话>&thread=<讨论串>&seq=<序号>` 的站内参数，忽略 payload 中的 URL。目标页面位于同一个根导航的已登录聊天组，分页定位旧序号并保持讨论串上下文。跨导航组或冷启动的会话页保留原生返回按钮，有历史时返回来源页，没有历史时进入聊天列表。
+
+`MobileNotifications` 在权限、能力、登记与清理流程中只发布结构化事实，不拼提示文字；界面按事实翻译，也不另发诊断请求。只有订阅应答成功才算已登记，未知条件保持待检查。
+
+离线取消不保证服务器停止发送，也不能收回已由 APNs 接受的通知。此时保留 cleanup 记录，在同一账号再次验证时重试；本机立即禁止旧通知导航并尝试向系统取消注册。重新注册后，旧服务器仍可能送来通用提示，所以界面明确说明取消未确认。真实 APNs 投递需要 Apple 凭据和具备推送能力的签名；simctl 注入只验证原生接收和点击，不证明远程投递。
+
+Web 外壳的登录与人类契约 `Role`、`HumanView`、`LoginInput` 和 `LoginResult` 在控制面的 `@mate/control-plane/contracts`，这个入口只依赖 Zod 和 `@mate/chat/contracts`，不带 Node。控制面、网页和移动端从同一处消费这些类型，移动端在网络边界用 schema 解析响应。
+
+原生聊天由一个登录身份所属的 `MobileChat` 实例持有数据、草稿和未完成发送。频道与讨论串各有草稿；导航、短暂断线和前台重验保留实例，退出或换服务器立即关闭实例、取消请求并清空数据。草稿只在本次登录的内存中保存，不跨 app 重启。发送使用 Expo Crypto 生成请求 ID，响应丢失后的重试沿用同一个 ID；成功后只移除发送覆盖的文字。频道创建、成员操作和任务操作的未确认输入与请求 ID 同样由登录会话持有，关闭并重开界面不会丢失；确认完成或收到明确拒绝后清除。未确认期间先重试原操作，避免用另一份输入产生重复创建。
+
+聊天复用现有 HTTP 路由和 SSE 协议。快照先建立游标，再加载时间线；快照就绪后历史、定位和发送即可使用，不等待原生事件流的首个数据块，实时连接仍单独显示连接中状态；历史加载期间收到的实时条目按序号合并，会话和账号的实时更新原位替换，保持服务端按 ID 的顺序。SSE 通过 `expo/fetch` 流式读取，帧解析使用不依赖平台的 `eventsource-parser`，凭据来自与认证相同的 Foundation cookie 存储；断线带最后一个已应用游标重连，40 秒没有数据或心跳时重新连接。`resnapshot` 重新拉取服务端数据并保留草稿。回到前台先验证登录，等旧流关闭后恢复事件流；后台不推进已读位置。历史读取失败会停止，只有显式重试才重新请求；同一时间线的读取共用进行中的请求，取消定位只停止后续翻页，不中止共用的请求。在当前可见时间线底部阅读时，客户端使用现有 `read` 操作推进已读位置，失败提供重试。
+
+`@mate/chat/contracts` 是不依赖 SQLite 或 Node 的公开契约入口。账号、会话、条目、未读、读取、发送、任务、实时数据和推送订阅形状只在这里定义；聊天 app 内部也从这里导入，不经各模块转发；后端继续消费同一份定义，原生端在网络边界解析它们。`@mate/clock` 同时提供原生入口，聊天重连和超时共用已有时钟接口。
+
+原生导航使用 Expo Router，消息列表使用 React Native `FlatList`。Markdown 由 `react-native-enriched-markdown` 渲染为原生文本，关闭数学、视频和语法高亮附加模块，不增加编辑或附件上传协议。`/conversation` 接受正整数 `id`（会话 ID）、可选 `thread`（根消息 ID）和 `seq`（目标时间线内序号）。没有 `thread` 时定位频道或私信，存在时定位讨论串；通过现有历史分页加载目标并滚动到可见位置，等目标条目和列表视口完成实际测量后再确认定位，定位完成后保留当前可见位置以接收实时任务变化。加载或定位失败可重试，不可用目标明确提示，离开页面或切换身份取消未完成定位；定位一旦完成、不可用或失败，焦点变化、前台重验和重连都不重新定位；显式重试、换目标或时间线重新加载（resnapshot、重试读取失败的历史）才重新开始。搜索结果缺少会话位置、历史消息缺少完整回复数、任务没有独立列表接口的限制与网页相同。
+Agent Tab 的路径是 `/agents`，Agent 子路由都在 `/agents/**`，Tab 和路由组都只对管理员开放。Agent 详情的「发消息」使用同一登录下的聊天操作打开该 Agent 聊天账号的私信，再进入 `/conversation?id=`，不直接发送消息。来自 Agent 总览时额外传 `sourceAgent=<Agent UUID>`，会话的原生返回按钮先移除这次聊天详情，再用 `navigate` 回到 `/agents/[id]`，禁用跨 Tab 的侧滑返回；普通聊天与讨论串保留默认返回行为。根 Stack 上方保留登录所属的聊天 provider。
+
+原生管理路由在 `apps/mobile/src/app/(signed-in)` 的 Agent 与设置 Tab 内，功能在 `src/admin` 与 `src/profile`。管理员可创建 Agent，修改模型、思考级别和说明文字，暂停、恢复和删除 Agent，管理提供商 key 与接口地址，查看模型目录，生成和复制 Node 配对命令、改名、授权与收回访问，以及添加人类、修改角色、重置密码和永久停用。Agent 显示名与 Handle 没有独立修改端点，主 Node 创建后不变；人类停用后不提供重新启用。普通人类能修改自己的显示名、Handle 和密码，不能进入管理功能。服务端仍负责每次请求的角色检查。创建 Agent 的草稿是 `ManagementScope` 里这次登录的状态，与 `ManagementClient` 一同建立和丢弃：普通返回、关闭管理或同一身份前台重验保留输入和发送请求前生成的 Agent ID，继续创建时原样提交这个 ID；如果上一次请求已在服务器完成，则从 Agent 列表确认同一个 ID 后完成恢复；创建成功后保留可查看结果的完成回执，开始下一次创建时重置。这次登录结束或服务器、账号、角色改变时，草稿随旧客户端一起卸载，新客户端从空草稿开始，所以迟到的旧登录回调写不到新草稿。进行中的创建状态也随草稿保留。草稿仅在进程内存中，不承诺跨进程恢复。
+
+Agent 私信复用聊天页面与同一 `MobileChat`，携带 `sourceAgent` 返回原 Agent 总览；讨论串沿用聊天 Stack 的原生返回。Node 配对和提供商配置是同一 Agent Stack 里的前提子路由，复用设置中的视图与管理客户端，返回时草稿还在。第一次提交冻结完整输入，结果未确认时继续提交原输入和 UUID；明确拒绝后可以修正字段。
+
+保存资料通过 `ManagementClient.saveProfile` 更新当前登录。添加人类在结果未确认时保留提交的输入与 requestId，重试原操作；明确拒绝后才释放输入，成功后清空密码。配对令牌显示实际到期时间，复制不表示配对完成，连接结果从 Node 在线列表核对。
+
+服务器地址只在 `MobileAuth` 的解析入口校验并返回规范 origin，表单直接提交原始输入。入口要求 HTTPS、非空主机、无凭据、根路径、无查询和片段。原生 URL 将不带末尾斜杠、带斜杠和大写 HTTPS 的合法输入归为同一 origin，不在界面另加字符串修补。提供商和 Node 列表接受调用方的打开详情回调，提供商详情接受打开目录回调；设置使用默认管理路由，Agent 创建前提使用自己 Stack 的路由。详情、目录、配对和编辑都继续消费同一次登录的管理 scope。
+
+观察使用已有 SSE 接口，显示主对话或工作助手的 run 状态、排队输入、系统提示、上下文起点、文字与思考、工具参数和流式输出，以及模型和工具用量。正文先于诊断信息，能以调用 ID 对应的工具调用、输出与结果聚合展示，完整参数、系统提示分节、工具变化和用量在阅读层内保留。断线标明上次快照时间并可重新连接，重新连接取得新的快照；切换观察对象不会显示另一个对象的旧记录。工作区沿用只读浏览接口，目录与文件使用原生 Stack 返回，支持文本、空目录、二进制提示与截断说明；越界返回根目录，离线、缺失或不可读时提供重试，不新增写文件或下载能力。
+
+`ManagementScope` 位于全部已登录 Tab 之上，每次登录只有一个 `ManagementClient` 与 QueryClient，切换 Tab 不创建另一份客户端或缓存。共享 `PresentationAccess` 与当前页面焦点一起控制原生 modal。React Native 在隐藏 modal 后会卸载它的子树，所以短表单、邀请和任务转交的展示草稿由 modal 外的页面持有；这些是本次页面的展示状态；聊天的未确认请求和 UUID 仍只归 `MobileChat`。`ManagementClient` 只给当前服务器和人类的这次登录发 cookie 请求。前台重验时中止旧请求、隐藏并禁止访问管理界面，选择器和危险操作确认页也随访问状态隐藏并禁止交互，但保持当前导航、表单草稿、选择器搜索条件和查询缓存挂载在内存中；连接故障时继续暂停访问，重试验证相同服务器、账号和角色后恢复原页面，重新读取数据和连接观察流；访问一直可用时的身份更新（如保存资料）不重新读取数据，也不重连观察流。登录结束、401 确认失效、服务器、账号或角色改变则关闭这次登录的界面与缓存。已取消请求的迟到响应即使在恢复后也不能交付，不持久化管理数据或草稿。HTTP 401 和 SSE 的 `login` 事件要求认证模块重新验证。资料保存响应经 `HumanView` schema 解析，`MobileAuth.updateHuman(previous, human)` 只更新提交它的同一次登录，不重新清理 cookie；密码修改继续使用服务端保留当前会话的规则。
+
+请求状态用与网页同版本的 TanStack Query，SSE 分帧用 `eventsource-parser`；聊天和管理共用 `http.ts` 的带 cookie JSON 请求和 SSE 读取循环，超时、401 处理和拒绝文案各自持有，长表单的键盘滚动用 Expo 58 对应的 Keyboard Controller。对话记录和模型选项用 React Native `FlatList`；其余小表单用原生输入框、按钮和确认框，不生成表单 schema 或引入整体 UI 框架。管理数据的类型从 `@mate/admin` 推导，个人身份从 `@mate/control-plane/contracts` 取得，不复制服务端协议。
+
+当前不做折叠屏 iPhone Duo 的专用适配，不增加折叠状态处理或专用布局。
+
+移动端依赖和 TypeScript 配置由 `@mate/mobile` 自己持有。它使用 Expo 的 TypeScript 基础配置和默认 Metro workspace 支持，保留 pnpm 的隔离安装；iOS bundle 不包含 `react-dom`，声明它只为让 Expo 的可选 peer 与移动端 React 版本一致，否则 pnpm 会接上网页的版本；不继承服务端的 NodeNext 配置，也不改网页的 React 版本。根 `typecheck` 包含移动端；iOS bundle 检查走独立的 `bundle:check` 命令。移动端没有 `build` 脚本，因此根递归 `build`、控制面构建和 node 发布包都不要求 Xcode 或签名凭据。运行命令见 [开发机运行](DEPLOYMENT.md#6-在开发机上运行)。
 
 ## 5. 关键流程
 
@@ -646,5 +702,5 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 - 不做逐条命令审批，不做 Mate 自己的提权。
 - 不限制 Agent 读同事的工作区，只在提示里请它不要读。
 - 不使用 `pi-coding-agent`。
-- 几个人共用，每人自己的登录；角色只有管理员和普通人类两种（管理员管理 Agent、提供商和 API key、node 和其他人类，普通人类只聊天）；中英双语界面，适配手机。
+- 几个人共用，每人自己的登录；角色只有管理员和普通人类两种（管理员管理 Agent、提供商和 API key、node 和其他人类，普通人类只聊天）；网页中英双语并适配手机，原生移动端根据设备偏好显示简体中文或英文。
 - 规模很小：几个人，少量 Agent（模型费用决定了不会多），消息量不大。不为数据量做性能优化或分页之类的设计，除非测量证明确实有问题；结构简单优先。

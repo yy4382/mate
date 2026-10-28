@@ -1,30 +1,14 @@
+import { ReadPage } from "./contracts.ts";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
 import type { ChatDatabase } from "./database.ts";
-import { Entry, entryCosts, loadEntries } from "./entries.ts";
+import { entryCosts, loadEntries } from "./entries.ts";
 import { advanceReadPosition, readPosition } from "./read-positions.ts";
-import { TimelineRef, lastSeq, type Timeline } from "./timelines.ts";
+import { lastSeq, type Timeline } from "./timelines.ts";
 
 /** How much one forward read may return: characters of text plus bytes of attachments. */
 export const Budget = z.number().int().positive();
 export const DEFAULT_BUDGET = 16_000;
-
-const SeqRange = z.object({ first: z.number(), last: z.number() });
-
-/**
- * One forward read of a timeline. `unread` counts the entries by other accounts after the reader's previous
- * position. If they did not all fit the budget, `skipped` names the older range left out, and the sequence numbers
- * of messages in it that mention the reader. `position` is the reader's read position afterwards: the newest entry.
- */
-export const ReadPage = z.object({
-  timeline: TimelineRef,
-  entries: z.array(Entry),
-  unread: z.number(),
-  returned: SeqRange.nullable(),
-  skipped: SeqRange.extend({ mentions: z.array(z.number()) }).nullable(),
-  position: z.number(),
-});
-export type ReadPage = z.output<typeof ReadPage>;
 
 /** Read forward from `reader`'s position: the newest entries that fit `budget`. Advances the position to the end. */
 export function readForward(

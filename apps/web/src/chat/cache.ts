@@ -1,3 +1,4 @@
+import { mergeEntries, timelineKey, type TimelineKey } from "@mate/chat/client";
 import { QueryClient } from "@tanstack/react-query";
 import type {
   AccountView,
@@ -5,12 +6,10 @@ import type {
   Entry,
   LiveEvents,
   LiveSnapshot,
-  TimelineKey,
   TimelineRef,
   UnreadSummary,
 } from "./types.ts";
 import { currentHumanKey } from "../shell/humans.ts";
-import { timelineKey } from "./types.ts";
 
 /**
  * Everything the chat client shows lives in the query cache under "chat". A timeline's entries are keyed by seq, so a
@@ -31,12 +30,6 @@ export type TimelineData = { entries: Entry[] };
 
 /** For each thread root message, the seqs of the replies seen in it. A set, so a repeated reply counts once. */
 export type ThreadReplies = Record<number, number[]>;
-
-export function mergeEntries(old: readonly Entry[], incoming: readonly Entry[]): Entry[] {
-  const bySeq = new Map<number, Entry>();
-  for (const entry of [...old, ...incoming]) bySeq.set(entry.seq, entry);
-  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
-}
 
 /** Entries seen while a timeline's first page is still on its way; they are merged in when it lands. */
 const arriving = new Map<TimelineKey, Entry[]>();

@@ -1,24 +1,15 @@
 import type { Clock } from "@mate/clock";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
-import { ConversationKind } from "./conversations.ts";
+import {
+  ConversationKind,
+  PushSubscription,
+  type PushAddress,
+  type TimelineRef,
+} from "./contracts.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
-import { timelineRefOf, type TimelineRef } from "./timelines.ts";
-
-const Base64Url = z
-  .string()
-  .max(512)
-  .regex(/^[A-Za-z0-9_-]+=*$/, "a key is base64url");
-
-/** A browser's Web Push subscription, in the shape `PushSubscription.toJSON()` gives it. Other fields are ignored. */
-export const PushSubscription = z.object({
-  endpoint: z.url({ protocol: /^https$/ }).max(2048),
-  keys: z.object({ p256dh: Base64Url, auth: Base64Url }),
-});
-export type PushSubscription = z.output<typeof PushSubscription>;
-
-export const PushEndpoint = z.object({ endpoint: z.string().min(1).max(2048) });
+import { timelineRefOf } from "./timelines.ts";
 
 /**
  * What a push carries: who wrote where, and where to open it, but never the message body. `tag` is the same for every
@@ -42,11 +33,21 @@ export type PushNotice = {
 };
 
 /**
- * Hands one notice to the push service for one subscription and resolves with the HTTP status the service answered,
- * or rejects when the service could not be reached. The caller supplies it (the Web shell encrypts and signs with its
- * VAPID keys). It must settle within a bounded time, such as a request timeout: the queue waits for each delivery.
+ * What one delivery attempt means for the queue: delivered; the subscription is gone for good, so it is removed with
+ * its queued pushes; worth retrying later; or refused, so this push is dropped and the subscription kept.
  */
-export type PushSender = (subscription: PushSubscription, notice: PushNotice) => Promise<number>;
+export type PushOutcome = "delivered" | "gone" | "retry" | "refused";
+
+/**
+ * Hands one notice to the push service for one subscription and resolves with what the service's answer means for the
+ * queue, or rejects when the service could not be reached, which the queue retries. The caller supplies it and reads
+ * its transport's answers (the Web shell: Web Push statuses and APNs reasons). It must settle within a bounded time,
+ * such as a request timeout: the queue waits for each delivery.
+ */
+export type PushSender = (
+  subscription: PushSubscription,
+  notice: PushNotice,
+) => Promise<PushOutcome>;
 
 /** The wait after the first failed attempt. Each later failure doubles it. */
 const FIRST_RETRY_MS = 30_000;
@@ -54,37 +55,50 @@ const FIRST_RETRY_MS = 30_000;
 const MAX_FAILURES = 10;
 
 /**
- * Add the human's subscription, or bring an endpoint already subscribed up to date and give it to this human. An
- * endpoint is a browser, so one that moves to another human takes none of the previous human's queued pushes along.
+ * Refresh a transport address or give it to this human. Changing its owner or native binding drops its old queue.
  */
 export function subscribePush(
   db: ChatDatabase,
   human: Actor,
   subscription: PushSubscription,
 ): void {
+  const key = subscriptionKey(subscription);
+  const json = JSON.stringify(subscription);
+  // A new owner or native binding gets a new ID, so a late answer cannot remove its subscription.
   db.run(
-    `DELETE FROM push_deliveries WHERE subscription_id IN
-       (SELECT id FROM push_subscriptions WHERE endpoint = ? AND account_id != ?)`,
-    subscription.endpoint,
+    `DELETE FROM push_subscriptions WHERE subscription_key = ? AND
+      (account_id != ? OR json_extract(subscription_json, '$.binding') IS NOT ?)`,
+    key,
     human.id,
+    bindingOf(subscription),
   );
   db.run(
-    `INSERT INTO push_subscriptions (account_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)
-     ON CONFLICT (endpoint) DO UPDATE SET
-       account_id = excluded.account_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+    `INSERT INTO push_subscriptions (account_id, subscription_key, subscription_json) VALUES (?, ?, ?)
+     ON CONFLICT (subscription_key) DO UPDATE SET subscription_json = excluded.subscription_json`,
     human.id,
-    subscription.endpoint,
-    subscription.keys.p256dh,
-    subscription.keys.auth,
+    key,
+    json,
   );
 }
 
-/** Remove the human's subscription and every delivery still queued for it. An endpoint of another human stays. */
-export function unsubscribePush(db: ChatDatabase, human: Actor, endpoint: string): void {
+/** A native registration's binding; a browser subscription has none, which SQL compares as NULL. */
+const bindingOf = (address: PushAddress) => (address.transport === "apns" ? address.binding : null);
+
+function subscriptionKey(address: PushAddress): string {
+  return address.transport === "apns"
+    ? JSON.stringify(["apns", address.environment, address.token])
+    : JSON.stringify(["web", address.endpoint]);
+}
+
+/** Remove this human's own subscription at the address; a native one only under the same binding. */
+export function unsubscribePush(db: ChatDatabase, human: Actor, address: PushAddress): void {
+  const key = subscriptionKey(address);
   db.run(
-    "DELETE FROM push_subscriptions WHERE endpoint = ? AND account_id = ?",
-    endpoint,
+    `DELETE FROM push_subscriptions WHERE subscription_key = ? AND account_id = ?
+      AND json_extract(subscription_json, '$.binding') IS ?`,
+    key,
     human.id,
+    bindingOf(address),
   );
 }
 
@@ -115,10 +129,9 @@ const DueRow = z.object({
   subscription_id: Id,
   failures: z.number(),
   due_at: z.number(),
-  endpoint: z.string(),
+  account_id: Id,
+  subscription_json: z.string(),
   active: SqlBoolean,
-  p256dh: z.string(),
-  auth: z.string(),
   seq: z.number(),
   created_at: z.number(),
   conversation_id: Id,
@@ -134,7 +147,7 @@ type DueRow = z.output<typeof DueRow>;
 function nextDelivery(db: ChatDatabase): DueRow | undefined {
   return db.get(
     DueRow,
-    `SELECT d.entry_id, d.subscription_id, d.failures, d.due_at, s.endpoint, s.p256dh, s.auth,
+    `SELECT d.entry_id, d.subscription_id, d.failures, d.due_at, s.account_id, s.subscription_json,
        (SELECT o.active FROM accounts o WHERE o.id = s.account_id) AS active,
        e.seq, e.created_at, t.conversation_id, t.root_entry_id, c.kind, c.name, a.handle AS sender,
        EXISTS (SELECT 1 FROM mentions m
@@ -149,10 +162,8 @@ function nextDelivery(db: ChatDatabase): DueRow | undefined {
   );
 }
 
-const subscriptionOf = (row: DueRow): PushSubscription => ({
-  endpoint: row.endpoint,
-  keys: { p256dh: row.p256dh, auth: row.auth },
-});
+const subscriptionOf = (row: DueRow): PushSubscription =>
+  PushSubscription.parse(JSON.parse(row.subscription_json));
 
 const noticeOf = (row: DueRow): PushNotice => ({
   tag: `message-${row.entry_id}`,
@@ -167,28 +178,15 @@ const noticeOf = (row: DueRow): PushNotice => ({
   at: row.created_at,
 });
 
-/**
- * What one attempt's answer means for the queue (RFC 8030): delivered; the subscription is gone (404, 410); worth
- * retrying (no answer, 408, 429, 5xx); or refused for good (any other status).
- */
-type Outcome = "delivered" | "gone" | "retry" | "refused";
-
-function outcomeOf(status: number | "unreachable"): Outcome {
-  if (status === "unreachable" || status === 408 || status === 429 || status >= 500) return "retry";
-  if (status >= 200 && status < 300) return "delivered";
-  if (status === 404 || status === 410) return "gone";
-  return "refused";
-}
-
-async function attempt(send: PushSender, row: DueRow): Promise<number | "unreachable"> {
+async function attempt(send: PushSender, row: DueRow): Promise<PushOutcome> {
   try {
     return await send(subscriptionOf(row), noticeOf(row));
   } catch {
-    return "unreachable";
+    return "retry";
   }
 }
 
-function settle(db: ChatDatabase, row: DueRow, outcome: Outcome): void {
+function settle(db: ChatDatabase, row: DueRow, outcome: PushOutcome): void {
   const key = [row.entry_id, row.subscription_id] as const;
   if (outcome === "gone") {
     db.run("DELETE FROM push_subscriptions WHERE id = ?", row.subscription_id);
@@ -253,9 +251,9 @@ export class PushDelivery {
     const wait = due.due_at - this.#clock.now();
     if (wait > 0) return this.#sleep(wait);
     if (!due.active) return this.#db.transaction("write", () => settle(this.#db, due, "refused"));
-    const status = await attempt(this.#send, due);
+    const outcome = await attempt(this.#send, due);
     if (this.#closed) return;
-    this.#db.transaction("write", () => settle(this.#db, due, outcomeOf(status)));
+    this.#db.transaction("write", () => settle(this.#db, due, outcome));
   }
 
   /** Sleep for `ms` (until woken, without it), or until a write queues a push or the queue closes. */

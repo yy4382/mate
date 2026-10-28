@@ -1,60 +1,20 @@
 import { z } from "zod";
-import { accountView, listAccounts, type Actor, type AccountView } from "./accounts.ts";
-import {
-  conversationById,
-  conversationView,
-  listConversations,
-  type ConversationView,
-} from "./conversations.ts";
+import { accountView, listAccounts, type Actor } from "./accounts.ts";
+import type { LiveEvent, LiveEvents, LiveSnapshot, TimelineRef } from "./contracts.ts";
+import { conversationById, conversationView, listConversations } from "./conversations.ts";
 import type { ChatDatabase } from "./database.ts";
-import { loadEntries, type Entry } from "./entries.ts";
+import { loadEntries } from "./entries.ts";
 import { Id } from "./identifiers.ts";
-import { unreadSummary, type UnreadSummary } from "./inbox.ts";
+import { unreadSummary } from "./inbox.ts";
 import { readPosition } from "./read-positions.ts";
 import { HistoryQuery, readHistory } from "./send.ts";
-import { resolveTimeline, timelineById, timelineOfEntry, type TimelineRef } from "./timelines.ts";
+import { resolveTimeline, timelineById, timelineOfEntry } from "./timelines.ts";
 
 /** How long a live event is kept. A client that falls further behind than this loads a new snapshot. */
 const LIVE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /** The most events one `liveEvents` call returns; the caller asks again from the last one's cursor. */
 const EVENTS_PER_READ = 500;
-
-/**
- * Everything a human's client renders, as of one moment, and the cursor of that moment. `me` is the viewer's account.
- * `page` is the newest page of the timeline the client opened (newest first, as `readHistory` returns it) with the
- * viewer's read position there.
- */
-export type LiveSnapshot = {
-  cursor: string;
-  me: number;
-  accounts: AccountView[];
-  conversations: ConversationView[];
-  unread: UnreadSummary;
-  page: { timeline: TimelineRef; entries: Entry[]; position: number } | null;
-};
-
-/**
- * One change to what a human's client shows. An entry is immutable, so its event carries it in full; the other
- * kinds carry their subject's current state, so applying a stale or repeated one converges on the same view.
- * `cursor` is the position just after this event.
- */
-export type LiveEvent = { cursor: string } & (
-  | { type: "entry"; conversationId: number; timeline: TimelineRef; entry: Entry }
-  | { type: "conversation"; conversation: ConversationView }
-  | { type: "account"; account: AccountView }
-  | { type: "read"; conversationId: number; timeline: TimelineRef; position: number }
-);
-
-/**
- * Events after a cursor, with the viewer's unread summary as of the same read, so a client replaces its unread counts
- * instead of working out which timelines the viewer follows. `resnapshot` when the cursor does not name a position the
- * log still holds. `cursor` is where the read got to, past every event that is not for this viewer, so a viewer who is
- * rarely addressed still moves forward; asking again from it returns what came after.
- */
-export type LiveEvents =
-  | { status: "events"; events: LiveEvent[]; cursor: string; unread: UnreadSummary }
-  | { status: "resnapshot" };
 
 type LivePayload<K extends LiveEvent["type"]> = Omit<Extract<LiveEvent, { type: K }>, "cursor">;
 

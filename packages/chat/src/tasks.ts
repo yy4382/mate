@@ -1,40 +1,15 @@
+import { TaskStatus, Task, TaskResult } from "./contracts.ts";
 import { z } from "zod";
 import { targetAccount, type Actor } from "./accounts.ts";
 import { ChatError } from "./chat-error.ts";
 import { isMember, requireWritable } from "./conversations.ts";
 import type { ChatDatabase } from "./database.ts";
 import { appendEntry } from "./entries.ts";
-import { FreshnessOptions, ReadPage, freshWrite } from "./forward-reading.ts";
+import { FreshnessOptions, freshWrite } from "./forward-reading.ts";
 import { Id, RequestId } from "./identifiers.ts";
 import { timelineOfEntry, type Timeline } from "./timelines.ts";
 
 export const TaskTitle = z.string().trim().min(1).max(200);
-
-export const TaskStatus = z.enum(["open", "completed"]);
-
-export const Task = z.object({
-  taskId: Id,
-  messageId: Id,
-  title: z.string(),
-  owner: Id.nullable(),
-  status: TaskStatus,
-});
-export type Task = z.output<typeof Task>;
-
-/**
- * The outcome of a task operation. `refused` is an outcome of the task's current state, which can change between a
- * caller's read and its action: someone else claimed it first, the caller no longer owns it, or it is completed.
- */
-export const TaskResult = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("applied"), task: Task, seq: z.number() }),
-  z.object({ status: z.literal("held"), page: ReadPage }),
-  z.object({
-    status: z.literal("refused"),
-    reason: z.enum(["claimed", "not-owner", "completed"]),
-    task: Task,
-  }),
-]);
-export type TaskResult = z.output<typeof TaskResult>;
 
 export const CreateTaskRequest = z.object({
   requestId: RequestId,

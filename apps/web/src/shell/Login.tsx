@@ -1,3 +1,4 @@
+import type { LoginInput, LoginResult } from "@mate/control-plane/contracts";
 import { t } from "../i18n.ts";
 import { useState } from "react";
 import { Mark } from "./App.tsx";
@@ -17,11 +18,11 @@ export function Login({ next }: { next: string | null }) {
             event.preventDefault();
             setBusy(true);
             try {
-              const result = await post<{ next: string }>("/api/login", {
+              const result = await post<LoginResult>("/api/login", {
                 handle: handle.trim(),
                 password,
                 ...(next === null ? {} : { next }),
-              });
+              } satisfies LoginInput);
               location.assign(result.next);
             } catch (error) {
               setBusy(false);

@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 # `pnpm check` is split across parallel jobs, because a runner has two cores and the suite is CPU-bound; together
-# they check what `pnpm check` and `pnpm test:linux` check. The node suite also runs on macOS and Windows.
+# they check what `pnpm check` and `pnpm test:linux` check, plus the mobile iOS bundle. The node suite also runs on macOS and Windows.
 # The `checks` job is the one result that a release waits for.
 jobs:
   changes:
@@ -65,6 +65,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm typecheck
+      - run: pnpm --filter @mate/mobile bundle:check
 
   test:
     name: vitest

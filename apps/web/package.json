@@ -24,6 +24,7 @@
   "devDependencies": {
     "@mate/admin": "workspace:*",
     "@mate/chat": "workspace:*",
+    "@mate/control-plane": "workspace:*",
     "@mate/testkit": "workspace:*",
     "@tailwindcss/vite": "4.3.3",
     "@types/react": "19.3.0",

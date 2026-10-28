@@ -95,12 +95,8 @@ export function sendJson(
     .end(JSON.stringify(body));
 }
 
-/**
- * The request's JSON body, or undefined when it has none. A body must be declared `application/json`: a cross-site
- * form or `fetch` without a preflight can only send `text/plain` and the like, so it cannot put words in a human's
- * mouth even if the browser attaches the cookie.
- */
-export async function readJson(request: IncomingMessage): Promise<unknown> {
+/** The request's body, read to its end without looking at it; undefined when it has none. */
+export async function readBody(request: IncomingMessage): Promise<Buffer | undefined> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request as AsyncIterable<Buffer>) {
@@ -108,12 +104,21 @@ export async function readJson(request: IncomingMessage): Promise<unknown> {
     if (size > MAX_BODY_BYTES) throw new HttpError(413, "body-too-large");
     chunks.push(chunk);
   }
-  if (size === 0) return undefined;
+  return size === 0 ? undefined : Buffer.concat(chunks);
+}
+
+/**
+ * The request's body as JSON, or undefined when it has none. A body must be declared `application/json`: a
+ * cross-site form or `fetch` without a preflight can only send `text/plain` and the like, so it cannot put words in a
+ * human's mouth even if the browser attaches the cookie.
+ */
+export function parseJson(request: IncomingMessage, body: Buffer | undefined): unknown {
+  if (body === undefined) return undefined;
   const type = (request.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
   if (type !== "application/json")
     throw new HttpError(415, "unsupported-media-type", "send the body as application/json");
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return JSON.parse(body.toString("utf8"));
   } catch {
     throw new HttpError(400, "invalid-json");
   }

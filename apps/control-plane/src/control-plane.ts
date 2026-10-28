@@ -5,15 +5,24 @@ import { openAdmin } from "@mate/admin";
 import { ChatApp, type PushSender } from "@mate/chat";
 import { systemClock, type Clock } from "@mate/clock";
 import { createNodeGateway } from "@mate/gateway";
-import { z } from "zod";
+import { LoginInput, type LoginResult } from "./contracts.ts";
 import { EventStream } from "./event-stream.ts";
 import { Frontend } from "./frontend.ts";
 import { humanRoutes } from "./human-routes.ts";
-import { cookie, parseBody, readJson, refusal, requireSameOrigin, sendJson } from "./http.ts";
+import {
+  cookie,
+  parseBody,
+  parseJson,
+  readBody,
+  refusal,
+  requireSameOrigin,
+  sendJson,
+} from "./http.ts";
 import { Humans, bootstrapHumans, SESSION_TTL_MS, type Session } from "./humans.ts";
 import { vapidKeys, webPushSender } from "./push.ts";
 import { adminRoutes, chatRoutes, matchRoute, requireRole } from "./routes.ts";
 import { openShellTables } from "./store.ts";
+import { openApns, type ApnsOptions } from "./apns.ts";
 
 /** `__Host-` makes the browser accept the cookie only from this origin, over HTTPS, for every path. */
 const SESSION_COOKIE = "__Host-mate_session";
@@ -39,6 +48,7 @@ export type ControlPlaneOptions = {
   readonly clock?: Clock | undefined;
   /** Replaces Web Push delivery, for tests. */
   readonly push?: PushSender | undefined;
+  readonly apns?: ApnsOptions | undefined;
 };
 
 export type ControlPlane = {
@@ -47,12 +57,6 @@ export type ControlPlane = {
   /** Stop serving, then close the admin module (and every Agent), the gateway and the chat app, in that order. */
   close(): Promise<void>;
 };
-
-const LoginInput = z.object({
-  handle: z.string().max(256),
-  password: z.string().max(1024),
-  next: z.string().optional(),
-});
 
 /**
  * Start the control plane on `dataDirectory`: the chat app with a human account for everyone who may log in, the node
@@ -67,10 +71,20 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
     closers.push(() => store.close());
     const humans = new Humans(store, clock);
     const keys = vapidKeys(store);
+    const apns = options.apns && openApns(options.apns, () => clock.now());
+    if (apns) closers.push(() => apns.close());
+    const web = webPushSender(keys, options.vapidSubject ?? "mailto:owner@mate.invalid");
     const chat = new ChatApp(join(dataDirectory, "chat.sqlite"), {
       clock,
       push:
-        options.push ?? webPushSender(keys, options.vapidSubject ?? "mailto:owner@mate.invalid"),
+        options.push ??
+        ((subscription, notice) =>
+          subscription.transport === "apns"
+            ? // With native push turned off, keep the subscription so it works again once turned back on.
+              apns
+              ? apns.send(subscription, notice)
+              : Promise.resolve("refused")
+            : web(subscription, notice)),
     });
     closers.push(() => chat.close());
     await bootstrapHumans(humans, chat, {
@@ -89,7 +103,7 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
     closers.push(() => admin.close());
 
     const routes = [
-      ...chatRoutes(chat, keys.publicKey),
+      ...chatRoutes(chat, keys.publicKey, options.apns),
       ...humanRoutes(chat, humans),
       ...adminRoutes(admin),
     ];
@@ -100,8 +114,11 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
       const method = request.method ?? "GET";
       const token = cookie(request, SESSION_COOKIE);
       if (method !== "GET") requireSameOrigin(request);
+      // The session is looked up only once the whole request has arrived, so a request still arriving when its
+      // session logs out acts as nobody.
+      const body = method === "GET" ? undefined : await readBody(request);
       if (method === "POST" && url.pathname === "/api/login") {
-        const input = parseBody(LoginInput, await readJson(request));
+        const input = parseBody(LoginInput, parseJson(request, body));
         const account = chat.findHuman(input.handle);
         const result = await humans.logIn(
           account?.active === true ? account.externalId : undefined,
@@ -110,12 +127,9 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
         if (result.status === "limited")
           return sendJson(response, 429, { error: "too-many-attempts" }, { "retry-after": "1" });
         if (result.status === "wrong") return sendJson(response, 401, { error: "wrong-password" });
-        return sendJson(
-          response,
-          200,
-          { next: appPathOr(input.next) },
-          { "set-cookie": sessionCookie(result.session) },
-        );
+        return sendJson(response, 200, { next: appPathOr(input.next) } satisfies LoginResult, {
+          "set-cookie": sessionCookie(result.session),
+        });
       }
       if (method === "POST" && url.pathname === "/api/logout") {
         if (token !== undefined) humans.logOut(token);
@@ -140,7 +154,7 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
         human,
         params,
         query: url.searchParams,
-        body: method === "GET" ? undefined : await readJson(request),
+        body: parseJson(request, body),
         lastEventId: typeof lastEventId === "string" ? lastEventId : undefined,
       };
       if ("json" in route) return sendJson(response, 200, await route.json(input));

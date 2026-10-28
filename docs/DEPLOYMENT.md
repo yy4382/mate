@@ -41,7 +41,7 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64）
 
 控制面是 `deploy/control-plane/` 里的一个镜像加两个 Compose 文件：`compose.yaml` 是日常配置，`compose.initialize.yaml` 只在第一次启动时叠加，把第一个管理员的初始密码文件和 handle 交给控制面。镜像用 `docker build --file deploy/control-plane/Dockerfile .` 从仓库根目录构建，构建出的镜像带网页前端；发布时由 CI 推到镜像仓库，用确切的版本号，不用 `latest`。
 
-镜像保留编译后的 workspace 包，由 `pnpm deploy --prod` 装入独立的生产依赖，不把服务端和第三方包合成一个 JavaScript 文件。依赖在目标架构上安装，保留原生模块和包内资源。每个 PR 和 main 都复用发布构建任务，构建 x64 Linux 镜像和 node 发布包，跳过发布步骤；下载的 Node 运行时按 `deploy/node/node-runtimes.ts` 缓存。只有 Markdown、MDX、reST、AsciiDoc、`docs/` 下的文件或根目录 LICENSE/NOTICE 变动时，跳过这个构建任务，其余检查照常；`v*` 标签始终构建并发布。node 发布包里的 JavaScript 由 tsdown 打包。
+镜像构建只安装控制面和网页需要的 workspace 包，移动端等客户端的依赖不进入镜像构建。镜像保留编译后的 workspace 包，由 `pnpm deploy --prod` 装入独立的生产依赖，不把服务端和第三方包合成一个 JavaScript 文件。依赖在目标架构上安装，保留原生模块和包内资源。每个 PR 和 main 都复用发布构建任务，构建 x64 Linux 镜像和 node 发布包，跳过发布步骤；下载的 Node 运行时按 `deploy/node/node-runtimes.ts` 缓存。只有 Markdown、MDX、reST、AsciiDoc、`docs/` 下的文件或根目录 LICENSE/NOTICE 变动时，跳过这个构建任务，其余检查照常；`v*` 标签始终构建并发布。node 发布包里的 JavaScript 由 tsdown 打包。
 
 1. 建一个只属于控制面系统账号的私有数据目录，权限 0700，放在 node 账号进不去的地方，例如 `sudo install -d -m 700 -o mate-control -g mate-control /srv/mate-control-plane/data`。Compose 不会替你建它（目录不存在就拒绝启动），因为让 Docker 建出来的会属于 root。
 2. 镜像在 GHCR 上公开，可以匿名拉取，不需要登录。
@@ -320,3 +320,56 @@ curl -i -X POST localhost:8787/api/login -H 'content-type: application/json' -d 
 
 登录返回的 `Set-Cookie` 要原样带在之后的请求里。路由见 ARCHITECTURE §4.7。各模块的边界测试是验证系统的主要手段，`apps/control-plane/test/composition.test.ts` 以真实 HTTP 跑通"经 HTTP 配对 node、创建 Agent、管理员私信它、它回复并推送"。
 
+### 6.1 原生移动客户端
+
+`apps/mobile` 是自用的 iOS 27+ Expo app，在 app 内保存一个 HTTPS 服务器地址，用已有 handle 和密码登录，进入聊天、管理、个人资料与通知设置。所有依赖从仓库根安装，只有一个 `pnpm-lock.yaml`。SDK 58 使用 React Native 0.88、React 19.3 和 app 自己的 TypeScript 6.0；版本依据 [Expo SDK 参考](https://docs.expo.dev/versions/latest/)、[官方 TypeScript 指南](https://docs.expo.dev/guides/typescript/) 和 SDK 58 模板。网页继续使用自己的 React 版本。
+
+从仓库根运行：
+
+```sh
+pnpm install
+pnpm dev:mobile --port 8087                 # 启动 Metro；多个 worktree 使用不同端口
+pnpm --filter @mate/mobile typecheck
+pnpm --filter @mate/mobile exec expo install --check
+pnpm --filter @mate/mobile bundle:check     # 导出 iOS JS/Hermes bundle 到 apps/mobile/dist
+```
+
+Metro 使用 [Expo 默认的 monorepo 支持](https://docs.expo.dev/guides/monorepos/)，不需要自定义解析器或 workspace 全局 hoisting。`pnpm typecheck` 包含移动端，CI 在现有格式与类型检查任务里另跑一次 iOS bundle 检查。导出 bundle 不需要原生 SDK，也不证明已在设备上运行。
+
+安装了原生开发工具时，可以构建并启动开发版：
+
+```sh
+pnpm --filter @mate/mobile ios --device --port 8087
+```
+
+iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模拟器或设备，工具安装见 [Expo 环境设置](https://docs.expo.dev/get-started/set-up-your-environment/)。共享机器先确认设备未被其他 session 占用，再选择设备。生成的 `ios/` 和 `.expo/` 只留在本地，由 app config 和依赖重新生成。合入原生插件或修改 app config 后，先运行 `pnpm --filter @mate/mobile exec expo prebuild --platform ios --no-install` 再构建；已有 `ios/` 目录不能保证新插件配置已应用。通知构建应确认生成的 `Mate.entitlements` 含所选环境的 `aps-environment`。
+
+最低版本通过 Expo 内置的 [`ios.deploymentTarget`](https://docs.expo.dev/versions/v58.0.0/config/app/#deploymenttarget) 配置为 `27.0`，不需要额外的构建属性插件。`pnpm --filter @mate/mobile exec expo prebuild --platform ios --no-install` 生成的 `ios/Podfile.properties.json` 含 `ios.deploymentTarget: "27.0"`；Xcode 工程的应用 target 在 Debug 和 Release 配置中均为 `IPHONEOS_DEPLOYMENT_TARGET = 27.0`。原生编译和运行验证使用自己的开发版；Expo Go 的宿主部署目标不能证明 Mate 自身的最低版本。
+
+认证沿用控制面的 Secure HttpOnly cookie，无需 bearer API 或 CORS 配置。启动和从后台回到前台重新验证登录，权限弹窗的 inactive → active 不触发重验；连接失败可重试，401 需要重新登录。退出与换服务器会先尝试撤销旧服务器上的会话，再清理 app 的原生 cookie；离线退出仅保证关闭本机访问，并提示远端撤销未确认。地址与恢复标记存在 Expo SQLite 键值设置中，不保存密码。正常使用后的重启恢复依赖原生 cookie 存储，不保证登录后立即强杀的持久化。`expo-sqlite` 和 `@preeternal/react-native-cookie-manager` 需要用上述 `ios` 命令构建开发版或 Release 包，Expo Go 不能验证这个 app 的 cookie 清理集成。
+
+`dev.yyang.mate` 是当前 iOS bundle identifier。签名使用对应的 App ID 和 provisioning profile，控制面的 `MATE_APNS_TOPIC` 也必须与它一致。签名与自用分发方式仍待确认，本阶段不添加公开应用商店发布自动化。根 `pnpm build` 只构建已有网页和服务端包，移动端不参与控制面镜像或 node 发布包的构建。
+
+### 6.2 原生 iOS 通知
+
+原生登记的随机 binding 使用 SDK 58 的 [expo-crypto.randomUUID](https://docs.expo.dev/versions/v58.0.0/sdk/crypto/)，不依赖浏览器的 Web Crypto 全局对象。
+
+移动端使用 [expo-notifications SDK 58](https://docs.expo.dev/versions/v58.0.0/sdk/notifications/) 的原生 APNs token。SDK 58 的[官方依赖表](https://github.com/expo/expo/blob/sdk-58/packages/expo/bundledNativeModules.json) 推荐 `~58.1.6`。服务端使用维护中的 [@parse/node-apn 8.1.0](https://github.com/parse-community/node-apn)，其 Node 范围包含 24。选择直接 APNs，是因为已有后端可以持有 provider，避免另加 Expo 托管推送服务与账号。[Expo 官方说明](https://docs.expo.dev/push-notifications/sending-notifications-custom/)允许直接 APNs；Expo 推送服务还需要 Expo token、服务与凭据管理，本项目不使用它。库负责 HTTP/2 与 JWT，Mate 只适配现有队列。
+
+未配置时 Web Push 照常运行，`GET /api/chat/push/native` 返回 `{ enabled: false }`，原生订阅回 503 `native-push-disabled`。系统权限允许也不会显示已登记。配置 APNs 时，控制面需要同时提供以下环境变量；只提供一部分或 key 无法加载时拒绝启动。
+
+| 变量 | 内容 |
+| --- | --- |
+| `MATE_APNS_KEY_FILE` | 由操作者提供的 APNs `.p8` key 文件路径，控制面可读；容器中可只读挂载，不提交到仓库 |
+| `MATE_APNS_KEY_ID` | Apple 签发的 10 位 key ID |
+| `MATE_APNS_TEAM_ID` | 10 位 team ID |
+| `MATE_APNS_TOPIC` | 签名 app 的 bundle identifier，当前为 `dev.yyang.mate` |
+| `MATE_APNS_ENVIRONMENT` | `sandbox` 或 `production`，不从 `NODE_ENV` 猜测 |
+
+app config 的输入 `MATE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`。它同时设置 Expo 通知插件的 entitlement mode 和 app 订阅的环境。正式签名包使用 `production`；Xcode archive 也会把 entitlement 改为 production，构建输入必须与之匹配。改变输入后重新 prebuild 并正常构建，不修改生成的二进制。服务器拒绝环境不匹配的登记；app 拒绝服务器公布的环境与自己不一致。
+
+`apns.ts` 的 provider 连接由进程持有，关闭时释放。单次投递总期限 10 秒，库内重试关闭。暂时失败仍按聊天队列的退避计划重试，过期 provider token 也重试。只有 token 失效相关的拒绝才删除设备订阅，provider 配置错误不清理 token。APNs 的 expiry 固定为消息时间加一天；队列重试不延长它。已过期的消息不再交给 APNs。collapse ID 沿用消息 tag，通知数据不含消息正文。系统提示使用通用文案，点击数据带随机登记 binding，app 只在这次登记所属的服务器和账号下打开它，避免在错误身份下打开旧通知。
+
+关闭通知、退出、换服务器和登录失效会尝试取消服务器登记，再清 cookie，并向 iOS 取消本机注册、清除已展示通知。离线时无法保证旧服务器立即停止或撤回已交给 APNs 的通知；界面说明取消未确认。退出之后才到达的登记请求回 401；重新开启和 token 轮换使用新 binding。未确认的旧 token 取消记录独立于当前登记保存，token 轮换和新登记不会覆盖它们；下次同一服务器和账号恢复验证、刷新或退出时重试，只有服务端确认后才删除。重新允许注册之后仍可能收到旧服务器的通用提示；旧数据不会打开当前其他账号或服务器的会话。
+
+实际远程投递仍需操作者确认付费 Apple Developer 资格，提供 APNs 凭据，并生成具有 Push Notifications capability 的签名 app。本任务不创建或修改 Apple Developer、EAS 账号或资源，不接触真实 key 内容，不向真实账号发送测试通知。普通 iOS 27 模拟器的正常构建、系统权限界面和 `simctl push` 注入可验证本机行为；模拟注入不是 APNs 或真机投递证明。没有凭据和签名之前，真实 APNs 投递保持未验证。

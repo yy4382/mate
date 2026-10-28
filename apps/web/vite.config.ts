@@ -1,6 +1,6 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { build, defineConfig } from "vite";
+import { build, defaultClientConditions, defineConfig } from "vite";
 import { fileURLToPath } from "node:url";
 import manifest from "./src/manifest.json" with { type: "json" };
 import en from "./src/locales/en.json" with { type: "json" };
@@ -40,6 +40,8 @@ async function notificationWorker(mode: string): Promise<string> {
 // Pages live at /app/... and /login, so every asset is addressed from the site root, never relative to the page.
 export default defineConfig(({ mode }) => ({
   base: "/",
+  // Workspace packages' client entries are built from source, like the tests and the native app do.
+  resolve: { conditions: ["mate-source", ...defaultClientConditions] },
   plugins: [
     react(),
     tailwindcss(),

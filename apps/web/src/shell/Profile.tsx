@@ -1,3 +1,4 @@
+import { passwordTooShort } from "@mate/control-plane/passwords";
 import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { LogOut } from "lucide-react";
@@ -9,7 +10,6 @@ import {
   ROLE_LABEL,
   currentHumanKey,
   refusalText,
-  tooShort,
   useCurrentHuman,
   type HumanView,
 } from "./humans.ts";
@@ -128,7 +128,8 @@ function ChangePassword() {
           setCurrentError(null);
           setNextError(null);
           setError(null);
-          if (tooShort(next)) return setNextError(t("Profile.theNewPasswordMustBeAtLeast12"));
+          if (passwordTooShort(next))
+            return setNextError(t("Profile.theNewPasswordMustBeAtLeast12"));
           if (next !== again) return setNextError(t("Profile.theNewPasswordsDoNotMatch"));
           try {
             await post("/api/me/password", { current, next });

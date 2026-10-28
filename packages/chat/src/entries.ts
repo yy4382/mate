@@ -1,43 +1,7 @@
+import { Attachment, TaskChange, Entry } from "./contracts.ts";
 import { z } from "zod";
 import { idList, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
-
-/** Attachment metadata. The bytes live elsewhere under `storageKey`; `size` counts against a read budget. */
-export const Attachment = z.object({
-  name: z.string().min(1).max(255),
-  size: z.number().int().nonnegative(),
-  storageKey: z.string().min(1).max(512),
-});
-
-export const TaskChange = z.enum(["created", "claimed", "yielded", "transferred", "completed"]);
-
-export const MessageEntry = z.object({
-  kind: z.literal("message"),
-  seq: z.number(),
-  messageId: Id,
-  author: Id,
-  body: z.string(),
-  attachments: z.array(Attachment),
-  mentions: z.array(Id),
-  at: z.number(),
-});
-
-/** One change to a task, placed in the timeline of the message the task belongs to. `owner` is the owner after it. */
-export const TaskEntry = z.object({
-  kind: z.literal("task"),
-  seq: z.number(),
-  taskId: Id,
-  messageId: Id,
-  actor: Id,
-  change: TaskChange,
-  title: z.string(),
-  owner: Id.nullable(),
-  at: z.number(),
-});
-
-/** One item of a timeline. Messages and task entries share the timeline's sequence. */
-export const Entry = z.discriminatedUnion("kind", [MessageEntry, TaskEntry]);
-export type Entry = z.output<typeof Entry>;
 
 const EntryRow = z.discriminatedUnion("kind", [
   z.object({

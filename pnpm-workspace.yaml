@@ -12,3 +12,4 @@ allowBuilds:
   "@google/genai": false
   protobufjs: false
   fsevents: false
+  react-native-enriched-markdown@1.1.1: false
