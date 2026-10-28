@@ -1,9 +1,9 @@
 import { t } from "../i18n";
-import type { AgentView, CatalogModel } from "@mate/admin";
-import { router, Stack, useIsFocused } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import type { CatalogModel } from "@mate/admin";
+import { router, Stack } from "expo-router";
+import { useState } from "react";
 import { View } from "react-native";
-import { useSessionChat } from "../session";
+import { useChat } from "../session";
 import { useTheme } from "../theme";
 import {
   Avatar,
@@ -17,14 +17,20 @@ import {
   Segmented,
   Sheet,
 } from "../ui";
-import { stateLabel, type ReadableAgent } from "./Agents";
+import { AgentFallback, stateLabel, useAgent, type ReadableAgent } from "./Agents";
 import { NodeAccess } from "./NodeAccess";
-import { useClient, useManagementAccess, useOperation, useResource } from "./session";
+import {
+  useCanNavigate,
+  useClient,
+  useManagementAccess,
+  useOperation,
+  useResource,
+} from "./session";
 import { SettingsFields, settingsBody, settingsDraft, type SettingsDraft } from "./settings";
 import { Usage } from "./Usage";
 import { Watch } from "./Watch";
 import { Workspace } from "./Workspace";
-import { ErrorLine, Loading, Outcome } from "./ui";
+import { ErrorLine, Outcome } from "./ui";
 
 type Destination = "settings" | "access" | "usage";
 function Settings({ agent, refresh }: { agent: ReadableAgent; refresh(): void }) {
@@ -119,8 +125,7 @@ export function AgentDestination({
   agentId: string;
   destination: Destination;
 }) {
-  const agents = useResource<AgentView[]>("/api/admin/agents", 5000);
-  const agent = agents.data?.find((candidate) => candidate.agentId === agentId);
+  const { agents, agent } = useAgent(agentId);
   if (agent && agent.state !== "unreadable") {
     if (destination === "settings") return <Settings agent={agent} refresh={agents.refresh} />;
     return (
@@ -137,39 +142,23 @@ export function AgentDestination({
   }
   return (
     <Screen>
-      <ErrorLine error={agents.error} />
-      <Loading loading={agents.loading && !agents.data} />
-      {agents.data && (
-        <Empty
-          title={agent ? t("management.cannot_read_agent") : t("management.agent_not_found")}
-          message={
-            agent
-              ? t("management.return_to_the_overview_to_see_the")
-              : t("management.it_may_have_been_deleted")
-          }
-        />
-      )}
-      <Button title={t("management.reload_agent")} onPress={agents.refresh} />
+      <AgentFallback agents={agents} agent={agent} />
     </Screen>
   );
 }
 
 export function AgentDetail({ agentId }: { agentId: string }) {
   const client = useClient();
-  const chat = useSessionChat();
+  const chat = useChat();
   const ready = useManagementAccess().kind === "ready";
+  const canNavigate = useCanNavigate();
   const c = useTheme();
-  const agents = useResource<AgentView[]>("/api/admin/agents", 5000);
+  const { agents, agent } = useAgent(agentId);
   const operation = useOperation();
   const [tab, setTab] = useState<"overview" | "observe" | "workspace">("overview");
   const [management, setManagement] = useState<"menu" | "delete" | null>(null);
-  const focused = useIsFocused();
-  const focus = useRef(focused);
-  useEffect(() => {
-    focus.current = focused;
-  }, [focused]);
-  const agent = agents.data?.find((candidate) => candidate.agentId === agentId);
   const name = agent?.displayName ?? t("chat.agent");
+  const other = agent?.accountId;
   const lifecycle = () => {
     if (!agent || agent.state === "unreadable" || !ready) return;
     setManagement(null);
@@ -257,25 +246,20 @@ export function AgentDetail({ agentId }: { agentId: string }) {
         />
       ) : (
         <Screen grouped={false} onRefresh={agents.refresh} refreshing={agents.loading}>
-          {navigation}
-          <ErrorLine error={agents.error} />
-          <Loading loading={agents.loading && !agents.data} />
-          {!agent && agents.data && (
-            <Empty
-              title={t("management.agent_not_found")}
-              message={t("management.it_may_have_been_deleted")}
-            >
+          {!agent ? (
+            <AgentFallback agents={agents} agent={agent}>
               <Button
                 title={t("management.back_to_agent_list")}
                 onPress={() => router.replace("/agents")}
               />
-            </Empty>
-          )}
-          {agents.error != null && (
-            <Button title={t("management.reload_agent")} onPress={agents.refresh} />
-          )}
-          {agent && (
+            </AgentFallback>
+          ) : (
             <>
+              {navigation}
+              <ErrorLine error={agents.error} />
+              {agents.error != null && (
+                <Button title={t("management.reload_agent")} onPress={agents.refresh} />
+              )}
               <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
                 <Avatar name={name} kind="agent" size={48} />
                 <View style={{ flex: 1, gap: 4 }}>
@@ -291,26 +275,19 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                   onPress={lifecycle}
                 />
               )}
-              {agent.accountId !== undefined && (
+              {other !== undefined && (
                 <Button
                   title={t("management.message")}
                   primary={agent.state === "open"}
-                  disabled={operation.busy || !chat}
+                  disabled={operation.busy}
                   onPress={() => {
-                    const other = agent.accountId;
-                    if (!chat || other === undefined) return;
                     let conversationId: number | undefined;
                     void operation
                       .run(async () => {
                         conversationId = (await chat.create({ kind: "dm", other })).conversationId;
                       }, "")
                       .then((ok) => {
-                        if (
-                          ok &&
-                          focus.current &&
-                          conversationId !== undefined &&
-                          client.getSnapshot().kind === "ready"
-                        )
+                        if (ok && conversationId !== undefined && canNavigate())
                           router.push({
                             pathname: "/conversation",
                             params: { id: conversationId, sourceAgent: agentId },
@@ -398,7 +375,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                 t("management.agent_deleted"),
               )
               .then((ok) => {
-                if (ok && focus.current) router.back();
+                if (ok && canNavigate()) router.back();
               });
           }}
         />

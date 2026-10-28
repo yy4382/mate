@@ -89,7 +89,6 @@ export function SettingsFields({
       >
         <Field
           label={t("management.instructions_for_the_agent")}
-          testID="agent-instructions"
           value={value.instructions}
           multiline
           maxLength={50_000}

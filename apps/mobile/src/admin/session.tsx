@@ -9,38 +9,31 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { Keyboard, View } from "react-native";
-import {
-  QueryClient,
-  QueryClientProvider,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { Keyboard } from "react-native";
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyboardProvider } from "react-native-keyboard-controller";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useNavigation } from "expo-router";
 import { fetch as streamingFetch } from "expo/fetch";
 import { auth } from "../auth-native";
 import { ManagementClient } from "./client";
+import { Creation, newAgentDraft } from "./creation";
 import { PresentationAccess } from "../ui";
 
 const Client = createContext<ManagementClient | null>(null);
 
 function Session({ client, children }: { client: ManagementClient; children: ReactNode }) {
-  const access = useSyncExternalStore(client.subscribe, client.getSnapshot);
+  const { kind } = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const [queries] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
-      }),
+    () => new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0 } } }),
   );
+  const creation = useState(newAgentDraft);
   useEffect(() => {
-    if (access.kind !== "ready") {
+    if (kind !== "ready") {
       Keyboard.dismiss();
       void queries.cancelQueries();
-      if (access.kind === "closed") queries.clear();
+      if (kind === "closed") queries.clear();
     } else void queries.invalidateQueries();
-  }, [access, queries]);
+  }, [kind, queries]);
   useEffect(
     () => () => {
       void queries.cancelQueries();
@@ -48,21 +41,15 @@ function Session({ client, children }: { client: ManagementClient; children: Rea
     },
     [queries],
   );
-  if (access.kind === "closed") return null;
-  const suspended = access.kind === "suspended";
+  if (kind === "closed") return null;
   return (
-    <View
-      style={{ flex: 1, opacity: suspended ? 0 : 1 }}
-      pointerEvents={suspended ? "none" : "auto"}
-      accessibilityElementsHidden={suspended}
-      importantForAccessibility={suspended ? "no-hide-descendants" : "auto"}
-    >
-      <Client.Provider value={client}>
-        <PresentationAccess.Provider value={!suspended}>
-          <QueryClientProvider client={queries}>{children}</QueryClientProvider>
-        </PresentationAccess.Provider>
-      </Client.Provider>
-    </View>
+    <Client.Provider value={client}>
+      <PresentationAccess.Provider value={kind === "ready"}>
+        <QueryClientProvider client={queries}>
+          <Creation.Provider value={creation}>{children}</Creation.Provider>
+        </QueryClientProvider>
+      </PresentationAccess.Provider>
+    </Client.Provider>
   );
 }
 
@@ -105,6 +92,13 @@ export function useHuman() {
   return access.kind === "closed" ? undefined : access.session.human;
 }
 
+/** Whether the calling screen may still navigate once an awaited operation settles. */
+export function useCanNavigate() {
+  const navigation = useNavigation();
+  const client = useClient();
+  return () => navigation.isFocused() && client.getSnapshot().kind === "ready";
+}
+
 export function useResource<T>(path: string, interval = 0) {
   const client = useClient();
   const queries = useQueryClient();
@@ -133,35 +127,30 @@ export function useResource<T>(path: string, interval = 0) {
   };
 }
 
+const idle: { busy: boolean; error: unknown; message: string } = {
+  busy: false,
+  error: null,
+  message: "",
+};
+
 export function useOperation() {
-  const mutation = useMutation({
-    mutationFn: async ({ work, message }: { work: () => Promise<unknown>; message: string }) => {
-      await work();
-      return message;
-    },
-  });
+  const [outcome, setOutcome] = useState(idle);
   const busy = useRef(false);
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
   return {
-    busy: mutation.isPending,
-    error: mutation.error,
-    message: mutation.isSuccess ? mutation.data : "",
+    ...outcome,
     reset: () => {
-      if (!busy.current) mutation.reset();
+      if (!busy.current) setOutcome(idle);
     },
     run: async (work: () => Promise<unknown>, message = t("management.saved_2")) => {
       if (busy.current) return false;
       busy.current = true;
+      setOutcome({ ...idle, busy: true });
       try {
-        await mutation.mutateAsync({ work, message });
-        return mounted.current;
-      } catch {
+        await work();
+        setOutcome({ ...idle, message });
+        return true;
+      } catch (error) {
+        setOutcome({ ...idle, error });
         return false;
       } finally {
         busy.current = false;

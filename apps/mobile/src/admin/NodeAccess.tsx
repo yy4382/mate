@@ -2,9 +2,9 @@ import { t } from "../i18n";
 import type { NodeStatusResult } from "@mate/admin";
 import { View } from "react-native";
 import type { ReadableAgent } from "./Agents";
-import { Button, Caption, Copy, Row, Section } from "../ui";
+import { Button, Caption, Copy, Loading, Row, Section } from "../ui";
 import { useClient, useOperation, useResource } from "./session";
-import { ErrorLine, Loading, Outcome } from "./ui";
+import { ErrorLine, Outcome } from "./ui";
 
 function NodeGrant({
   node,
