@@ -9,13 +9,13 @@ import type { NotificationState } from "../../../notifications";
 const openSettings = () => void Linking.openSettings();
 const summaries = {
   "signed-out": {
-    title: t("settings.sign_in_first_2"),
+    title: t("settings.sign_in_first_title"),
     description: t("settings.sign_in_to_configure_notifications_for_this"),
     action: "",
     run: () => {},
   },
   checking: {
-    title: t("settings.checking_notifications_2"),
+    title: t("settings.checking_notifications_title"),
     description: t("settings.checking_the_current_delivery_status_please_wait"),
     action: "",
     run: () => {},

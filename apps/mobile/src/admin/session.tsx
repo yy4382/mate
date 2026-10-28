@@ -141,7 +141,7 @@ export function useOperation() {
     reset: () => {
       if (!busy.current) setOutcome(idle);
     },
-    run: async (work: () => Promise<unknown>, message = t("management.saved_2")) => {
+    run: async (work: () => Promise<unknown>, message = t("management.saved_sentence")) => {
       if (busy.current) return false;
       busy.current = true;
       setOutcome({ ...idle, busy: true });

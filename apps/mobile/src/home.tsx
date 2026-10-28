@@ -87,7 +87,7 @@ function ServerForm({
       {initial ? (
         <ConfirmButton
           title={t("auth.save_server")}
-          question={t("auth.switch_server_2")}
+          question={t("auth.switch_server_question")}
           message={t("auth.you_will_be_signed_out_and_this")}
           confirmLabel={t("auth.switch_and_sign_out")}
           disabled={busy || !address.trim()}

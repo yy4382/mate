@@ -633,7 +633,7 @@ function ObservationTarget({
               <View key={index} style={{ gap: 8 }}>
                 <Caption>
                   {block.type === "thinking"
-                    ? t("observation.thinking_2")
+                    ? t("observation.thinking_in_progress")
                     : block.type === "toolCall"
                       ? t("observation.preparing_tool_call")
                       : t("observation.writing")}
