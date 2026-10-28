@@ -1,3 +1,4 @@
+import type { Role } from "@mate/control-plane/contracts";
 import "@formatjs/intl-locale/polyfill.js";
 import "@formatjs/intl-pluralrules/polyfill.js";
 import "@formatjs/intl-pluralrules/locale-data/en.js";
@@ -35,6 +36,9 @@ export function initializeDeviceLanguage(preferences: readonly string[]): void {
   locale = match ?? "en-US";
   void i18n.changeLanguage(language);
 }
+
+export const roleText = (role: Role): string =>
+  role === "admin" ? t("settings.administrator") : t("settings.human_member");
 
 export const numberText = (value: number, options?: Intl.NumberFormatOptions): string =>
   new Intl.NumberFormat(locale, options).format(value);

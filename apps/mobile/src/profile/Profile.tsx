@@ -1,5 +1,5 @@
 import { passwordTooShort } from "@mate/control-plane/passwords";
-import { t } from "../i18n";
+import { roleText, t } from "../i18n";
 import { router, Stack } from "expo-router";
 import { useState } from "react";
 import { useCanNavigate, useClient, useHuman, useOperation } from "../admin/session";
@@ -17,10 +17,7 @@ export function Profile() {
           subtitle={`@${human.handle}`}
           leading={<Avatar name={human.displayName} size={48} />}
         />
-        <Row
-          title={t("settings.role")}
-          value={human.role === "admin" ? t("settings.administrator") : t("settings.human_member")}
-        />
+        <Row title={t("settings.role")} value={roleText(human.role)} />
       </Section>
       <Section>
         <Row

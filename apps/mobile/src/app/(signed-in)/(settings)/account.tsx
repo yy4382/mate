@@ -1,4 +1,4 @@
-import { t } from "../../../i18n";
+import { roleText, t } from "../../../i18n";
 import { router } from "expo-router";
 import { useHuman, useClient } from "../../../admin/session";
 import { Avatar, Row, Screen, Section } from "../../../ui";
@@ -11,7 +11,7 @@ export default function SettingsScreen() {
       <Section>
         <Row
           title={human.displayName}
-          subtitle={`@${human.handle} · ${human.role === "admin" ? t("settings.administrator") : t("settings.human_member")}`}
+          subtitle={`@${human.handle} · ${roleText(human.role)}`}
           leading={<Avatar name={human.displayName} size={48} />}
           onPress={() => router.push("/profile")}
         />

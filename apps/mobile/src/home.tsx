@@ -1,4 +1,4 @@
-import { t } from "./i18n";
+import { roleText, t } from "./i18n";
 import { useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
 import {
   ActivityIndicator,
@@ -233,7 +233,7 @@ export function HomeScreen({ account = false }: { account?: boolean }) {
                   <Section>
                     <Row
                       title={state.human.displayName}
-                      subtitle={`@${state.human.handle} · ${state.human.role === "admin" ? t("settings.administrator") : t("settings.human_member")}`}
+                      subtitle={`@${state.human.handle} · ${roleText(state.human.role)}`}
                       leading={<Avatar name={state.human.displayName} />}
                     />
                   </Section>
