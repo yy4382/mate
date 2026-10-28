@@ -54,7 +54,6 @@ export function usePush() {
       if ((await Notification.requestPermission()) !== "granted") return setState("denied");
       const registration = await navigator.serviceWorker.register("/sw.js", {
         scope: "/",
-        type: "module",
       });
       await navigator.serviceWorker.ready;
       const { publicKey } = await get<{ publicKey: string }>("/api/chat/push/key");

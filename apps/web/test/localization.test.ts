@@ -1,6 +1,9 @@
+/// <reference lib="webworker" />
 import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, it } from "vitest";
-import { PASSWORD, newPage, startSite } from "./support.ts";
+import { PASSWORD, newPage, startSite, webDirectory } from "./support.ts";
 
 it.each([
   { languages: ["zh-CN", "en-US"], lang: "zh-CN", heading: "登录 Mate" },
@@ -246,5 +249,77 @@ it.each(["en", "zh"] as const)(
     await reader.getByRole("navigation", { name: copy.nav }).waitFor();
     await reader.goto(`${site.origin}/app/admin/agents`);
     await reader.getByText(copy.denied, { exact: true }).waitFor();
+  },
+);
+
+it.each(["en-US", "zh-CN"])(
+  "an existing classic notification worker upgrades and shows %s notifications",
+  async (locale) => {
+    const site = await startSite();
+    const { page, context } = await newPage(site, undefined, locale);
+    const script = join(await webDirectory(), "sw.js");
+    const current = readFileSync(script, "utf8");
+    writeFileSync(
+      script,
+      'self.addEventListener("install", () => self.skipWaiting()); self.addEventListener("activate", event => event.waitUntil(self.clients.claim()));',
+    );
+    try {
+      await page.goto(`${site.origin}/login`);
+      await page.evaluate(async () => {
+        const controlled = new Promise<void>((resolve) =>
+          navigator.serviceWorker.addEventListener("controllerchange", () => resolve(), {
+            once: true,
+          }),
+        );
+        await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+        await navigator.serviceWorker.ready;
+        if (navigator.serviceWorker.controller === null) await controlled;
+      });
+    } finally {
+      writeFileSync(script, current);
+    }
+    const replacement = context.waitForEvent("serviceworker");
+    await page.evaluate(async () => {
+      const controlled = new Promise<void>((resolve) =>
+        navigator.serviceWorker.addEventListener("controllerchange", () => resolve(), {
+          once: true,
+        }),
+      );
+      const registration = await navigator.serviceWorker.getRegistration("/");
+      if (registration === undefined)
+        throw new Error("The existing notification registration is missing");
+      await registration.update();
+      await controlled;
+    });
+    const worker = await replacement;
+    const title = await worker.evaluate(async () => {
+      const worker = globalThis as unknown as ServiceWorkerGlobalScope;
+      let shown = "";
+      Object.defineProperty(worker.registration, "showNotification", {
+        value: async (title: string) => {
+          shown = title;
+        },
+      });
+      worker.dispatchEvent(
+        new PushEvent("push", {
+          data: JSON.stringify({
+            sender: "Original 名字",
+            kind: "dm",
+            mentioned: true,
+            conversationId: 1,
+            timeline: { conversation: 1 },
+            seq: 7,
+            tag: "localized-notice",
+            at: 1,
+          }),
+        }),
+      );
+      return shown;
+    });
+    expect(title).toBe(
+      locale === "zh-CN"
+        ? "Original 名字 在私信里提到了你"
+        : "Original 名字 mentioned you in a direct message",
+    );
   },
 );
