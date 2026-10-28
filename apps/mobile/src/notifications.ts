@@ -2,7 +2,7 @@ import { t, noticeText } from "./i18n";
 import { ApnsSubscription, NativePushCapability, NativePushNotice } from "@mate/chat/push";
 import { z } from "zod";
 
-export type NotificationSession = { server: string; accountId: number };
+type NotificationSession = { server: string; accountId: number };
 export type NotificationPermission = "undetermined" | "denied" | "allowed" | "quiet";
 export type NotificationDestination = Pick<NativePushNotice, "conversationId" | "threadId" | "seq">;
 const Registration = z.object({
@@ -77,19 +77,8 @@ export class MobileNotifications {
   private opened = new Set<string>();
 
   constructor(private platform: NotificationsPlatform) {
-    const stored = platform.read();
-    const parsed = Registrations.safeParse(stored);
-    const legacy = Registration.extend({ kind: z.enum(["subscribed", "cleanup"]) }).safeParse(
-      stored,
-    );
-    this.registrations = parsed.success
-      ? parsed.data
-      : legacy.success
-        ? {
-            current: legacy.data.kind === "subscribed" ? legacy.data : null,
-            cleanup: legacy.data.kind === "cleanup" ? [legacy.data] : [],
-          }
-        : { current: null, cleanup: [] };
+    const stored = Registrations.safeParse(platform.read());
+    this.registrations = stored.success ? stored.data : { current: null, cleanup: [] };
   }
 
   getSnapshot = () => this.state;
@@ -350,7 +339,6 @@ export class MobileNotifications {
       "enabled",
       noticeText(t("settings.notifications_registered_with_the_server_only_direct"), message),
     );
-    this.consumeTap();
   }
 
   private async retire(session: NotificationSession | null): Promise<string> {

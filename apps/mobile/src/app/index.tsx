@@ -54,7 +54,6 @@ function ServerForm({
       <Card>
         <Field
           label={t("auth.server_address")}
-          testID="server-address"
           value={address}
           onChangeText={setAddress}
           editable={!busy}
@@ -107,7 +106,6 @@ function LoginForm({ busy, message }: { busy: boolean; message: string }) {
       <Card>
         <Field
           label={t("settings.handle")}
-          testID="login-handle"
           value={handle}
           onChangeText={setHandle}
           editable={!busy}
@@ -123,7 +121,6 @@ function LoginForm({ busy, message }: { busy: boolean; message: string }) {
           <TextInput
             ref={passwordField}
             accessibilityLabel={t("auth.password")}
-            testID="login-password"
             value={password}
             onChangeText={setPassword}
             editable={!busy}

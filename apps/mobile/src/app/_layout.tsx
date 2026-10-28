@@ -1,4 +1,4 @@
-import { useTranslation } from "react-i18next";
+import { t } from "../i18n";
 import { Session } from "../session";
 import { AgentCreationProvider } from "../admin/creation";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
@@ -9,7 +9,6 @@ import { NotificationIntegration } from "../notifications-root";
 import { useTheme } from "../theme";
 
 export default function RootLayout() {
-  const { t } = useTranslation();
   const colors = useTheme();
   const navigationTheme = useColorScheme() === "dark" ? DarkTheme : DefaultTheme;
 

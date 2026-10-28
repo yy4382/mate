@@ -411,35 +411,6 @@ describe("native notification lifecycle public interface", () => {
     },
   );
 
-  it.each(["subscribed", "cleanup"])(
-    "restores the previous %s persistence format without losing its binding",
-    async (kind) => {
-      const f = fixture();
-      const binding = randomUUID();
-      const legacy = {
-        kind,
-        ...session,
-        subscription: {
-          transport: "apns",
-          token: "ab".repeat(32),
-          environment: "sandbox",
-          binding,
-        },
-      };
-      f.platform.read = () => legacy;
-      const restored = new MobileNotifications(f.platform);
-      await restored.setSession(session);
-      expect(restored.getSnapshot().kind).toBe(kind === "subscribed" ? "enabled" : "disabled");
-      expect(f.calls.at(-1 - (kind === "cleanup" ? 1 : 0))).toMatchObject({
-        path:
-          session.server +
-          "/api/chat/push/" +
-          (kind === "subscribed" ? "subscribe" : "unsubscribe"),
-        body: expect.stringContaining(binding),
-      });
-    },
-  );
-
   it("restores a registration only after validating the same server and signed-in account", async () => {
     const f = fixture();
     await f.app.setSession(session);
