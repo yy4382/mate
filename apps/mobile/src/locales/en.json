@@ -542,6 +542,7 @@
     "active_account": "Active account",
     "permanently_deactivated": "Permanently deactivated",
     "role_changed_previous_sessions_have_ended": "Role changed. Previous sessions have ended.",
+    "password_reset_previous_sessions_have_ended": "Password reset. Previous sessions have ended.",
     "permanently_deactivated_chat_messages_are_kept": "Permanently deactivated. Chat messages are kept.",
     "human_details": "Human details",
     "human_account_not_found": "Human account not found",

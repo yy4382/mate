@@ -1,11 +1,9 @@
-import { UnreadSummary } from "./contracts.ts";
-export { UnreadSummary } from "./contracts.ts";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
+import { ConversationKind, TimelineRef, UnreadSummary } from "./contracts.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
-import { ConversationKind } from "./conversations.ts";
 import { Id } from "./identifiers.ts";
-import { TimelineRef, timelineRefOf } from "./timelines.ts";
+import { timelineRefOf } from "./timelines.ts";
 
 /**
  * Notify, in the same transaction as the message, every active account other than its author that follows the

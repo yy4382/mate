@@ -5,11 +5,19 @@ import { openAdmin } from "@mate/admin";
 import { ChatApp, type PushSender } from "@mate/chat";
 import { systemClock, type Clock } from "@mate/clock";
 import { createNodeGateway } from "@mate/gateway";
-import { LoginInput, type LoginResult } from "@mate/auth";
+import { LoginInput, type LoginResult } from "./contracts.ts";
 import { EventStream } from "./event-stream.ts";
 import { Frontend } from "./frontend.ts";
 import { humanRoutes } from "./human-routes.ts";
-import { cookie, parseBody, readJson, refusal, requireSameOrigin, sendJson } from "./http.ts";
+import {
+  cookie,
+  parseBody,
+  parseJson,
+  readBody,
+  refusal,
+  requireSameOrigin,
+  sendJson,
+} from "./http.ts";
 import { Humans, bootstrapHumans, SESSION_TTL_MS, type Session } from "./humans.ts";
 import { vapidKeys, webPushSender } from "./push.ts";
 import { adminRoutes, chatRoutes, matchRoute, requireRole } from "./routes.ts";
@@ -72,9 +80,10 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
         options.push ??
         ((subscription, notice) =>
           subscription.transport === "apns"
-            ? apns
+            ? // With native push turned off, keep the subscription so it works again once turned back on.
+              apns
               ? apns.send(subscription, notice)
-              : Promise.resolve(503)
+              : Promise.resolve("refused")
             : web(subscription, notice)),
     });
     closers.push(() => chat.close());
@@ -105,8 +114,11 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
       const method = request.method ?? "GET";
       const token = cookie(request, SESSION_COOKIE);
       if (method !== "GET") requireSameOrigin(request);
+      // The session is looked up only once the whole request has arrived, so a request still arriving when its
+      // session logs out acts as nobody.
+      const body = method === "GET" ? undefined : await readBody(request);
       if (method === "POST" && url.pathname === "/api/login") {
-        const input = parseBody(LoginInput, await readJson(request));
+        const input = parseBody(LoginInput, parseJson(request, body));
         const account = chat.findHuman(input.handle);
         const result = await humans.logIn(
           account?.active === true ? account.externalId : undefined,
@@ -142,7 +154,7 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
         human,
         params,
         query: url.searchParams,
-        body: method === "GET" ? undefined : await readJson(request),
+        body: parseJson(request, body),
         lastEventId: typeof lastEventId === "string" ? lastEventId : undefined,
       };
       if ("json" in route) return sendJson(response, 200, await route.json(input));

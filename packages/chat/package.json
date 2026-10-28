@@ -13,12 +13,6 @@
       "mate-source": "./src/contracts.ts",
       "types": "./dist/src/contracts.d.ts",
       "default": "./dist/src/contracts.js"
-    },
-    "./push": {
-      "react-native": "./src/push-contract.ts",
-      "mate-source": "./src/push-contract.ts",
-      "types": "./dist/src/push-contract.d.ts",
-      "default": "./dist/src/push-contract.js"
     }
   },
   "scripts": {

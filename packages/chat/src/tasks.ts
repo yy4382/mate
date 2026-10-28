@@ -1,5 +1,4 @@
 import { TaskStatus, Task, TaskResult } from "./contracts.ts";
-export { TaskStatus, Task, TaskResult } from "./contracts.ts";
 import { z } from "zod";
 import { targetAccount, type Actor } from "./accounts.ts";
 import { ChatError } from "./chat-error.ts";

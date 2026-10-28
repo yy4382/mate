@@ -1,16 +1,14 @@
-import { SentMessage, SendResult } from "./contracts.ts";
-export { SentMessage, HeldMessage, SendResult } from "./contracts.ts";
 import { z } from "zod";
 import { targetAccount, type Actor } from "./accounts.ts";
+import { Attachment, SentMessage, SendResult, TimelineRef, type Entry } from "./contracts.ts";
 import { READABLE_BY, requireWritable, type Conversation } from "./conversations.ts";
 import { idList, type ChatDatabase } from "./database.ts";
-import { Attachment, loadEntries, appendEntry } from "./entries.ts";
+import { loadEntries, appendEntry } from "./entries.ts";
 import { FreshnessOptions, freshWrite } from "./forward-reading.ts";
 import { Id, RequestId } from "./identifiers.ts";
 import { notifyMessage } from "./inbox.ts";
-import { TimelineRef, createTimeline, resolveTimeline } from "./timelines.ts";
+import { createTimeline, resolveTimeline } from "./timelines.ts";
 import { insertTask, TaskTitle } from "./tasks.ts";
-import type { Entry } from "./entries.ts";
 
 export const SendRequest = z.object({
   requestId: RequestId,

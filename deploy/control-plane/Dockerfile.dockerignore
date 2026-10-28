@@ -5,7 +5,6 @@
 .worktrees
 .pnpm-store
 .claude
-.audit
 coverage
 data
 docs

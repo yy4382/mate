@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatApp } from "@mate/chat";
-import { ApnsSubscription } from "@mate/chat/push";
+import { ApnsSubscription } from "@mate/chat/contracts";
 import { describe, expect, it, onTestFinished } from "vitest";
 import {
   MobileNotifications,
@@ -117,7 +117,7 @@ function deliveryFixture() {
   const chat = new ChatApp(join(directory, "chat.sqlite"), {
     push: async (subscription) => {
       if (subscription.transport === "apns") deliveries.push(subscription.token);
-      return 200;
+      return "delivered" as const;
     },
   });
   onTestFinished(() => {

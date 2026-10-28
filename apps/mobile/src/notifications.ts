@@ -1,5 +1,5 @@
 import { t, noticeText } from "./i18n";
-import { ApnsSubscription, NativePushCapability, NativePushNotice } from "@mate/chat/push";
+import { ApnsSubscription, NativePushCapability, NativePushNotice } from "@mate/chat/contracts";
 import { z } from "zod";
 
 export type NotificationSession = { server: string; accountId: number };

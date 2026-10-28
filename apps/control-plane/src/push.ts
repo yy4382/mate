@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { PushSender } from "@mate/chat";
+import type { PushNotice, PushOutcome } from "@mate/chat";
+import type { WebPushSubscription } from "@mate/chat/contracts";
 import webPush from "web-push";
 import { z } from "zod";
 
@@ -36,22 +37,27 @@ export function vapidKeys(db: DatabaseSync): VapidKeys {
  * Deliver a push through the browser's push service, encrypted to the subscription's keys and signed with the VAPID
  * keys. `subject` is the contact the push service may use, a `mailto:` or `https:` URL.
  */
-export function webPushSender(keys: VapidKeys, subject: string): PushSender {
+export function webPushSender(keys: VapidKeys, subject: string) {
   const vapidDetails = { subject, ...keys };
-  return async (subscription, notice) => {
-    if (subscription.transport === "apns")
-      throw new Error("Web Push requires a browser subscription");
+  return async (subscription: WebPushSubscription, notice: PushNotice): Promise<PushOutcome> => {
     try {
-      const response = await webPush.sendNotification(subscription, JSON.stringify(notice), {
+      await webPush.sendNotification(subscription, JSON.stringify(notice), {
         vapidDetails,
         TTL: PUSH_TTL_SECONDS,
         timeout: PUSH_TIMEOUT_MS,
       });
-      return response.statusCode;
+      return "delivered";
     } catch (error) {
       // An answer other than 2xx; anything else means the service could not be reached.
-      if (error instanceof webPush.WebPushError) return error.statusCode;
+      if (error instanceof webPush.WebPushError) return outcomeOf(error.statusCode);
       throw error;
     }
   };
+}
+
+/** RFC 8030: the subscription is gone (404, 410); worth retrying (408, 429, 5xx); or refused for good. */
+function outcomeOf(status: number): PushOutcome {
+  if (status === 404 || status === 410) return "gone";
+  if (status === 408 || status === 429 || status >= 500) return "retry";
+  return "refused";
 }

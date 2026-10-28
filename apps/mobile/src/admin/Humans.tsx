@@ -1,11 +1,11 @@
 import { t } from "../i18n";
-import { HumanView, Role, type HumanView as Human } from "@mate/auth";
+import { HumanView, Role, type HumanView as Human } from "@mate/control-plane/contracts";
 import { randomUUID } from "expo-crypto";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { auth } from "../auth-native";
 import { ApiError } from "./client";
-import { useClient, useHuman, useOperation, useResource } from "./session";
+import { useClient, useHuman, useManagementAccess, useOperation, useResource } from "./session";
 import { ErrorLine, Outcome } from "./ui";
 import {
   Avatar,
@@ -147,11 +147,12 @@ function AddHuman({ visible, onClose, done }: { visible: boolean; onClose(): voi
 export function Humans() {
   const humans = useResource<Human[]>("/api/humans");
   const me = useHuman();
+  const ready = useManagementAccess().kind === "ready";
   const [adding, setAdding] = useState(false);
   return (
     <Screen onRefresh={humans.refresh} refreshing={humans.loading}>
       <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button onPress={() => setAdding(true)}>
+        <Stack.Toolbar.Button hidden={!ready} onPress={() => setAdding(true)}>
           {t("management.add")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
@@ -283,6 +284,7 @@ export function HumanDetail() {
                 </Section>
               )}
               {task !== "role" && <Outcome operation={operation} />}
+              {task !== "password" && <Outcome operation={reset} />}
               {!isMe && (
                 <ConfirmButton
                   title={t("management.permanently_deactivate_account")}
@@ -359,7 +361,7 @@ export function HumanDetail() {
                     void reset
                       .run(
                         () => client.request(`/api/humans/${id}/password`, "POST", { password }),
-                        "",
+                        t("management.password_reset_previous_sessions_have_ended"),
                       )
                       .then((ok) => {
                         if (ok) {

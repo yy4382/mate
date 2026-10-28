@@ -1,5 +1,4 @@
 import { TimelineRef } from "./contracts.ts";
-export { TimelineRef } from "./contracts.ts";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
 import { ChatError } from "./chat-error.ts";

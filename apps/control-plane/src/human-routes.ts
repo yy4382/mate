@@ -1,7 +1,7 @@
-import type { HumanView } from "@mate/auth";
 import { AccountNames, type ChatApp } from "@mate/chat";
 import { z } from "zod";
-import { NewPassword, Role, type HumanRecord, type Humans } from "./humans.ts";
+import { Role, type HumanView } from "./contracts.ts";
+import { NewPassword, type HumanRecord, type Humans } from "./humans.ts";
 import { HttpError, parseBody } from "./http.ts";
 import { adminOnly, type Route, type RouteInput } from "./routes.ts";
 

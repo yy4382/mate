@@ -1,4 +1,4 @@
-import type { LoginInput, LoginResult } from "@mate/auth";
+import type { LoginInput, LoginResult } from "@mate/control-plane/contracts";
 import { t } from "../i18n.ts";
 import { useState } from "react";
 import { Mark } from "./App.tsx";

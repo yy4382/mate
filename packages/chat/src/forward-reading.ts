@@ -1,5 +1,4 @@
 import { ReadPage } from "./contracts.ts";
-export { ReadPage } from "./contracts.ts";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
 import type { ChatDatabase } from "./database.ts";
