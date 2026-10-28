@@ -1,7 +1,7 @@
+import { mentionsIn, timelineKey, unsentText, type TimelineKey } from "@mate/chat/client";
 import { useSyncExternalStore } from "react";
 import { ApiError, describe, post } from "../shell/api.ts";
-import type { AccountView, TimelineKey, TimelineRef } from "./types.ts";
-import { timelineKey } from "./types.ts";
+import type { AccountView, TimelineRef } from "./types.ts";
 
 /** A message on its way. It keeps its requestId until it is sent, so a retry is the same request. */
 type Pending = {
@@ -41,19 +41,6 @@ export const setDraftText = (ref: TimelineRef, text: string) =>
   update(timelineKey(ref), (draft) => ({ ...draft, text }));
 
 /** The accounts a message's `@handle` words name: the only way a message mentions someone. */
-export function mentionsIn(body: string, accounts: readonly AccountView[]): number[] {
-  const ids = new Set<number>();
-  for (const [, handle] of body.matchAll(/@([\p{L}\p{N}][\p{L}\p{N}_.-]*)/gu)) {
-    const account = accounts.find(
-      (a) => a.active && a.handle.toLowerCase() === handle?.toLowerCase(),
-    );
-    if (account !== undefined) ids.add(account.accountId);
-  }
-  return [...ids].sort((a, b) => a - b);
-}
-
-const after = (text: string, sent: string) =>
-  text.startsWith(sent) ? text.slice(sent.length).trimStart() : text;
 
 async function deliver(ref: TimelineRef): Promise<void> {
   const key = timelineKey(ref);
@@ -67,7 +54,11 @@ async function deliver(ref: TimelineRef): Promise<void> {
       body: pending.body,
       mentions: pending.mentions,
     });
-    update(key, (draft) => ({ text: after(draft.text, pending.text), pending: null, error: null }));
+    update(key, (draft) => ({
+      text: unsentText(draft.text, pending.text),
+      pending: null,
+      error: null,
+    }));
   } catch (error) {
     // A refusal changed nothing, so the next send is a new request. Anything else may have reached the server.
     const refused = error instanceof ApiError && error.status >= 400 && error.status < 500;

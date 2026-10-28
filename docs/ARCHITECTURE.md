@@ -551,7 +551,7 @@ interface Admin {
 
 ### 4.8 客户端边界
 
-网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑：两端都用的纯逻辑放在所属包不依赖 Node 的 `client` 入口（`@mate/admin/client` 的观察归约和 node 配对命令），网页的 Vite 构建和原生端都按 `mate-source` 条件从源码引用；文案仍由各端翻译。API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
+网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑：两端都用的纯逻辑放在所属包不依赖 Node 的 `client` 入口（`@mate/chat/client` 的时间线键、条目合并、提及解析、发送后草稿余下的文字和重连退避；`@mate/admin/client` 的观察归约和 node 配对命令），网页的 Vite 构建和原生端都按 `mate-source` 条件从源码引用；文案仍由各端翻译。API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
 
 移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.config.ts` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。当前覆盖 HTTPS 服务器选择、cookie 登录与恢复、频道和私信、讨论串、搜索、提及、消息任务和未读，以及完整管理、Agent 观察、个人资料与通知设置。分发、签名与真实 APNs 送达仍需 Apple 环境验证。
 

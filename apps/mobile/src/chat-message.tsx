@@ -1,7 +1,8 @@
 import { t, dateText, numberText } from "./i18n";
 import { Pressable, Text, View } from "react-native";
 import type { AccountView, Entry } from "@mate/chat/contracts";
-import { accountName, taskStatus } from "./chat";
+import { accountName } from "@mate/chat/client";
+import { taskStatus } from "./chat";
 import { MessageBody } from "./message-body";
 import { Avatar, Caption, Copy } from "./ui";
 import { useTheme } from "./theme";

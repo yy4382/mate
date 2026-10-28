@@ -1,3 +1,4 @@
+import { accountName, mergeEntries, timelineKey, timelineQuery } from "@mate/chat/client";
 import { t, locale } from "../i18n.ts";
 import { queryOptions, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { get } from "../shell/api.ts";
@@ -5,20 +6,11 @@ import {
   finishFetching,
   keys,
   markFetching,
-  mergeEntries,
   recordReplies,
   type ThreadReplies,
   type TimelineData,
 } from "./cache.ts";
-import {
-  timelineKey,
-  timelineQuery,
-  type AccountView,
-  type ConversationView,
-  type Entry,
-  type TimelineRef,
-  type UnreadSummary,
-} from "./types.ts";
+import type { AccountView, ConversationView, Entry, TimelineRef, UnreadSummary } from "./types.ts";
 
 export const PAGE = 50;
 
@@ -103,11 +95,6 @@ export async function loadOlder(qc: QueryClient, ref: TimelineRef): Promise<bool
     entries: mergeEntries(old?.entries ?? [], entries),
   }));
   return true;
-}
-
-export function accountName(accounts: readonly AccountView[], id: number): string {
-  const account = accounts.find((a) => a.accountId === id);
-  return account === undefined ? `#${id}` : account.displayName;
 }
 
 /** A human gets an initial; an Agent is drawn from its account ID. */

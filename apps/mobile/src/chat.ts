@@ -1,3 +1,12 @@
+import {
+  accountName,
+  liveRetryDelay,
+  mentionsIn,
+  mergeEntries,
+  timelineKey,
+  timelineQuery,
+  unsentText,
+} from "@mate/chat/client";
 import { t, listText } from "./i18n";
 import { systemClock, type Clock } from "@mate/clock";
 import { readEvents, sendJson } from "./http";
@@ -15,10 +24,6 @@ import {
 } from "@mate/chat/contracts";
 import { z } from "zod";
 
-export const timelineKey = (ref: TimelineRef) =>
-  "conversation" in ref ? `c${ref.conversation}` : `t${ref.thread}`;
-const query = (ref: TimelineRef) =>
-  "conversation" in ref ? `conversation=${ref.conversation}` : `thread=${ref.thread}`;
 type Pending = {
   requestId: string;
   body: string;
@@ -110,8 +115,6 @@ const refusals: Record<string, string> = {
 };
 const errorText = (error: unknown) =>
   error instanceof Refusal ? error.message : t("chat.could_not_connect_to_the_server_check");
-const merge = (old: readonly Entry[], entries: readonly Entry[]) =>
-  [...new Map([...old, ...entries].map((e) => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
 /** Replaces or adds one row, keeping the server's order by ID. */
 const upsert = <T>(rows: readonly T[], row: T, id: (row: T) => number) =>
   [...rows.filter((r) => id(r) !== id(row)), row].sort((a, b) => id(a) - id(b));
@@ -304,7 +307,7 @@ export class MobileChat {
         watchdog?.abort();
         streamRequest.abort();
         this.publish({ connection: "reconnecting", error: errorText(error) });
-        await this.clock.sleep([500, 1000, 2000, 5000][Math.min(failures++, 3)], signal);
+        await this.clock.sleep(liveRetryDelay(failures++), signal);
       } finally {
         watchdog?.abort();
         streamRequest.abort();
@@ -319,7 +322,7 @@ export class MobileChat {
       if (event.type === "entry") {
         const key = timelineKey(event.timeline);
         const old = timelines.get(key);
-        if (old) timelines.set(key, { ...old, entries: merge(old.entries, [event.entry]) });
+        if (old) timelines.set(key, { ...old, entries: mergeEntries(old.entries, [event.entry]) });
       } else if (event.type === "account") {
         accounts = upsert(accounts, event.account, (a) => a.accountId);
       } else if (event.type === "conversation") {
@@ -365,12 +368,12 @@ export class MobileChat {
     try {
       const before = older ? old.entries[0]?.seq : undefined;
       const entries = await this.request(
-        `/api/chat/history?${query(ref)}&limit=50${before === undefined ? "" : `&before=${before - 1}`}`,
+        `/api/chat/history?${timelineQuery(ref)}&limit=50${before === undefined ? "" : `&before=${before - 1}`}`,
         z.array(Entry),
       );
       if (version !== this.snapshotVersion) return;
       this.setTimeline(ref, {
-        entries: merge(this.timeline(ref).entries, entries),
+        entries: mergeEntries(this.timeline(ref).entries, entries),
         loading: false,
         loaded: true,
         error: "",
@@ -476,19 +479,12 @@ export class MobileChat {
   async send(ref: TimelineRef): Promise<void> {
     const draft = this.draft(ref);
     if (draft.pending?.status === "sending" || (!draft.pending && !draft.text.trim())) return;
-    const mentions = new Set<number>();
-    for (const [, handle] of draft.text.matchAll(/@([\p{L}\p{N}][\p{L}\p{N}_.-]*)/gu)) {
-      const account = this.state.accounts.find(
-        (a) => a.active && a.handle.toLowerCase() === handle?.toLowerCase(),
-      );
-      if (account) mentions.add(account.accountId);
-    }
     const pending: Pending = {
       ...(draft.pending ?? {
         requestId: this.platform.requestId(),
         body: draft.text.trim(),
         text: draft.text,
-        mentions: [...mentions].sort((a, b) => a - b),
+        mentions: mentionsIn(draft.text, this.state.accounts),
       }),
       status: "sending",
     };
@@ -503,9 +499,7 @@ export class MobileChat {
       if (result.status !== "sent") throw new Error("held");
       const current = this.draft(ref);
       this.setDraft(ref, {
-        text: current.text.startsWith(pending.text)
-          ? current.text.slice(pending.text.length).trimStart()
-          : current.text,
+        text: unsentText(current.text, pending.text),
         pending: null,
         error: "",
       });
@@ -574,9 +568,6 @@ export class MobileChat {
   }
 }
 
-export function accountName(accounts: readonly AccountView[], id: number) {
-  return accounts.find((a) => a.accountId === id)?.displayName ?? `#${id}`;
-}
 export function taskStatus(
   task: Extract<Entry, { kind: "task" }>,
   accounts: readonly AccountView[],

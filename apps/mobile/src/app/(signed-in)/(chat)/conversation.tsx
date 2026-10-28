@@ -6,7 +6,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AppState, FlatList, KeyboardAvoidingView, Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Entry, TimelineRef } from "@mate/chat/contracts";
-import { accountName, conversationLabel, operationKey, timelineKey } from "../../../chat";
+import { accountName, timelineKey } from "@mate/chat/client";
+import { conversationLabel, operationKey } from "../../../chat";
 import {
   ConversationActionsContent,
   type ConversationPresentation,

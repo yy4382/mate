@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ActivityIndicator, Keyboard, Text, View } from "react-native";
 import type { Entry } from "@mate/chat/contracts";
 import { useChat, useChatState } from "../../../session";
-import { accountName } from "../../../chat";
+import { accountName } from "@mate/chat/client";
 import { Button, Caption, Empty, ErrorLine, Field, Screen } from "../../../ui";
 import { MessageBody } from "../../../message-body";
 import { useTheme } from "../../../theme";

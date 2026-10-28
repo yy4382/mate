@@ -1,10 +1,11 @@
+import { accountName } from "@mate/chat/client";
 import { t } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, SearchX } from "lucide-react";
 import { get } from "../shell/api.ts";
 import { Link, navigate, useRoute } from "../shell/router.tsx";
 import { Avatar, EmptyState, ErrorLine, Input, PageHeader, timeLabel } from "../shell/ui.tsx";
-import { accountName, avatarOf, useAccounts } from "./data.ts";
+import { avatarOf, useAccounts } from "./data.ts";
 import type { Entry } from "./types.ts";
 
 /** The body with every occurrence of the query marked, ignoring case. */
