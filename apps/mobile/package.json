@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@formatjs/intl-listformat": "8.3.15",
+    "@formatjs/intl-locale": "5.3.12",
+    "@formatjs/intl-pluralrules": "6.3.16",
     "@mate/admin": "workspace:*",
     "@mate/auth": "workspace:*",
     "@mate/chat": "workspace:*",
