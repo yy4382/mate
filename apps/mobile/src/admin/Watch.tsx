@@ -1,8 +1,15 @@
 import { t, dateText, numberText } from "../i18n";
-import { useCallback, useReducer, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { FlatList, Pressable, View } from "react-native";
 import { Stack, useFocusEffect } from "expo-router";
-import { initialObservation, observeEvents, type Entry, type Observation } from "./observation";
+import {
+  initialObservation,
+  observeEvents,
+  toolCalls,
+  type Entry,
+  type Observation,
+  type ToolCall,
+} from "./observation";
 import { useClient, useManagementAccess, useResource } from "./session";
 import { useTheme } from "../theme";
 import { Button, Caption, Copy, Empty, Row, Section, Select, Sheet, styles } from "../ui";
@@ -10,10 +17,24 @@ import { Usage } from "./Usage";
 import { ErrorLine } from "./ui";
 
 type Message = NonNullable<Entry["model"]>[number];
-type ToolCall = Extract<
-  Extract<Message, { role: "assistant" }>["content"][number],
-  { type: "toolCall" }
->;
+type ToolResult = { message: Extract<Message, { role: "toolResult" }>; entryId: number };
+/** Lookups over one observation's entries, built once per change instead of per row. */
+type Records = {
+  calls: ReadonlyMap<string, ToolCall>;
+  results: ReadonlyMap<string, ToolResult>;
+  head: number | undefined;
+};
+function recordsOf(entries: readonly Entry[]): Records {
+  const results = new Map<string, ToolResult>();
+  let head: number | undefined;
+  for (const entry of entries) {
+    head = entry.head ?? head;
+    for (const message of entry.model ?? [])
+      if (message.role === "toolResult" && !results.has(message.toolCallId))
+        results.set(message.toolCallId, { message, entryId: entry.id });
+  }
+  return { calls: toolCalls(entries), results, head };
+}
 type Reading =
   | { kind: "message"; message: Message; entryId: number }
   | { kind: "tool"; call: ToolCall }
@@ -103,24 +124,17 @@ function MessageBody({ message }: { message: Message }) {
     </>
   );
 }
-function resultFor(entries: readonly Entry[], callId: string) {
-  for (const entry of entries)
-    for (const message of entry.model ?? [])
-      if (message.role === "toolResult" && message.toolCallId === callId)
-        return { message, entryId: entry.id };
-  return undefined;
-}
 function ToolActivity({
   call,
-  state,
+  tool,
+  result,
   onOpen,
 }: {
   call: ToolCall;
-  state: Observation;
+  tool: Observation["tools"][string] | undefined;
+  result: ToolResult | undefined;
   onOpen(): void;
 }) {
-  const tool = state.tools[call.id];
-  const result = resultFor(state.entries, call.id);
   const output =
     tool?.output ||
     result?.message.content
@@ -156,12 +170,14 @@ function ToolActivity({
 function RecordMessage({
   message,
   entryId,
-  state,
+  records,
+  tools,
   onRead,
 }: {
   message: Message;
   entryId: number;
-  state: Observation;
+  records: Records;
+  tools: Observation["tools"];
   onRead(reading: Reading): void;
 }) {
   const c = useTheme();
@@ -173,17 +189,7 @@ function RecordMessage({
         onPress={() => onRead({ kind: "message", message, entryId })}
       />
     );
-  if (
-    message.role === "toolResult" &&
-    state.entries.some((entry) =>
-      entry.model?.some(
-        (m) =>
-          m.role === "assistant" &&
-          m.content.some((block) => block.type === "toolCall" && block.id === message.toolCallId),
-      ),
-    )
-  )
-    return null;
+  if (message.role === "toolResult" && records.calls.has(message.toolCallId)) return null;
   const label = t("observation.record_label", {
     role: roleLabel[message.role],
     id: entryId,
@@ -216,7 +222,8 @@ function RecordMessage({
               <ToolActivity
                 key={block.id}
                 call={block}
-                state={state}
+                tool={tools[block.id]}
+                result={records.results.get(block.id)}
                 onOpen={() => onRead({ kind: "tool", call: block })}
               />
             ) : (
@@ -248,20 +255,19 @@ function RecordMessage({
 function ReadingBody({
   reading,
   state,
+  records,
   onRead,
 }: {
   reading: Reading;
   state: Observation;
+  records: Records;
   onRead(reading: Reading): void;
 }) {
   if (reading.kind === "usage") return <Usage usage={state.usage} />;
   if (reading.kind === "instructions")
     return <Copy>{state.agent.instructions || t("observation.no_instructions_set")}</Copy>;
   if (reading.kind === "context") {
-    const head = state.entries.reduce<number | undefined>(
-      (latest, entry) => entry.head ?? latest,
-      undefined,
-    );
+    const { head } = records;
     return (
       <>
         <Section>
@@ -324,7 +330,7 @@ function ReadingBody({
   if (reading.kind === "tool") {
     const { call } = reading;
     const tool = state.tools[call.id];
-    const result = resultFor(state.entries, call.id);
+    const result = records.results.get(call.id);
     return (
       <>
         <Copy>{call.name}</Copy>
@@ -413,6 +419,48 @@ function ReadingBody({
   );
 }
 
+const EntryRow = memo(function EntryRow({
+  entry,
+  records,
+  tools,
+  onRead,
+}: {
+  entry: Entry;
+  records: Records;
+  tools: Observation["tools"];
+  onRead(reading: Reading): void;
+}) {
+  return (
+    <View style={{ gap: 12 }}>
+      {records.head !== undefined && entry.id < records.head && (
+        <Caption>{t("observation.before_context", { id: numberText(entry.id) })}</Caption>
+      )}
+      {entry.model?.length ? (
+        entry.model.map((message, index) => (
+          <RecordMessage
+            key={index}
+            message={message}
+            entryId={entry.id}
+            records={records}
+            tools={tools}
+            onRead={onRead}
+          />
+        ))
+      ) : (
+        <Row
+          title={
+            entry.head !== undefined
+              ? t("observation.context_updated")
+              : t("observation.record_kind", { kind: entry.kind })
+          }
+          subtitle={t("observation.record", { id: entry.id })}
+          onPress={() => onRead({ kind: "context" })}
+        />
+      )}
+    </View>
+  );
+});
+
 function ObservationTarget({
   agentId,
   assistant,
@@ -427,7 +475,7 @@ function ObservationTarget({
   name: string;
 }) {
   const client = useClient();
-  const access = useManagementAccess();
+  const ready = useManagementAccess().kind === "ready";
   const c = useTheme();
   const [revision, setRevision] = useState(0);
   const [state, dispatch] = useReducer(observeEvents, initialObservation);
@@ -442,7 +490,7 @@ function ObservationTarget({
   const dragging = useRef(false);
   useFocusEffect(
     useCallback(() => {
-      if (access.kind !== "ready") return;
+      if (!ready) return;
       const request = new AbortController();
       setProblem(undefined);
       setConnection("connecting");
@@ -461,19 +509,10 @@ function ObservationTarget({
           }
         });
       return () => request.abort();
-    }, [client, access, agentId, assistant, revision]),
+    }, [client, ready, agentId, assistant, revision]),
   );
-  const calls = state.entries.flatMap((entry) =>
-    (entry.model ?? []).flatMap((message) =>
-      message.role === "assistant"
-        ? message.content.flatMap((block) => (block.type === "toolCall" ? [block.id] : []))
-        : [],
-    ),
-  );
-  const head = state.entries.reduce<number | undefined>(
-    (latest, entry) => entry.head ?? latest,
-    undefined,
-  );
+  const records = useMemo(() => recordsOf(state.entries), [state.entries]);
+  const { head } = records;
   const stale = connection !== "connected" && snapshotAt !== undefined;
   const title =
     reading?.kind === "context"
@@ -498,7 +537,7 @@ function ObservationTarget({
         <Stack.Toolbar.Button
           icon="info.circle"
           accessibilityLabel={t("observation.context_and_diagnostics")}
-          hidden={access.kind !== "ready"}
+          hidden={!ready}
           onPress={() => setReading({ kind: "context" })}
         >
           {t("observation.observation_details")}
@@ -506,7 +545,7 @@ function ObservationTarget({
         <Stack.Toolbar.Button
           icon="arrow.clockwise"
           accessibilityLabel={t("observation.reconnect_observation")}
-          hidden={access.kind !== "ready"}
+          hidden={!ready}
           onPress={() => setRevision((old) => old + 1)}
         >
           {t("observation.reconnect")}
@@ -569,33 +608,8 @@ function ObservationTarget({
               )}
           </View>
         }
-        renderItem={({ item: entry }) => (
-          <View style={{ gap: 12 }}>
-            {head !== undefined && entry.id < head && (
-              <Caption>{t("observation.before_context", { id: numberText(entry.id) })}</Caption>
-            )}
-            {entry.model?.length ? (
-              entry.model.map((message, index) => (
-                <RecordMessage
-                  key={index}
-                  message={message}
-                  entryId={entry.id}
-                  state={state}
-                  onRead={setReading}
-                />
-              ))
-            ) : (
-              <Row
-                title={
-                  entry.head !== undefined
-                    ? t("observation.context_updated")
-                    : t("observation.record_kind", { kind: entry.kind })
-                }
-                subtitle={t("observation.record", { id: entry.id })}
-                onPress={() => setReading({ kind: "context" })}
-              />
-            )}
-          </View>
+        renderItem={({ item }) => (
+          <EntryRow entry={item} records={records} tools={state.tools} onRead={setReading} />
         )}
         ListFooterComponent={
           <View style={{ gap: 16 }}>
@@ -619,7 +633,7 @@ function ObservationTarget({
               </View>
             ))}
             {Object.entries(state.tools)
-              .filter(([id]) => !calls.includes(id))
+              .filter(([id]) => !records.calls.has(id))
               .map(([id, tool]) => (
                 <Section key={id} title={`${tool.name} · ${toolLabel[tool.status]}`}>
                   <View style={{ padding: 16, gap: 8 }}>
@@ -633,7 +647,9 @@ function ObservationTarget({
         }
       />
       <Sheet visible={reading !== null} title={title} onClose={() => setReading(null)}>
-        {reading && <ReadingBody reading={reading} state={state} onRead={setReading} />}
+        {reading && (
+          <ReadingBody reading={reading} state={state} records={records} onRead={setReading} />
+        )}
       </Sheet>
     </View>
   );

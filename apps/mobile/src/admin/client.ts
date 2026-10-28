@@ -200,7 +200,6 @@ export class ManagementClient {
   async saveProfile(displayName: string, handle: string): Promise<HumanView> {
     const previous = this.auth.getSnapshot();
     const human = HumanView.parse(await this.request("/api/me", "PATCH", { displayName, handle }));
-    this.check();
     if (previous.kind === "signed-in") this.auth.updateHuman(previous, human);
     return human;
   }
