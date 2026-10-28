@@ -348,7 +348,7 @@ iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模�
 
 认证沿用控制面的 Secure HttpOnly cookie，无需 bearer API 或 CORS 配置。启动和从后台回到前台重新验证登录，权限弹窗的 inactive → active 不触发重验；连接失败可重试，401 需要重新登录。退出与换服务器会清理 app 的原生 cookie；离线退出仅保证关闭本机访问，并提示远端撤销未确认。地址与恢复标记存在 Expo SQLite 键值设置中，不保存密码。正常使用后的重启恢复依赖原生 cookie 存储，不保证登录后立即强杀的持久化。`expo-sqlite` 和 `@preeternal/react-native-cookie-manager` 需要用上述 `ios` 命令构建开发版或 Release 包，Expo Go 不能验证这个 app 的 cookie 清理集成。
 
-`com.yy4382.mate` 是当前开发用的 iOS bundle identifier；签名与自用分发方式仍待确认，本阶段不添加公开应用商店发布自动化。根 `pnpm build` 只构建已有网页和服务端包，移动端不参与控制面镜像或 node 发布包的构建。
+`dev.yyang.mate` 是当前 iOS bundle identifier。签名使用对应的 App ID 和 provisioning profile，控制面的 `MATE_APNS_TOPIC` 也必须与它一致。签名与自用分发方式仍待确认，本阶段不添加公开应用商店发布自动化。根 `pnpm build` 只构建已有网页和服务端包，移动端不参与控制面镜像或 node 发布包的构建。
 
 移动任务 PR 以长期集成分支 `mobile` 为 base，依赖任务可在其上堆叠。合入任务 PR 不发布移动 app，也不触发 `v*` 发布。整体 `mobile` 到 `main` 的集成另等用户批准；本阶段不合并、不打 tag、不发布、不部署。
 
@@ -365,7 +365,7 @@ iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模�
 | `MATE_APNS_KEY_FILE` | 由操作者提供的 APNs `.p8` key 文件路径，控制面可读；容器中可只读挂载，不提交到仓库 |
 | `MATE_APNS_KEY_ID` | Apple 签发的 10 位 key ID |
 | `MATE_APNS_TEAM_ID` | 10 位 team ID |
-| `MATE_APNS_TOPIC` | 签名 app 的 bundle identifier，当前为 `com.yy4382.mate` |
+| `MATE_APNS_TOPIC` | 签名 app 的 bundle identifier，当前为 `dev.yyang.mate` |
 | `MATE_APNS_ENVIRONMENT` | `sandbox` 或 `production`，不从 `NODE_ENV` 猜测 |
 | `MATE_PUBLIC_ORIGIN` | 与 app 保存地址完全相同的 HTTPS origin，不含末尾 `/` 或路径 |
 
