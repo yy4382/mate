@@ -4,7 +4,6 @@ import type { Actor } from "./accounts.ts";
 import { ChatError } from "./chat-error.ts";
 import { SqlBoolean, idList, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
-export { ConversationView, ConversationKind } from "./contracts.ts";
 
 const ConversationRow = z.object({
   id: Id,

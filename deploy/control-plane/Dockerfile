@@ -2,12 +2,15 @@
 # Dependencies are installed on the target platform so native packages match the runtime image.
 FROM node:24.21.0-trixie-slim AS build
 RUN npm install --global pnpm@10.33.0
+# The pnpm store is a build cache, so dependencies are not downloaded again after a source change.
+ENV npm_config_store_dir=/pnpm-store
 WORKDIR /src
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm fetch
 COPY . .
-# Enable pnpm 10's lockfile-backed deploy without changing development's linked workspace install.
-RUN pnpm install --frozen-lockfile --offline \
+# Install only what the image builds, so client apps' dependencies (Expo, React Native) never enter the image build.
+# `pnpm fetch` cannot be filtered, so the install downloads them itself. Enable pnpm 10's lockfile-backed deploy
+# without changing development's linked workspace install.
+RUN --mount=type=cache,id=mate-pnpm-store,target=/pnpm-store \
+  pnpm install --frozen-lockfile --filter "@mate/control-plane..." --filter "@mate/web..." \
   && pnpm --filter "@mate/control-plane..." build \
   && pnpm --filter @mate/web build \
   && test -f apps/web/dist/index.html \

@@ -11,7 +11,7 @@ import {
   refusalText,
   tooShort,
   useCurrentHuman,
-  type ListedHuman,
+  type HumanView,
   type Role,
 } from "../shell/humans.ts";
 import {
@@ -122,7 +122,7 @@ function AddHuman({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ResetPassword({ human, onClose }: { human: ListedHuman; onClose: () => void }) {
+function ResetPassword({ human, onClose }: { human: HumanView; onClose: () => void }) {
   const [password, setPassword] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -178,7 +178,7 @@ function HumanRow({
   isMe,
   onError,
 }: {
-  human: ListedHuman;
+  human: HumanView;
   isMe: boolean;
   onError: (error: string | null) => void;
 }) {

@@ -2,8 +2,13 @@
   "name": "@mate/control-plane",
   "private": true,
   "type": "module",
-  "bin": {
-    "mate-control-plane": "./dist/src/main.js"
+  "exports": {
+    "./contracts": {
+      "react-native": "./src/contracts.ts",
+      "mate-source": "./src/contracts.ts",
+      "types": "./dist/src/contracts.d.ts",
+      "default": "./dist/src/contracts.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -11,7 +16,6 @@
   },
   "dependencies": {
     "@mate/admin": "workspace:*",
-    "@mate/auth": "workspace:*",
     "@mate/chat": "workspace:*",
     "@mate/clock": "workspace:*",
     "@mate/control-store": "workspace:*",

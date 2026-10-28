@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, onTestFinished } from "vitest";
 import type { AgentView } from "@mate/admin";
-import { HumanView } from "@mate/auth";
+import { HumanView } from "@mate/control-plane/contracts";
 import { MobileAuth } from "../src/auth";
 import { ManagementClient } from "../src/admin/client";
 import { environment, PASSWORD } from "../../control-plane/test/support.ts";

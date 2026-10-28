@@ -1,5 +1,4 @@
 import { Attachment, TaskChange, Entry } from "./contracts.ts";
-export { Attachment, TaskChange, MessageEntry, TaskEntry, Entry } from "./contracts.ts";
 import { z } from "zod";
 import { idList, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";

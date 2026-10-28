@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { createECDH, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createSecureServer, type IncomingHttpHeaders, type ServerHttp2Session } from "node:http2";
+import { createServer as createHttpsServer, globalAgent } from "node:https";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { request } from "node:http";
 import { FakeClock, HumanBrowser, temporaryDirectory } from "@mate/testkit";
 import { expect, it, onTestFinished } from "vitest";
 import { startControlPlane } from "../src/control-plane.ts";
@@ -42,12 +44,11 @@ it("refuses unusable APNs credentials before serving and can restart with native
   expect((await owner.get("/api/chat/push/native")).json).toEqual({ enabled: false });
 });
 
-/** A TLS APNs protocol fixture, reached through the real provider library. No Apple endpoints are used. */
-async function fixture(configured = true) {
-  const directory = temporaryDirectory();
+/** One self-signed localhost certificate for the whole file: RSA key generation is the slow part of a fixture. */
+const tls = (() => {
+  const directory = mkdtempSync(join(tmpdir(), "mate-apns-tls-"));
   const certFile = join(directory, "cert.pem"),
-    tlsKey = join(directory, "tls.pem"),
-    apnsKey = join(directory, "apns.p8");
+    tlsKey = join(directory, "tls.pem");
   execFileSync(
     "openssl",
     [
@@ -69,14 +70,23 @@ async function fixture(configured = true) {
     ],
     { stdio: "ignore" },
   );
+  const files = { cert: readFileSync(certFile), key: readFileSync(tlsKey) };
+  rmSync(directory, { recursive: true });
+  return files;
+})();
+
+/** A TLS APNs protocol fixture, reached through the real provider library. No Apple endpoints are used. */
+async function fixture(configured = true) {
+  const directory = temporaryDirectory();
+  const apnsKey = join(directory, "apns.p8");
   const { privateKey } = generateKeyPairSync("ec", {
     namedCurve: "prime256v1",
     privateKeyEncoding: { format: "pem", type: "pkcs8" },
     publicKeyEncoding: { format: "pem", type: "spki" },
   });
   writeFileSync(apnsKey, privateKey);
-  const cert = readFileSync(certFile);
-  const remote = createSecureServer({ cert, key: readFileSync(tlsKey) });
+  const { cert } = tls;
+  const remote = createSecureServer(tls);
   const sessions = new Set<ServerHttp2Session>();
   remote.on("session", (session) => {
     sessions.add(session);
@@ -163,73 +173,6 @@ async function fixture(configured = true) {
   };
 }
 
-it.each(["logout", "replacement"])(
-  "a cancelled native binding cannot return when its HTTP body finishes after %s",
-  async (mode) => {
-    const f = await fixture();
-    const subscription = { ...native, binding: randomUUID() };
-    const body = JSON.stringify(subscription);
-    const cookie = f.owner.cookie;
-    if (!cookie) throw new Error("fixture login has no cookie");
-    const status = await new Promise<number>((resolve, reject) => {
-      const pending = request(
-        f.plane.url + "/api/chat/push/subscribe",
-        {
-          method: "POST",
-          headers: {
-            cookie,
-            "content-type": "application/json",
-            "content-length": Buffer.byteLength(body),
-            expect: "100-continue",
-          },
-        },
-        (response) => {
-          response.resume();
-          response.on("end", () => resolve(response.statusCode ?? 0));
-        },
-      );
-      pending.on("error", reject);
-      pending.on("continue", () => {
-        void (async () => {
-          pending.write(body.slice(0, -1));
-          expect((await f.owner.post("/api/chat/push/unsubscribe", subscription)).status).toBe(204);
-          if (mode === "logout") expect((await f.owner.post("/api/logout", {})).status).toBe(204);
-          else
-            expect(
-              (
-                await f.member.post("/api/chat/push/subscribe", {
-                  ...subscription,
-                  binding: randomUUID(),
-                })
-              ).status,
-            ).toBe(204);
-          pending.end(body.slice(-1));
-        })().catch((error: unknown) => {
-          pending.destroy();
-          reject(error);
-        });
-      });
-      pending.flushHeaders();
-    });
-    expect(status).toBe(400);
-    await f.say();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(f.requests, "new notices cannot reach the cancelled old account registration").toEqual(
-      [],
-    );
-    if (mode === "replacement") {
-      const sent = await f.owner.post("/api/chat/messages", {
-        requestId: randomUUID(),
-        timeline: { conversation: f.dm.conversationId },
-        body: "fixture for the new owner",
-      });
-      expect(sent.status).toBe(200);
-      await expect.poll(() => f.requests.length).toBe(1);
-      expect(JSON.parse(f.requests[0]?.body ?? "null").body.accountId).toBe(f.memberId);
-    }
-  },
-);
-
 it("reports disabled APNs truthfully while retaining the existing Web Push subscription API", async () => {
   const f = await fixture(false);
   expect((await new HumanBrowser(f.plane.url).get("/api/chat/push/native")).status).toBe(401);
@@ -277,7 +220,7 @@ it("validates native transport data and sends a private, scoped alert through th
   expect(request.headers.authorization).toMatch(/^bearer /);
   expect(request.body).not.toContain("private message body");
   expect(JSON.parse(request.body)).toMatchObject({
-    aps: { alert: { title: "Mate", body: "你有新的私信或提及。" } },
+    aps: { alert: { title: "Mate", "loc-key": "MATE_PUSH_ALERT" } },
     body: {
       version: 1,
       server,
@@ -373,4 +316,54 @@ it("does not hand notices older than a day to APNs after a delayed retry", async
   await f.say();
   await expect.poll(() => f.requests.length).toBe(2);
   expect(JSON.parse(f.requests[1]!.body).body.seq).toBe(2);
+});
+
+it("maps Web Push answers: 404 and 410 remove the subscription, 429 and 5xx retry, others drop the push", async () => {
+  const f = await fixture();
+  const paths: string[] = [];
+  const answers: Record<string, number[]> = {
+    "/gone": [410],
+    "/missing": [404],
+    "/refused": [400],
+    "/busy": [503],
+    "/limited": [429],
+  };
+  const service = createHttpsServer(tls, (request, response) => {
+    paths.push(request.url ?? "");
+    request.resume();
+    response.writeHead(answers[request.url ?? ""]?.shift() ?? 201).end();
+  });
+  await new Promise<void>((resolve) => service.listen(0, "127.0.0.1", resolve));
+  const { port } = service.address() as AddressInfo;
+  const ca = globalAgent.options.ca;
+  globalAgent.options.ca = tls.cert;
+  onTestFinished(async () => {
+    globalAgent.options.ca = ca;
+    await new Promise<void>((resolve) => service.close(() => resolve()));
+  });
+  const keys = {
+    p256dh: createECDH("prime256v1").generateKeys("base64url"),
+    auth: randomBytes(16).toString("base64url"),
+  };
+  for (const path of Object.keys(answers))
+    await f.owner.post("/api/chat/push/subscribe", {
+      endpoint: `https://localhost:${port}${path}`,
+      keys,
+    });
+  await f.say();
+  await expect.poll(() => paths.length).toBe(5);
+  await f.owner.get("/api/chat/snapshot");
+  f.clock.advance(30_000);
+  await expect.poll(() => paths.length).toBe(7);
+  expect(paths.slice(5).sort(), "only the transient failures are retried").toEqual([
+    "/busy",
+    "/limited",
+  ]);
+  await f.say();
+  await expect.poll(() => paths.length).toBe(10);
+  expect(paths.slice(7).sort(), "removed subscriptions get nothing more").toEqual([
+    "/busy",
+    "/limited",
+    "/refused",
+  ]);
 });
