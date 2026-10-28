@@ -1,3 +1,4 @@
+import { t, dateText as formatDate, numberText } from "../i18n";
 import { ActivityIndicator, View } from "react-native";
 import type { ReactNode } from "react";
 import { Copy, ErrorLine as SharedErrorLine } from "../ui";
@@ -25,7 +26,7 @@ export function Outcome({
     <>
       <ErrorLine error={operation.error} />
       {operation.busy ? (
-        <ActivityIndicator accessibilityLabel="正在提交" />
+        <ActivityIndicator accessibilityLabel={t("management.submitting")} />
       ) : operation.message ? (
         <Copy>{operation.message}</Copy>
       ) : null}
@@ -41,10 +42,17 @@ export function Fact({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 export const dateText = (value: string | null) =>
-  value ? new Date(value).toLocaleString("zh-CN") : "尚未连接";
+  value ? formatDate(value) : t("management.never_connected");
 export const bytesText = (value: number) =>
   value < 1024
-    ? `${value} B`
+    ? t("management.bytes", { size: numberText(value) })
     : value < 1024 * 1024
-      ? `${(value / 1024).toFixed(1)} KB`
-      : `${(value / 1024 / 1024).toFixed(1)} MB`;
+      ? t("management.kilobytes", {
+          size: numberText(value / 1024, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+        })
+      : t("management.megabytes", {
+          size: numberText(value / 1024 / 1024, {
+            minimumFractionDigits: 1,
+            maximumFractionDigits: 1,
+          }),
+        });

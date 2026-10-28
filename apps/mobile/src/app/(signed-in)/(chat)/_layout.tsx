@@ -1,3 +1,4 @@
+import { t } from "../../../i18n";
 import { Stack } from "expo-router";
 import { useTheme } from "../../../theme";
 export const unstable_settings = { initialRouteName: "chat" };
@@ -14,11 +15,11 @@ export default function ChatLayout() {
         headerBackButtonDisplayMode: "minimal",
       }}
     >
-      <Stack.Screen name="chat" options={{ title: "聊天", headerLargeTitle: true }} />
-      <Stack.Screen name="conversation" options={{ title: "会话" }} />
-      <Stack.Screen name="search" options={{ title: "搜索消息" }} />
+      <Stack.Screen name="chat" options={{ title: t("chat.chat"), headerLargeTitle: true }} />
+      <Stack.Screen name="conversation" options={{ title: t("chat.conversation") }} />
+      <Stack.Screen name="search" options={{ title: t("chat.search_messages") }} />
       <Stack.Screen name="new" options={{ headerShown: false, animation: "none" }} />
-      <Stack.Screen name="channels" options={{ title: "浏览频道" }} />
+      <Stack.Screen name="channels" options={{ title: t("chat.browse_channels") }} />
     </Stack>
   );
 }

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import {
   createContext,
   useCallback,
@@ -154,7 +155,7 @@ export function useOperation() {
     reset: () => {
       if (!busy.current) mutation.reset();
     },
-    run: async (work: () => Promise<unknown>, message = "已保存。") => {
+    run: async (work: () => Promise<unknown>, message = t("management.saved_2")) => {
       if (busy.current) return false;
       busy.current = true;
       try {

@@ -1,3 +1,4 @@
+import { t } from "../../../i18n";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { conversationLabel } from "../../../chat";
 import { useChatState } from "../../../session";
@@ -9,15 +10,17 @@ export default function Channels() {
   const rows = state.conversations.filter((x) => x.kind !== "dm" && x.archived === archived);
   return (
     <Screen grouped={false}>
-      <Stack.Screen options={{ title: archived ? "已归档" : "浏览频道" }} />
+      <Stack.Screen
+        options={{ title: archived ? t("chat.archived") : t("chat.browse_channels") }}
+      />
       {rows.map((x) => (
         <ConversationRow
           key={x.conversationId}
           title={conversationLabel(x, state.accounts, state.me)}
           subtitle={
             x.archived
-              ? "已归档 · 只读"
-              : `${x.kind === "private" ? "私有" : "公开"} · ${x.member ? "已加入" : "尚未加入"}`
+              ? t("chat.archived_readonly")
+              : `${x.kind === "private" ? t("chat.private") : t("chat.public")} · ${x.member ? t("chat.joined") : t("chat.not_joined")}`
           }
           kind={x.kind === "dm" ? "human" : x.kind}
           onPress={() =>
@@ -25,7 +28,9 @@ export default function Channels() {
           }
         />
       ))}
-      {!rows.length && <Empty title={archived ? "没有已归档频道" : "还没有频道"} />}
+      {!rows.length && (
+        <Empty title={archived ? t("chat.no_archived_channels") : t("chat.no_channels_yet")} />
+      )}
     </Screen>
   );
 }

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { router, Stack } from "expo-router";
 import { useState } from "react";
 import { useClient, useHuman, useOperation } from "../admin/session";
@@ -15,15 +16,18 @@ export function Profile() {
           subtitle={`@${human.handle}`}
           leading={<Avatar name={human.displayName} size={48} />}
         />
-        <Row title="角色" value={human.role === "admin" ? "管理员" : "普通人类"} />
+        <Row
+          title={t("settings.role")}
+          value={human.role === "admin" ? t("settings.administrator") : t("settings.human_member")}
+        />
       </Section>
       <Section>
         <Row
-          title="编辑资料"
-          subtitle="显示名与 Handle"
+          title={t("settings.edit_profile")}
+          subtitle={t("settings.display_name_and_handle")}
           onPress={() => router.push("/profile-edit")}
         />
-        <Row title="修改密码" onPress={() => router.push("/password")} />
+        <Row title={t("settings.change_password")} onPress={() => router.push("/password")} />
       </Section>
     </Screen>
   );
@@ -51,12 +55,12 @@ export function EditProfile() {
           disabled={names.busy || !displayName.trim() || !handle.trim()}
           onPress={save}
         >
-          {names.busy ? "保存中…" : "保存"}
+          {names.busy ? t("settings.saving") : t("settings.save")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Card>
         <Field
-          label="显示名"
+          label={t("settings.display_name")}
           value={displayName}
           editable={!names.busy}
           onChangeText={(v) => {
@@ -65,8 +69,8 @@ export function EditProfile() {
           }}
         />
         <Field
-          label="Handle"
-          hint="用于登录，也是别人 @ 你的名字。"
+          label={t("settings.handle")}
+          hint={t("settings.used_for_signing_in_and_for_others")}
           value={handle}
           editable={!names.busy}
           onChangeText={(v) => {
@@ -95,7 +99,7 @@ export function ChangePassword() {
     void operation
       .run(
         () => client.request("/api/me/password", "POST", { current, next }),
-        "密码已修改，其他登录会话已退出。",
+        t("settings.password_changed_other_sessions_have_been_signed"),
       )
       .then((ok) => {
         if (ok) {
@@ -113,12 +117,12 @@ export function ChangePassword() {
           disabled={operation.busy || !current || !next || !again}
           onPress={save}
         >
-          {operation.busy ? "保存中…" : "保存"}
+          {operation.busy ? t("settings.saving") : t("settings.save")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Card>
         <Field
-          label="当前密码"
+          label={t("settings.current_password")}
           secureTextEntry
           textContentType="password"
           value={current}
@@ -129,9 +133,9 @@ export function ChangePassword() {
           }}
         />
         <Field
-          label="新密码"
-          hint="至少 12 个 UTF-8 字节，中文通常每字占 3 个字节。"
-          error={submitted && short ? "新密码至少 12 个 UTF-8 字节。" : ""}
+          label={t("settings.new_password")}
+          hint={t("settings.at_least_12_utf8_bytes_chinese_characters")}
+          error={submitted && short ? t("settings.the_new_password_must_be_at_least") : ""}
           secureTextEntry
           textContentType="newPassword"
           value={next}
@@ -142,8 +146,8 @@ export function ChangePassword() {
           }}
         />
         <Field
-          label="确认新密码"
-          error={submitted && mismatch ? "两次输入的新密码不一致。" : ""}
+          label={t("settings.confirm_new_password")}
+          error={submitted && mismatch ? t("settings.the_new_passwords_do_not_match") : ""}
           secureTextEntry
           textContentType="newPassword"
           value={again}
@@ -155,7 +159,7 @@ export function ChangePassword() {
         />
         <Outcome operation={operation} />
       </Card>
-      <Caption>修改后其他登录会话会退出，当前登录继续有效。</Caption>
+      <Caption>{t("settings.other_sessions_will_be_signed_out_this")}</Caption>
     </Screen>
   );
 }

@@ -1,3 +1,4 @@
+import { t, noticeText } from "./i18n";
 import { ApnsSubscription, NativePushCapability, NativePushNotice } from "@mate/chat/push";
 import { z } from "zod";
 
@@ -62,7 +63,7 @@ function sameRegistration(a: Registration, b: Registration): boolean {
 export class MobileNotifications {
   private state: NotificationState = {
     kind: "signed-out",
-    message: "请先登录。",
+    message: t("settings.sign_in_first"),
     ...uncheckedFacts,
   };
   private listeners = new Set<() => void>();
@@ -136,7 +137,7 @@ export class MobileNotifications {
       this.session = session;
       this.publish(
         session ? "checking" : "signed-out",
-        session ? "正在检查通知…" : "请先登录。",
+        session ? t("settings.checking_notifications") : t("settings.sign_in_first"),
         uncheckedFacts,
       );
     }
@@ -161,7 +162,7 @@ export class MobileNotifications {
         if (current())
           this.publish(
             "unavailable",
-            "无法完成通知设置，请检查网络、服务器和此 app 的推送签名后重试。",
+            t("settings.could_not_configure_notifications_check_your_network"),
           );
       }
     });
@@ -191,14 +192,17 @@ export class MobileNotifications {
 
   refresh(): Promise<void> {
     return this.run(async (session, current) => {
-      this.publish("checking", "正在检查通知…");
+      this.publish("checking", t("settings.checking_notifications"));
       const permission = await this.platform.permission(false);
       if (!current()) return;
       this.publish(this.state.kind, this.state.message, { permission });
       if (permission === "denied") {
         const message = await this.remove(session);
         if (current())
-          this.publish("denied", "系统已关闭通知。请在 iOS 设置中允许通知，再回来开启。" + message);
+          this.publish(
+            "denied",
+            noticeText(t("settings.system_notifications_are_off_allow_notifications_in"), message),
+          );
         return;
       }
       const cleanupMessage = await this.retire(session);
@@ -216,8 +220,7 @@ export class MobileNotifications {
       if (!capability.enabled) {
         this.publish(
           "unavailable",
-          "此服务器尚未配置 Apple 推送。允许系统通知后，仍需服务器配置完成才能接收远程通知。" +
-            cleanupMessage,
+          noticeText(t("settings.this_server_has_not_configured_apple_push"), cleanupMessage),
         );
         return;
       }
@@ -227,7 +230,7 @@ export class MobileNotifications {
       ) {
         this.publish(
           "unavailable",
-          "服务器的推送地址或环境与此 app 不一致，请检查推送配置。" + cleanupMessage,
+          noticeText(t("settings.the_servers_push_origin_or_environment_does"), cleanupMessage),
         );
         return;
       }
@@ -235,12 +238,15 @@ export class MobileNotifications {
       if (!registration || !same(session, registration)) {
         this.publish(
           "disabled",
-          "通知尚未开启。只通知发给你的私信和提及，不显示消息正文。" + cleanupMessage,
+          noticeText(t("settings.notifications_are_off_only_direct_messages_and"), cleanupMessage),
         );
         return;
       }
       if (permission !== "allowed" && permission !== "quiet") {
-        this.publish("disabled", "请允许系统通知后开启。" + cleanupMessage);
+        this.publish(
+          "disabled",
+          noticeText(t("settings.allow_system_notifications_before_enabling_them"), cleanupMessage),
+        );
         return;
       }
       await this.register(session, current);
@@ -249,14 +255,20 @@ export class MobileNotifications {
 
   enable(): Promise<void> {
     return this.run(async (session, current) => {
-      this.publish("checking", "正在开启通知…");
+      this.publish("checking", t("settings.enabling_notifications"));
       const permission = await this.platform.permission(true);
       if (!current()) return;
       this.publish(this.state.kind, this.state.message, { permission });
       if (permission === "denied" || permission === "undetermined") {
         const message = await this.remove(session);
         if (current())
-          this.publish("denied", "未获得系统通知权限。请在 iOS 设置中允许通知。" + message);
+          this.publish(
+            "denied",
+            noticeText(
+              t("settings.notification_permission_was_not_granted_allow_notifications"),
+              message,
+            ),
+          );
         return;
       }
       const capability = NativePushCapability.parse(await this.http(session, "native"));
@@ -270,17 +282,14 @@ export class MobileNotifications {
             : "available",
       });
       if (!capability.enabled) {
-        this.publish(
-          "unavailable",
-          "系统通知已允许；此服务器尚未配置 Apple 推送，远程通知尚未开启。",
-        );
+        this.publish("unavailable", t("settings.system_notifications_are_allowed_but_this_server"));
         return;
       }
       if (
         capability.server !== session.server ||
         capability.environment !== this.platform.environment
       ) {
-        this.publish("unavailable", "服务器的推送地址或环境与此 app 不一致，请检查推送配置。");
+        this.publish("unavailable", t("settings.the_servers_push_origin_or_environment_does"));
         return;
       }
       await this.register(session, current);
@@ -339,8 +348,7 @@ export class MobileNotifications {
     if (!current()) return;
     this.publish(
       "enabled",
-      "已向服务器登记通知。只通知私信和提及，不含消息正文；实际送达由 Apple 和系统设置决定。" +
-        message,
+      noticeText(t("settings.notifications_registered_with_the_server_only_direct"), message),
     );
     this.consumeTap();
   }
@@ -361,7 +369,7 @@ export class MobileNotifications {
       }
     }
     return this.registrations.cleanup.length
-      ? " 未能确认服务器取消订阅；旧登记已保留，回到对应服务器和账号后重试。重新允许推送后仍可能收到旧服务器的通知。"
+      ? t("settings.server_unsubscription_could_not_be_confirmed_the")
       : "";
   }
 
@@ -369,23 +377,23 @@ export class MobileNotifications {
     const registration = this.registrations.current;
     if (registration)
       this.save({ current: null, cleanup: [...this.registrations.cleanup, registration] });
-    let message = "通知已在本机关闭。";
+    let message = t("settings.notifications_are_off_on_this_device");
     try {
       await this.platform.unregister();
       await this.platform.dismiss();
       this.publish(this.state.kind, this.state.message, { localCleanup: "complete" });
     } catch {
       this.publish(this.state.kind, this.state.message, { localCleanup: "unconfirmed" });
-      message = "本机通知清理未确认，请在 iOS 设置中关闭通知。";
+      message = t("settings.local_notification_cleanup_is_unconfirmed_turn_off");
     }
     const cancellation = await this.retire(session);
     this.publish(this.state.kind, this.state.message);
-    return message + cancellation;
+    return noticeText(message, cancellation);
   }
 
   disable(): Promise<void> {
     return this.run(async (session, current) => {
-      this.publish("checking", "正在关闭通知…");
+      this.publish("checking", t("settings.disabling_notifications"));
       const message = await this.remove(session);
       if (current()) this.publish("disabled", message);
     });
@@ -398,7 +406,7 @@ export class MobileNotifications {
     this.request?.abort();
     this.tap = undefined;
     this.opened.clear();
-    this.publish("signed-out", "请先登录。", uncheckedFacts);
+    this.publish("signed-out", t("settings.sign_in_first"), uncheckedFacts);
     await this.pending;
     const message = await this.remove(this.verified);
     this.verified = null;

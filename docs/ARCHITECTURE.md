@@ -555,6 +555,8 @@ interface Admin {
 
 移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.json` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。当前覆盖 HTTPS 服务器选择、cookie 登录与恢复、频道和私信、讨论串、搜索、提及、消息任务和未读，以及完整管理、Agent 观察、个人资料与通知设置。分发、签名与真实 APNs 送达仍需 Apple 环境验证。
 
+移动端入口 `apps/mobile/index.ts` 在加载路由之前同步读取 `expo-localization` 的设备语言偏好。按顺序匹配中文或英文，所有 zh 变体使用简体中文，en 变体使用英文，无匹配时回退英文。`i18next/react-i18next` 的端内 JSON 资源随构建打包，插值与复数由库处理，日期、数字和列表由匹配 locale 的 Intl 格式化。iOS 配置声明英文和简体中文；系统改语言后重启 app，不增加前台监听、应用语言选择器或持久化语言覆盖。用户与 Agent 内容、协议值和服务器通知 payload 保持原文。
+
 移动认证由 `MobileAuth` 通过公开的 `start`、`login`、`revalidate`、`logout`、`changeServer`、`retry` 和状态订阅接口持有。`auth-native.ts` 接入系统 `fetch`、Foundation cookie 清理和 Expo SQLite 的键值设置。只保存服务器地址与是否允许恢复登录的标记，不保存密码或身份缓存。根层 `lifecycle.tsx` 统一持有认证启动和唯一的 AppState 监听，同时暂停后台聊天流；聊天 provider 只订阅身份，不另行启动认证或重验。聊天验证遮罩不参与首页重定向，重验后保留当前会话、草稿和 sheet；验证中隐藏并禁止访问旧界面。仅真正进入 background 后回到 active 才以 `GET /api/me` 验证 cookie，权限弹窗等仅 inactive → active 的变化不重验或打断通知登记；验证中隐藏身份，401 要求重新登录，网络或服务器故障保留恢复资格并提供重试。登录请求不重叠，退出与换地址取消旧请求并使旧响应失效，等旧请求结束后清理 cookie 才能再次登录。
 
 退出先保存禁止恢复的标记，再尝试 `POST /api/logout`，无论远端是否可达都清理本机 cookie；远端撤销未确认时明确提示。换地址同样关闭本机访问并清理全部 app cookie，切回原地址也需要重新登录。cookie 仍由原生网络栈保存，正常使用后可跨启动恢复；不保证登录后立即强杀进程的 cookie 持久化。
@@ -700,5 +702,5 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 - 不做逐条命令审批，不做 Mate 自己的提权。
 - 不限制 Agent 读同事的工作区，只在提示里请它不要读。
 - 不使用 `pi-coding-agent`。
-- 几个人共用，每人自己的登录；角色只有管理员和普通人类两种（管理员管理 Agent、提供商和 API key、node 和其他人类，普通人类只聊天）；中英双语界面，适配手机。
+- 几个人共用，每人自己的登录；角色只有管理员和普通人类两种（管理员管理 Agent、提供商和 API key、node 和其他人类，普通人类只聊天）；网页中英双语并适配手机，原生移动端根据设备偏好显示简体中文或英文。
 - 规模很小：几个人，少量 Agent（模型费用决定了不会多），消息量不大。不为数据量做性能优化或分页之类的设计，除非测量证明确实有问题；结构简单优先。

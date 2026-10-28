@@ -1,3 +1,4 @@
+import { t } from "../../../../i18n";
 import { router, Stack } from "expo-router";
 import { useHuman } from "../../../../admin/session";
 import { Button, Copy, Screen } from "../../../../admin/ui";
@@ -9,8 +10,11 @@ export default function AdminLayout() {
   if (human?.role !== "admin")
     return (
       <Screen topInset>
-        <Copy>需要管理员权限。</Copy>
-        <Button title="返回设置" onPress={() => router.replace("/account")} />
+        <Copy>{t("management.administrator_access_required")}</Copy>
+        <Button
+          title={t("management.back_to_settings")}
+          onPress={() => router.replace("/account")}
+        />
       </Screen>
     );
   return (
@@ -23,17 +27,17 @@ export default function AdminLayout() {
         headerTitleStyle: { color: colors.foreground },
       }}
     >
-      <Stack.Screen name="index" options={{ title: "管理 Mate" }} />
+      <Stack.Screen name="index" options={{ title: t("management.manage_mate") }} />
       <Stack.Screen name="agents/index" options={{ headerShown: false }} />
       <Stack.Screen name="agents/create" options={{ headerShown: false }} />
       <Stack.Screen name="agents/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="providers/[provider]" options={{ title: "提供商" }} />
-      <Stack.Screen name="providers/catalog" options={{ title: "模型目录" }} />
-      <Stack.Screen name="nodes/[id]" options={{ title: "Node 详情" }} />
-      <Stack.Screen name="humans/[id]" options={{ title: "人类详情" }} />
-      <Stack.Screen name="providers" options={{ title: "模型提供商" }} />
-      <Stack.Screen name="nodes" options={{ title: "Node" }} />
-      <Stack.Screen name="humans" options={{ title: "人类" }} />
+      <Stack.Screen name="providers/[provider]" options={{ title: t("management.provider") }} />
+      <Stack.Screen name="providers/catalog" options={{ title: t("management.model_catalog") }} />
+      <Stack.Screen name="nodes/[id]" options={{ title: t("management.node_details") }} />
+      <Stack.Screen name="humans/[id]" options={{ title: t("management.human_details") }} />
+      <Stack.Screen name="providers" options={{ title: t("management.model_providers") }} />
+      <Stack.Screen name="nodes" options={{ title: t("common.node") }} />
+      <Stack.Screen name="humans" options={{ title: t("chat.human") }} />
     </Stack>
   );
 }

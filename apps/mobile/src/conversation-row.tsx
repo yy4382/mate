@@ -1,3 +1,4 @@
+import { t, numberText } from "./i18n";
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import type { ComponentProps } from "react";
 import { Avatar, Caption } from "./ui";
@@ -23,7 +24,9 @@ export function ConversationRow({
   const large = useWindowDimensions().fontScale >= 1.5;
   const metadata = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-      {mentioned && <Text style={{ fontSize: 12, color: c.accent }}>提及你</Text>}
+      {mentioned && (
+        <Text style={{ fontSize: 12, color: c.accent }}>{t("chat.mentioned_you")}</Text>
+      )}
       {count > 0 && (
         <View
           style={{
@@ -33,7 +36,9 @@ export function ConversationRow({
             paddingVertical: 2,
           }}
         >
-          <Text style={{ color: c.accent, fontSize: 13, fontWeight: "600" }}>{count}</Text>
+          <Text style={{ color: c.accent, fontSize: 13, fontWeight: "600" }}>
+            {numberText(count)}
+          </Text>
         </View>
       )}
     </View>
@@ -42,7 +47,12 @@ export function ConversationRow({
     <Pressable
       testID={testID}
       accessibilityRole="button"
-      accessibilityLabel={`${title}，${subtitle}${mentioned ? "，提及你" : ""}${count ? `，${count} 条未读` : ""}`}
+      accessibilityLabel={t("chat.conversation_accessibility", {
+        title,
+        subtitle,
+        mention: mentioned ? t("chat.mentioned_you") : "",
+        unread: count ? t("chat.unread_count", { count }) : "",
+      })}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 68,

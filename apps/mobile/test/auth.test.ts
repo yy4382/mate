@@ -1,3 +1,4 @@
+import en from "../src/locales/en.json";
 import { describe, expect, it } from "vitest";
 import { MobileAuth, type AuthPlatform } from "../src/auth.ts";
 
@@ -107,7 +108,7 @@ describe("mobile authentication public interface", () => {
     await auth.login("sam", "wrong");
     expect(auth.getSnapshot()).toMatchObject({
       kind: "signed-out",
-      message: "Handle 或密码不对。",
+      message: en.auth.incorrect_handle_or_password,
     });
     p.respond(async () => {
       throw new TypeError("offline");
@@ -115,7 +116,7 @@ describe("mobile authentication public interface", () => {
     await auth.login("sam", "correct");
     expect(auth.getSnapshot()).toMatchObject({
       kind: "signed-out",
-      message: "无法完成登录，请检查网络和服务器后重试。",
+      message: en.auth.could_not_sign_in_check_your_network,
     });
     expect(p.preferences?.restore).toBe(false);
   });
@@ -144,7 +145,7 @@ describe("mobile authentication public interface", () => {
     await auth.revalidate();
     expect(auth.getSnapshot()).toMatchObject({
       kind: "signed-out",
-      message: "登录已失效，请重新登录。",
+      message: en.auth.your_session_has_expired_sign_in_again,
     });
     const count = p.calls.length;
     const restarted = new MobileAuth(p.port);
@@ -185,7 +186,7 @@ describe("mobile authentication public interface", () => {
     await auth.logout();
     expect(auth.getSnapshot()).toMatchObject({
       kind: "signed-out",
-      message: "已在本机退出；未能确认服务器撤销会话。",
+      message: en.auth.signed_out_on_this_device_server_session,
     });
     expect(p.cookiesCleared).toBe(1);
     const count = p.calls.length;
@@ -219,7 +220,11 @@ describe("mobile authentication public interface", () => {
         expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me"]);
       }
       await auth.retry();
-      expect(auth.getSnapshot()).toEqual({ kind: "signed-out", server, message: "已退出登录。" });
+      expect(auth.getSnapshot()).toEqual({
+        kind: "signed-out",
+        server,
+        message: en.auth.signed_out,
+      });
       expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me", server + "/api/logout"]);
       expect(p.preferences).toEqual({ server, restore: false });
       expect(p.cookiesCleared).toBe(1);

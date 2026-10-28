@@ -1,3 +1,4 @@
+import { t } from "../../../i18n";
 import { router, Stack } from "expo-router";
 import { useState } from "react";
 import { ActivityIndicator, ScrollView, View, RefreshControl } from "react-native";
@@ -8,10 +9,10 @@ import { ConversationRow } from "../../../conversation-row";
 export default function Conversations() {
   const chat = useChat();
   const state = useChatState();
-  const [filter, setFilter] = useState<"全部" | "未读" | "提及">("全部");
+  const [filter, setFilter] = useState<"all" | "unread" | "mentions">("all");
   const unread = state.unread.timelines;
   const matching = (count: number, mention: boolean) =>
-    filter === "全部" || (filter === "未读" ? count > 0 : mention);
+    filter === "all" || (filter === "unread" ? count > 0 : mention);
   const open = (id: number, thread?: number) =>
     router.push({ pathname: "/conversation", params: { id, ...(thread ? { thread } : {}) } });
   const conversations = state.conversations.filter(
@@ -22,10 +23,10 @@ export default function Conversations() {
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
           icon="plus"
-          accessibilityLabel="新建会话"
+          accessibilityLabel={t("chat.new_conversation")}
           onPress={() => router.push("/new")}
         >
-          新建会话
+          {t("chat.new_conversation")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <ScrollView
@@ -38,71 +39,101 @@ export default function Conversations() {
           />
         }
       >
-        <Row title="搜索消息" onPress={() => router.push("/search")} />
+        <Row title={t("chat.search_messages")} onPress={() => router.push("/search")} />
         {state.me === 0 ? (
-          <ActivityIndicator accessibilityLabel="正在读取聊天" />
+          <ActivityIndicator accessibilityLabel={t("chat.loading_chats")} />
         ) : (
           <>
             <Segmented
-              options={["全部", "未读", "提及"] as const}
+              options={["all", "unread", "mentions"] as const}
+              labels={{
+                all: t("chat.all"),
+                unread: t("chat.unread"),
+                mentions: t("chat.mentions"),
+              }}
               value={filter}
               onChange={setFilter}
             />
             {state.connection !== "live" && (
               <Caption>
                 {state.connection === "connecting"
-                  ? "正在连接实时消息…"
-                  : "连接已中断，正在重连。已有消息仍可阅读。"}
+                  ? t("chat.connecting_to_live_messages")
+                  : t("chat.disconnected_reconnecting_now_loaded_messages_are_still")}
               </Caption>
             )}
-            {!!state.error && <Button title="重试连接" onPress={() => void chat.resume()} />}
-            {unread.some((t) => t.inThread && t.unread > 0 && matching(t.unread, t.mentioned)) && (
+            {!!state.error && (
+              <Button title={t("chat.retry_connection")} onPress={() => void chat.resume()} />
+            )}
+            {unread.some(
+              (unreadTimeline) =>
+                unreadTimeline.inThread &&
+                unreadTimeline.unread > 0 &&
+                matching(unreadTimeline.unread, unreadTimeline.mentioned),
+            ) && (
               <View>
-                <Caption>未读讨论串</Caption>
+                <Caption>{t("chat.unread_threads")}</Caption>
                 {unread
-                  .filter((t) => t.inThread && t.unread > 0 && matching(t.unread, t.mentioned))
-                  .map((t) => {
-                    const thread = "thread" in t.timeline ? t.timeline.thread : undefined;
+                  .filter(
+                    (unreadTimeline) =>
+                      unreadTimeline.inThread &&
+                      unreadTimeline.unread > 0 &&
+                      matching(unreadTimeline.unread, unreadTimeline.mentioned),
+                  )
+                  .map((unreadTimeline) => {
+                    const thread =
+                      "thread" in unreadTimeline.timeline
+                        ? unreadTimeline.timeline.thread
+                        : undefined;
                     const root = chat
-                      .timeline({ conversation: t.conversationId })
+                      .timeline({ conversation: unreadTimeline.conversationId })
                       .entries.find((e) => e.kind === "message" && e.messageId === thread);
                     const title =
                       root?.kind === "message"
                         ? (root.body.split("\n")[0] ?? "").replace(/^#+\s*/, "").slice(0, 60)
-                        : `${state.accounts.find((a) => a.handle === t.latestSender)?.displayName ?? t.latestSender}的回复`;
+                        : t("chat.reply_from", {
+                            name:
+                              state.accounts.find((a) => a.handle === unreadTimeline.latestSender)
+                                ?.displayName ?? unreadTimeline.latestSender,
+                          });
                     return (
                       <ConversationRow
-                        key={JSON.stringify(t.timeline)}
-                        title={title || "讨论串"}
-                        subtitle={`${t.label} · 讨论串`}
+                        key={JSON.stringify(unreadTimeline.timeline)}
+                        title={title || t("chat.thread")}
+                        subtitle={t("chat.thread_label", { name: unreadTimeline.label })}
                         kind="thread"
-                        count={t.unread}
-                        mentioned={t.mentioned}
-                        onPress={() => open(t.conversationId, thread)}
+                        count={unreadTimeline.unread}
+                        mentioned={unreadTimeline.mentioned}
+                        onPress={() => open(unreadTimeline.conversationId, thread)}
                       />
                     );
                   })}
               </View>
             )}
-            {(["私信", "频道"] as const).map((kind) => {
+            {(["dm", "channel"] as const).map((kind) => {
               const rows = conversations
-                .filter((x) => (x.kind === "dm") === (kind === "私信"))
+                .filter((x) => (x.kind === "dm") === (kind === "dm"))
                 .filter((x) => {
                   const u = unread.filter(
-                    (t) => t.conversationId === x.conversationId && !t.inThread,
+                    (unreadTimeline) =>
+                      unreadTimeline.conversationId === x.conversationId &&
+                      !unreadTimeline.inThread,
                   );
                   return matching(
-                    u.reduce((s, t) => s + t.unread, 0),
-                    u.some((t) => t.mentioned),
+                    u.reduce((s, unreadTimeline) => s + unreadTimeline.unread, 0),
+                    u.some((unreadTimeline) => unreadTimeline.mentioned),
                   );
                 });
               return (
                 rows.length > 0 && (
                   <View key={kind}>
-                    <Caption>{kind}</Caption>
+                    <Caption>
+                      {kind === "dm" ? t("chat.direct_message") : t("chat.channel")}
+                    </Caption>
                     {rows.map((x) => {
                       const u = unread.find(
-                        (t) => t.conversationId === x.conversationId && !t.inThread,
+                        (unreadTimeline) =>
+                          unreadTimeline.conversationId === x.conversationId &&
+                          !unreadTimeline.inThread,
                       );
                       const peer =
                         x.kind === "dm"
@@ -116,12 +147,16 @@ export default function Conversations() {
                           title={conversationLabel(x, state.accounts, state.me)}
                           subtitle={
                             u?.unread
-                              ? `${state.accounts.find((a) => a.handle === u.latestSender)?.displayName ?? u.latestSender} · 有未读消息`
+                              ? t("chat.unread_from", {
+                                  name:
+                                    state.accounts.find((a) => a.handle === u.latestSender)
+                                      ?.displayName ?? u.latestSender,
+                                })
                               : peer
-                                ? `${peer.kind === "agent" ? "Agent" : "人类"} · @${peer.handle}`
+                                ? `${peer.kind === "agent" ? t("chat.agent") : t("chat.human")} · @${peer.handle}`
                                 : x.kind === "private"
-                                  ? "私有频道"
-                                  : "公开频道"
+                                  ? t("chat.private_channel")
+                                  : t("chat.public_channel")
                           }
                           kind={peer?.kind ?? (x.kind === "dm" ? "human" : x.kind)}
                           count={u?.unread ?? 0}
@@ -135,18 +170,29 @@ export default function Conversations() {
               );
             })}
             {conversations.length === 0 && (
-              <Empty title="从一段对话开始" message="选择一位同事发私信，或创建一个频道。">
-                <Button title="新建会话" onPress={() => router.push("/new")} />
+              <Empty
+                title={t("chat.start_a_conversation")}
+                message={t("chat.choose_a_colleague_to_message_or_create")}
+              >
+                <Button title={t("chat.new_conversation")} onPress={() => router.push("/new")} />
               </Empty>
             )}
-            {filter !== "全部" &&
-              !unread.some((t) => matching(t.unread, t.mentioned) && t.unread > 0) && (
-                <Empty title={filter === "提及" ? "没有未读提及" : "都读完了"} />
+            {filter !== "all" &&
+              !unread.some(
+                (unreadTimeline) =>
+                  matching(unreadTimeline.unread, unreadTimeline.mentioned) &&
+                  unreadTimeline.unread > 0,
+              ) && (
+                <Empty
+                  title={
+                    filter === "mentions" ? t("chat.no_unread_mentions") : t("chat.all_caught_up")
+                  }
+                />
               )}
             <View>
-              <Row title="浏览频道" onPress={() => router.push("/channels")} />
+              <Row title={t("chat.browse_channels")} onPress={() => router.push("/channels")} />
               <Row
-                title="已归档"
+                title={t("chat.archived")}
                 onPress={() => router.push({ pathname: "/channels", params: { archived: "1" } })}
               />
             </View>

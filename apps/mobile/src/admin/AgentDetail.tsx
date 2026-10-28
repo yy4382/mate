@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { AgentView, CatalogModel } from "@mate/admin";
 import { router, Stack, useIsFocused } from "expo-router";
 import { useEffect, useRef, useState } from "react";
@@ -64,7 +65,7 @@ function Settings({ agent, refresh }: { agent: ReadableAgent; refresh(): void })
                     "PUT",
                     settingsBody(value, choices),
                   ),
-                "已保存，从下一次模型请求起生效。",
+                t("management.saved_changes_take_effect_with_the_next"),
               )
               .then((ok) => {
                 if (ok) {
@@ -74,13 +75,15 @@ function Settings({ agent, refresh }: { agent: ReadableAgent; refresh(): void })
               });
           }}
         >
-          {operation.busy ? "保存中…" : "保存"}
+          {operation.busy ? t("settings.saving") : t("settings.save")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Screen>
         <Caption>{agent.displayName ?? agent.agentId}</Caption>
         <ErrorLine error={models.error} />
-        {models.error != null && <Button title="重新读取模型目录" onPress={models.refresh} />}
+        {models.error != null && (
+          <Button title={t("management.reload_model_catalog")} onPress={models.refresh} />
+        )}
         <SettingsFields
           models={choices}
           value={value}
@@ -91,10 +94,19 @@ function Settings({ agent, refresh }: { agent: ReadableAgent; refresh(): void })
           disabled={operation.busy}
         />
         <Outcome operation={operation} />
-        <Section title="身份与归属" footer="显示名、Handle 和主 Node 在这里仅供查看。">
-          <Row title="显示名" value={agent.displayName ?? "未知"} />
-          <Row title="Handle" value={agent.handle ? `@${agent.handle}` : "未知"} />
-          <Row title="主 Node" value={agent.nodeName} />
+        <Section
+          title={t("management.identity_and_home_node")}
+          footer={t("management.display_name_handle_and_home_node_are")}
+        >
+          <Row
+            title={t("settings.display_name")}
+            value={agent.displayName ?? t("management.unknown")}
+          />
+          <Row
+            title={t("settings.handle")}
+            value={agent.handle ? `@${agent.handle}` : t("management.unknown")}
+          />
+          <Row title={t("management.home_node")} value={agent.nodeName} />
         </Section>
       </Screen>
     </>
@@ -129,11 +141,15 @@ export function AgentDestination({
       <Loading loading={agents.loading && !agents.data} />
       {agents.data && (
         <Empty
-          title={agent ? "无法读取 Agent" : "找不到这个 Agent"}
-          message={agent ? "返回总览查看问题详情。" : "它可能已被删除。"}
+          title={agent ? t("management.cannot_read_agent") : t("management.agent_not_found")}
+          message={
+            agent
+              ? t("management.return_to_the_overview_to_see_the")
+              : t("management.it_may_have_been_deleted")
+          }
         />
       )}
-      <Button title="重新读取 Agent" onPress={agents.refresh} />
+      <Button title={t("management.reload_agent")} onPress={agents.refresh} />
     </Screen>
   );
 }
@@ -145,7 +161,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
   const c = useTheme();
   const agents = useResource<AgentView[]>("/api/admin/agents", 5000);
   const operation = useOperation();
-  const [tab, setTab] = useState<"总览" | "观察" | "工作区">("总览");
+  const [tab, setTab] = useState<"overview" | "observe" | "workspace">("overview");
   const [management, setManagement] = useState<"menu" | "delete" | null>(null);
   const focused = useIsFocused();
   const focus = useRef(focused);
@@ -153,7 +169,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
     focus.current = focused;
   }, [focused]);
   const agent = agents.data?.find((candidate) => candidate.agentId === agentId);
-  const name = agent?.displayName ?? "Agent";
+  const name = agent?.displayName ?? t("chat.agent");
   const lifecycle = () => {
     if (!agent || agent.state === "unreadable" || !ready) return;
     setManagement(null);
@@ -164,7 +180,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
             `/api/admin/agents/${encodeURIComponent(agentId)}/${agent.state === "open" ? "pause" : "resume"}`,
             "POST",
           ),
-        agent.state === "open" ? "Agent 已暂停。" : "Agent 已恢复。",
+        agent.state === "open" ? t("management.agent_paused") : t("management.agent_resumed"),
       )
       .then((ok) => {
         if (ok) agents.refresh();
@@ -179,27 +195,41 @@ export function AgentDetail({ agentId }: { agentId: string }) {
     router.push({ pathname: paths[page], params: { id: agentId } });
   };
   const navigation = agent && agent.state !== "unreadable" && (
-    <Segmented value={tab} options={["总览", "观察", "工作区"] as const} onChange={setTab} />
+    <Segmented
+      value={tab}
+      options={["overview", "observe", "workspace"] as const}
+      labels={{
+        overview: t("management.overview"),
+        observe: t("management.observe"),
+        workspace: t("management.workspace"),
+      }}
+      onChange={setTab}
+    />
   );
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <Stack.Screen
         options={{
-          title: tab === "总览" ? name : tab === "观察" ? `观察 · ${name}` : "工作区",
+          title:
+            tab === "overview"
+              ? name
+              : tab === "observe"
+                ? t("management.observe_name", { name: name })
+                : t("management.workspace"),
           headerLargeTitle: false,
         }}
       />
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
           icon="ellipsis"
-          accessibilityLabel={`管理 ${name}`}
+          accessibilityLabel={t("management.manage_name", { name: name })}
           hidden={!ready || !agent}
           onPress={() => setManagement("menu")}
         >
-          管理 Agent
+          {t("management.manage_agent")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
-      {tab === "观察" && agent && agent.state !== "unreadable" ? (
+      {tab === "observe" && agent && agent.state !== "unreadable" ? (
         agent.state === "open" ? (
           <Watch agentId={agentId} name={name} navigation={navigation} />
         ) : (
@@ -207,14 +237,18 @@ export function AgentDetail({ agentId }: { agentId: string }) {
             {navigation}
             <Empty
               title={stateLabel[agent.state]}
-              message="恢复后可以观察主对话和工作助手。工作区仍可阅读。"
+              message={t("management.resume_to_observe_the_main_conversation_and")}
             >
-              <Button title="恢复 Agent" disabled={operation.busy} onPress={lifecycle} />
+              <Button
+                title={t("management.resume_agent")}
+                disabled={operation.busy}
+                onPress={lifecycle}
+              />
             </Empty>
             <Outcome operation={operation} />
           </Screen>
         )
-      ) : tab === "工作区" && agent && agent.state !== "unreadable" ? (
+      ) : tab === "workspace" && agent && agent.state !== "unreadable" ? (
         <Workspace
           agentId={agentId}
           name={name}
@@ -227,11 +261,19 @@ export function AgentDetail({ agentId }: { agentId: string }) {
           <ErrorLine error={agents.error} />
           <Loading loading={agents.loading && !agents.data} />
           {!agent && agents.data && (
-            <Empty title="找不到这个 Agent" message="它可能已被删除。">
-              <Button title="返回 Agent 列表" onPress={() => router.replace("/agents")} />
+            <Empty
+              title={t("management.agent_not_found")}
+              message={t("management.it_may_have_been_deleted")}
+            >
+              <Button
+                title={t("management.back_to_agent_list")}
+                onPress={() => router.replace("/agents")}
+              />
             </Empty>
           )}
-          {agents.error != null && <Button title="重新读取 Agent" onPress={agents.refresh} />}
+          {agents.error != null && (
+            <Button title={t("management.reload_agent")} onPress={agents.refresh} />
+          )}
           {agent && (
             <>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
@@ -242,11 +284,16 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                 </View>
               </View>
               {agent.state !== "unreadable" && agent.state !== "open" && (
-                <Button title="恢复 Agent" primary disabled={operation.busy} onPress={lifecycle} />
+                <Button
+                  title={t("management.resume_agent")}
+                  primary
+                  disabled={operation.busy}
+                  onPress={lifecycle}
+                />
               )}
               {agent.accountId !== undefined && (
                 <Button
-                  title="发消息"
+                  title={t("management.message")}
                   primary={agent.state === "open"}
                   disabled={operation.busy || !chat}
                   onPress={() => {
@@ -277,21 +324,24 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                 <ErrorLine error={agent.problem} />
               ) : (
                 <>
-                  <Section title="运行环境">
+                  <Section title={t("management.runtime_environment")}>
                     <Row
-                      title="模型"
+                      title={t("management.models")}
                       subtitle={`${agent.settings.model.provider} / ${agent.settings.model.modelId}`}
                     />
-                    <Row title="主 Node" value={agent.nodeName} />
+                    <Row title={t("management.home_node")} value={agent.nodeName} />
                   </Section>
-                  <Section title="管理">
+                  <Section title={t("management.manage")}>
                     <Row
-                      title="设置"
-                      subtitle="模型、思考级别与说明文字"
+                      title={t("management.settings")}
+                      subtitle={t("management.model_thinking_level_and_instructions")}
                       onPress={() => destination("settings")}
                     />
-                    <Row title="Node 访问" onPress={() => destination("access")} />
-                    <Row title="用量" onPress={() => destination("usage")} />
+                    <Row
+                      title={t("management.node_access")}
+                      onPress={() => destination("access")}
+                    />
+                    <Row title={t("management.usage")} onPress={() => destination("usage")} />
                   </Section>
                 </>
               )}
@@ -301,40 +351,42 @@ export function AgentDetail({ agentId }: { agentId: string }) {
       )}
       <Sheet
         visible={management === "menu" && !!agent}
-        title={`管理 ${name}`}
+        title={t("management.manage_name", { name: name })}
         onClose={() => setManagement(null)}
       >
         <Section>
           {agent && agent.state !== "unreadable" && (
             <Row
-              title={agent.state === "open" ? "暂停 Agent" : "恢复 Agent"}
+              title={
+                agent.state === "open" ? t("management.pause_agent") : t("management.resume_agent")
+              }
               subtitle={
-                agent.state === "open" ? "中止当前工作，之后可以恢复" : "从保存的上下文继续"
+                agent.state === "open"
+                  ? t("management.stop_current_work_it_can_be_resumed")
+                  : t("management.continue_from_the_saved_context")
               }
               disabled={operation.busy}
               onPress={lifecycle}
             />
           )}
           <Row
-            title="删除 Agent…"
+            title={t("management.delete_agent")}
             danger
             disabled={operation.busy}
             onPress={() => setManagement("delete")}
           />
         </Section>
-        <Caption>Agent ID</Caption>
+        <Caption>{t("management.agent_id")}</Caption>
         <Copy mono>{agentId}</Copy>
       </Sheet>
       <Sheet
         visible={management === "delete" && !!agent}
-        title={`删除 ${name}？`}
+        title={t("management.delete_question", { name: name })}
         onClose={() => setManagement(null)}
       >
-        <Copy>
-          设置和 Agent 对话记录将被删除，聊天账号永久停用。已经发出的聊天消息保留。此操作无法恢复。
-        </Copy>
+        <Copy>{t("management.settings_and_agent_conversation_records_will_be")}</Copy>
         <Button
-          title={`删除 ${name}`}
+          title={t("management.delete_name", { name: name })}
           primary
           danger
           disabled={operation.busy || !ready}
@@ -343,14 +395,14 @@ export function AgentDetail({ agentId }: { agentId: string }) {
             void operation
               .run(
                 () => client.request(`/api/admin/agents/${encodeURIComponent(agentId)}`, "DELETE"),
-                "Agent 已删除。",
+                t("management.agent_deleted"),
               )
               .then((ok) => {
                 if (ok && focus.current) router.back();
               });
           }}
         />
-        <Button title="取消" onPress={() => setManagement(null)} />
+        <Button title={t("common.cancel")} onPress={() => setManagement(null)} />
       </Sheet>
     </View>
   );

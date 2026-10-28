@@ -1,3 +1,4 @@
+import { t, dateText, numberText } from "../i18n";
 import { useCallback, useReducer, useRef, useState, type ReactNode } from "react";
 import { FlatList, Pressable, View } from "react-native";
 import { Stack, useFocusEffect } from "expo-router";
@@ -19,23 +20,32 @@ type Reading =
   | { kind: "context" }
   | { kind: "usage" }
   | { kind: "instructions" };
-const roleLabel = { system: "系统提示", user: "输入", assistant: "Agent", toolResult: "工具结果" };
-const toolLabel = { running: "运行中", done: "已结束", pending: "等待执行" };
+const roleLabel = {
+  system: t("observation.system_prompt"),
+  user: t("management.input"),
+  assistant: t("chat.agent"),
+  toolResult: t("observation.tool_result"),
+};
+const toolLabel = {
+  running: t("management.running"),
+  done: t("observation.ended"),
+  pending: t("observation.pending"),
+};
 const labels: Record<string, string> = {
-  command: "命令",
-  path: "路径",
-  node: "目标 Node",
-  timeout: "时限（秒）",
-  background: "后台执行",
-  content: "内容",
-  body: "正文",
-  query: "查询",
-  name: "名字",
-  arguments: "参数",
+  command: t("observation.command"),
+  path: t("observation.path"),
+  node: t("observation.target_node"),
+  timeout: t("observation.time_limit_seconds"),
+  background: t("observation.run_in_background"),
+  content: t("observation.content"),
+  body: t("observation.body"),
+  query: t("observation.query"),
+  name: t("observation.name"),
+  arguments: t("observation.arguments"),
 };
 function Values({ value }: { value: unknown }) {
-  if (value === undefined) return <Copy muted>未提供。</Copy>;
-  if (value === null) return <Copy muted>无</Copy>;
+  if (value === undefined) return <Copy muted>{t("observation.not_provided")}</Copy>;
+  if (value === null) return <Copy muted>{t("observation.none")}</Copy>;
   if (Array.isArray(value) && value.length === 0) return <Copy mono>[]</Copy>;
   if (Array.isArray(value))
     return (
@@ -57,7 +67,15 @@ function Values({ value }: { value: unknown }) {
         ))}
       </View>
     );
-  return <Copy mono>{typeof value === "boolean" ? (value ? "是" : "否") : String(value)}</Copy>;
+  return (
+    <Copy mono>
+      {typeof value === "boolean"
+        ? value
+          ? t("observation.yes")
+          : t("observation.no")
+        : String(value)}
+    </Copy>
+  );
 }
 function MessageBody({ message }: { message: Message }) {
   if (typeof message.content === "string") return <Copy>{message.content}</Copy>;
@@ -69,16 +87,16 @@ function MessageBody({ message }: { message: Message }) {
             <Copy>{block.text}</Copy>
           ) : block.type === "thinking" ? (
             <>
-              <Caption>思考</Caption>
+              <Caption>{t("observation.thinking")}</Caption>
               <Copy>{block.thinking}</Copy>
             </>
           ) : block.type === "toolCall" ? (
             <>
-              <Copy>调用 {block.name}</Copy>
+              <Copy>{t("observation.call_name", { name: block.name })}</Copy>
               <Values value={block.arguments} />
             </>
           ) : (
-            <Caption>图片 · {block.mimeType}</Caption>
+            <Caption>{t("observation.image_type", { type: block.mimeType })}</Caption>
           )}
         </View>
       ))}
@@ -112,15 +130,15 @@ function ToolActivity({
     <Section>
       <Row
         title={call.name}
-        subtitle="参数和完整输出"
+        subtitle={t("observation.arguments_and_full_output")}
         value={
           result
             ? result.message.isError
-              ? "出错"
-              : "完成"
+              ? t("observation.error")
+              : t("observation.done")
             : tool
               ? toolLabel[tool.status]
-              : "等待执行"
+              : t("observation.pending")
         }
         onPress={onOpen}
       />
@@ -150,8 +168,8 @@ function RecordMessage({
   if (message.role === "system")
     return (
       <Row
-        title="系统提示与工具变更"
-        subtitle={`记录 #${entryId}`}
+        title={t("observation.system_prompt_and_tool_changes")}
+        subtitle={t("observation.record", { id: entryId })}
         onPress={() => onRead({ kind: "message", message, entryId })}
       />
     );
@@ -166,7 +184,11 @@ function RecordMessage({
     )
   )
     return null;
-  const label = `${roleLabel[message.role]} · 记录 #${entryId} · ${new Date(message.timestamp).toLocaleTimeString("zh-CN")}`;
+  const label = t("observation.record_label", {
+    role: roleLabel[message.role],
+    id: entryId,
+    time: dateText(message.timestamp, { timeStyle: "medium" }),
+  });
   return (
     <View
       style={{
@@ -179,7 +201,7 @@ function RecordMessage({
     >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`查看记录 #${entryId} 详情`}
+        accessibilityLabel={t("observation.record_accessibility", { id: entryId })}
         style={{ minHeight: 44, justifyContent: "center" }}
         onPress={() => onRead({ kind: "message", message, entryId })}
       >
@@ -200,7 +222,7 @@ function RecordMessage({
             ) : (
               <Button
                 key={index}
-                title="查看思考"
+                title={t("observation.view_thinking")}
                 onPress={() => onRead({ kind: "message", message, entryId })}
               />
             ),
@@ -213,7 +235,7 @@ function RecordMessage({
         <>
           <Copy>{message.content.slice(0, 120)}…</Copy>
           <Button
-            title="查看原始输入"
+            title={t("observation.view_original_input")}
             onPress={() => onRead({ kind: "message", message, entryId })}
           />
         </>
@@ -234,7 +256,7 @@ function ReadingBody({
 }) {
   if (reading.kind === "usage") return <Usage usage={state.usage} />;
   if (reading.kind === "instructions")
-    return <Copy>{state.agent.instructions || "尚未设置说明文字。"}</Copy>;
+    return <Copy>{state.agent.instructions || t("observation.no_instructions_set")}</Copy>;
   if (reading.kind === "context") {
     const head = state.entries.reduce<number | undefined>(
       (latest, entry) => entry.head ?? latest,
@@ -243,17 +265,30 @@ function ReadingBody({
     return (
       <>
         <Section>
-          <Row title="当前说明文字" onPress={() => onRead({ kind: "instructions" })} />
-          <Row title="用量明细" onPress={() => onRead({ kind: "usage" })} />
-          <Row title="排队输入" value={String(state.queued)} />
-          <Row title="上下文起点" value={head === undefined ? "尚无记录" : `记录 #${head}`} />
+          <Row
+            title={t("observation.current_instructions")}
+            onPress={() => onRead({ kind: "instructions" })}
+          />
+          <Row title={t("observation.usage_details")} onPress={() => onRead({ kind: "usage" })} />
+          <Row title={t("observation.queued_input")} value={numberText(state.queued)} />
+          <Row
+            title={t("observation.context_start")}
+            value={
+              head === undefined
+                ? t("observation.no_records_yet")
+                : t("observation.record", { id: head })
+            }
+          />
         </Section>
         {state.entries
           .filter((entry) => entry.head !== undefined)
           .map((entry) => (
             <View key={entry.id} style={{ gap: 8 }}>
               <Caption>
-                上下文更新 · 记录 #{entry.id} · 起点 #{entry.head}
+                {t("observation.context_record", {
+                  id: numberText(entry.id),
+                  head: numberText(entry.head ?? 0),
+                })}
               </Caption>
               {entry.model?.map((message, index) => (
                 <MessageBody key={index} message={message} />
@@ -261,21 +296,21 @@ function ReadingBody({
               {entry.data !== undefined && <Values value={entry.data} />}
             </View>
           ))}
-        <Section title="系统提示与工具变更">
+        <Section title={t("observation.system_prompt_and_tool_changes")}>
           {state.entries.flatMap((entry) =>
             (entry.model ?? [])
               .filter((message) => message.role === "system")
               .map((message, index) => (
                 <Row
                   key={`${entry.id}/${index}`}
-                  title={`记录 #${entry.id}`}
+                  title={t("observation.record", { id: entry.id })}
                   onPress={() => onRead({ kind: "message", message, entryId: entry.id })}
                 />
               )),
           )}
         </Section>
         {state.notes.length > 0 && (
-          <Section title="诊断记录">
+          <Section title={t("observation.diagnostic_records")}>
             {state.notes.map((note, index) => (
               <View key={index} style={{ padding: 16 }}>
                 <Copy>{note}</Copy>
@@ -293,29 +328,34 @@ function ReadingBody({
     return (
       <>
         <Copy>{call.name}</Copy>
-        <Caption>调用 ID</Caption>
+        <Caption>{t("observation.call_id")}</Caption>
         <Copy mono>{call.id}</Copy>
-        <Section title="完整参数">
+        <Section title={t("observation.full_arguments")}>
           <View style={{ padding: 16 }}>
             <Values value={call.arguments} />
           </View>
         </Section>
         {tool && (
           <>
-            <Caption>{toolLabel[tool.status]} · 流式输出</Caption>
-            <Copy mono>{tool.output || "尚无输出。"}</Copy>
+            <Caption>
+              {t("observation.streaming_output", { status: toolLabel[tool.status] })}
+            </Caption>
+            <Copy mono>{tool.output || t("observation.no_output_yet")}</Copy>
           </>
         )}
         {result && (
           <>
             <Caption>
-              完整结果 · 记录 #{result.entryId} · {result.message.isError ? "出错" : "完成"}
+              {t("observation.full_result", {
+                id: numberText(result.entryId),
+                status: result.message.isError ? t("observation.error") : t("observation.done"),
+              })}
             </Caption>
             <MessageBody message={result.message} />
             {result.message.details !== undefined && <Values value={result.message.details} />}
           </>
         )}
-        {!result && <Caption>尚无已记录的工具结果。</Caption>}
+        {!result && <Caption>{t("observation.no_tool_result_recorded_yet")}</Caption>}
       </>
     );
   }
@@ -323,8 +363,11 @@ function ReadingBody({
   return (
     <>
       <Caption>
-        {roleLabel[message.role]} · 记录 #{entryId} ·{" "}
-        {new Date(message.timestamp).toLocaleString("zh-CN")}
+        {t("observation.record_label", {
+          role: roleLabel[message.role],
+          id: numberText(entryId),
+          time: dateText(message.timestamp),
+        })}
       </Caption>
       <MessageBody message={message} />
       {message.role === "system" && (
@@ -332,19 +375,19 @@ function ReadingBody({
           {Object.entries(message.sections ?? {}).map(([name, content]) => (
             <Section key={name} title={name}>
               <View style={{ padding: 16 }}>
-                <Copy>{content ?? "已移除"}</Copy>
+                <Copy>{content ?? t("observation.removed")}</Copy>
               </View>
             </Section>
           ))}
           {message.toolsAdded?.map((tool) => (
-            <Section key={tool.name} title={`添加工具 · ${tool.name}`}>
+            <Section key={tool.name} title={t("observation.add_tool", { name: tool.name })}>
               <View style={{ padding: 16 }}>
                 <Values value={tool} />
               </View>
             </Section>
           ))}
           {message.toolsRemoved?.map((tool) => (
-            <Copy key={tool.name}>移除工具 · {tool.name}</Copy>
+            <Copy key={tool.name}>{t("observation.remove_tool", { name: tool.name })}</Copy>
           ))}
         </>
       )}
@@ -352,7 +395,7 @@ function ReadingBody({
         <>
           <ErrorLine error={message.errorMessage} />
           <Caption>
-            模型 · {message.provider} / {message.model}
+            {t("observation.model_name", { provider: message.provider, model: message.model })}
           </Caption>
           <Values value={message.usage} />
         </>
@@ -360,7 +403,8 @@ function ReadingBody({
       {message.role === "toolResult" && (
         <>
           <Caption>
-            {message.toolName} · {message.isError ? "出错" : "完成"} · {message.toolCallId}
+            {message.toolName} · {message.isError ? t("observation.error") : t("observation.done")}{" "}
+            · {message.toolCallId}
           </Caption>
           {message.details !== undefined && <Values value={message.details} />}
         </>
@@ -433,35 +477,39 @@ function ObservationTarget({
   const stale = connection !== "connected" && snapshotAt !== undefined;
   const title =
     reading?.kind === "context"
-      ? "上下文与诊断"
+      ? t("observation.context_and_diagnostics")
       : reading?.kind === "usage"
-        ? "用量明细"
+        ? t("observation.usage_details")
         : reading?.kind === "instructions"
-          ? "当前说明文字"
+          ? t("observation.current_instructions")
           : reading?.kind === "tool"
-            ? "工具调用"
-            : "记录详情";
+            ? t("observation.tool_call")
+            : t("observation.record_details");
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <Stack.Screen
-        options={{ title: assistant ? `工作助手 · ${assistant}` : `主对话 · ${name}` }}
+        options={{
+          title: assistant
+            ? t("observation.assistant_name", { name: assistant })
+            : t("observation.main_name", { name: name }),
+        }}
       />
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
           icon="info.circle"
-          accessibilityLabel="上下文与诊断"
+          accessibilityLabel={t("observation.context_and_diagnostics")}
           hidden={access.kind !== "ready"}
           onPress={() => setReading({ kind: "context" })}
         >
-          观察详情
+          {t("observation.observation_details")}
         </Stack.Toolbar.Button>
         <Stack.Toolbar.Button
           icon="arrow.clockwise"
-          accessibilityLabel="重新连接观察"
+          accessibilityLabel={t("observation.reconnect_observation")}
           hidden={access.kind !== "ready"}
           onPress={() => setRevision((old) => old + 1)}
         >
-          重新连接
+          {t("observation.reconnect")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <FlatList
@@ -492,33 +540,39 @@ function ObservationTarget({
             {selector}
             <Caption>
               {state.ended
-                ? "观察已结束，Agent 已暂停、删除或控制面已关闭。"
+                ? t("observation.observation_ended_the_agent_was_paused_or")
                 : connection === "disconnected"
-                  ? "观察连接中断"
+                  ? t("observation.observation_disconnected")
                   : connection === "connecting"
-                    ? "正在连接观察…"
+                    ? t("observation.connecting_to_observation")
                     : state.run
-                      ? "正在执行"
-                      : "空闲，等待输入"}
+                      ? t("observation.working")
+                      : t("observation.idle_waiting_for_input")}
             </Caption>
             <Caption>
-              {stale ? `上次快照 ${new Date(snapshotAt).toLocaleTimeString("zh-CN")} · ` : ""}
-              排队输入 {state.queued}
-              {head === undefined ? "" : ` · 上下文起点 #${head}`}
+              {stale ? t("observation.snapshot_time", { time: dateText(snapshotAt) }) : ""}
+              {head === undefined
+                ? t("observation.queued_count", { count: state.queued })
+                : t("observation.queued_context", { count: state.queued, head: numberText(head) })}
             </Caption>
             <ErrorLine error={problem} />
             {connection === "disconnected" && !state.ended && (
-              <Button title="重新连接观察" onPress={() => setRevision((old) => old + 1)} />
+              <Button
+                title={t("observation.reconnect_observation")}
+                onPress={() => setRevision((old) => old + 1)}
+              />
             )}
             {state.entries.length === 0 &&
               Object.keys(state.streaming).length === 0 &&
-              connection === "connected" && <Empty title="还没有对话内容" />}
+              connection === "connected" && (
+                <Empty title={t("observation.no_conversation_content_yet")} />
+              )}
           </View>
         }
         renderItem={({ item: entry }) => (
           <View style={{ gap: 12 }}>
             {head !== undefined && entry.id < head && (
-              <Caption>记录 #{entry.id} · 上下文起点之前</Caption>
+              <Caption>{t("observation.before_context", { id: numberText(entry.id) })}</Caption>
             )}
             {entry.model?.length ? (
               entry.model.map((message, index) => (
@@ -532,8 +586,12 @@ function ObservationTarget({
               ))
             ) : (
               <Row
-                title={entry.head !== undefined ? "上下文已更新" : `记录类型 · ${entry.kind}`}
-                subtitle={`记录 #${entry.id}`}
+                title={
+                  entry.head !== undefined
+                    ? t("observation.context_updated")
+                    : t("observation.record_kind", { kind: entry.kind })
+                }
+                subtitle={t("observation.record", { id: entry.id })}
                 onPress={() => setReading({ kind: "context" })}
               />
             )}
@@ -545,10 +603,10 @@ function ObservationTarget({
               <View key={index} style={{ gap: 8 }}>
                 <Caption>
                   {block.type === "thinking"
-                    ? "正在思考…"
+                    ? t("observation.thinking_2")
                     : block.type === "toolCall"
-                      ? "正在准备工具调用…"
-                      : "正在写入…"}
+                      ? t("observation.preparing_tool_call")
+                      : t("observation.writing")}
                 </Caption>
                 {block.type === "toolCall" ? (
                   <>
@@ -565,9 +623,9 @@ function ObservationTarget({
               .map(([id, tool]) => (
                 <Section key={id} title={`${tool.name} · ${toolLabel[tool.status]}`}>
                   <View style={{ padding: 16, gap: 8 }}>
-                    <Copy mono>{tool.output || "尚无输出。"}</Copy>
+                    <Copy mono>{tool.output || t("observation.no_output_yet")}</Copy>
                     <Values value={tool.args} />
-                    <Caption>调用 ID · {id}</Caption>
+                    <Caption>{t("observation.call_id_value", { id })}</Caption>
                   </View>
                 </Section>
               ))}
@@ -597,16 +655,21 @@ export function Watch({
   const selector = (
     <Section>
       <Select
-        label="观察对象"
+        label={t("observation.observe")}
         value={assistant}
         options={[
-          { value: "", label: "主对话" },
-          ...(assistants.data ?? []).map((name) => ({ value: name, label: `工作助手 · ${name}` })),
+          { value: "", label: t("observation.main_conversation") },
+          ...(assistants.data ?? []).map((name) => ({
+            value: name,
+            label: t("observation.assistant_name", { name: name }),
+          })),
         ]}
         onChange={setAssistant}
       />
       <ErrorLine error={assistants.error} />
-      {assistants.error != null && <Button title="重新读取工作助手" onPress={assistants.refresh} />}
+      {assistants.error != null && (
+        <Button title={t("observation.reload_assistants")} onPress={assistants.refresh} />
+      )}
     </Section>
   );
   return (

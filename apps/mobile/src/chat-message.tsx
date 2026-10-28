@@ -1,3 +1,4 @@
+import { t, dateText, numberText } from "./i18n";
 import { Pressable, Text, View } from "react-native";
 import type { AccountView, Entry } from "@mate/chat/contracts";
 import { accountName } from "./chat";
@@ -43,7 +44,9 @@ export function ChatMessage({
         backgroundColor: !isRoot && entry.seq === targetSeq ? c.tint : c.background,
       }}
     >
-      {entry.seq === targetSeq && !isRoot && <Caption accent>定位到的消息 · #{targetSeq}</Caption>}
+      {entry.seq === targetSeq && !isRoot && (
+        <Caption accent>{t("chat.located_message", { seq: numberText(targetSeq ?? 0) })}</Caption>
+      )}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
         <Avatar
           name={accountName(accounts, entry.author)}
@@ -54,10 +57,10 @@ export function ChatMessage({
           <Text style={{ color: c.foreground, fontSize: 16, fontWeight: "600" }}>
             {accountName(accounts, entry.author)}
           </Text>
-          {author?.kind === "agent" && <Caption>Agent</Caption>}
+          {author?.kind === "agent" && <Caption>{t("chat.agent")}</Caption>}
         </View>
         <Caption>
-          {new Date(entry.at).toLocaleString("zh-CN", {
+          {dateText(entry.at, {
             hour: "2-digit",
             minute: "2-digit",
           })}
@@ -66,7 +69,9 @@ export function ChatMessage({
           <Pressable
             testID={`message-actions-${entry.messageId}`}
             accessibilityRole="button"
-            accessibilityLabel={`消息操作 ${accountName(accounts, entry.author)}`}
+            accessibilityLabel={t("chat.message_actions", {
+              name: accountName(accounts, entry.author),
+            })}
             onPress={() => {
               onMenu(entry);
             }}
@@ -87,15 +92,23 @@ export function ChatMessage({
       <MessageBody text={entry.body} accounts={accounts} mentions={entry.mentions} />
       {entry.attachments.map((a, i) => (
         <Caption key={i}>
-          附件：{a.name}（{a.size} 字节，暂不支持下载）
+          {t("chat.attachment", { name: a.name, count: a.size, size: numberText(a.size) })}
         </Caption>
       ))}
-      {related.map((t) => (
+      {related.map((task) => (
         <Pressable
-          key={t.taskId}
+          key={task.taskId}
           accessibilityRole="button"
-          accessibilityLabel={`查看任务 ${t.title}，${t.change === "completed" ? "已完成" : t.owner === null ? "无人认领" : accountName(accounts, t.owner) + "负责"}`}
-          onPress={() => onTask(t)}
+          accessibilityLabel={t("chat.task_accessibility", {
+            title: task.title,
+            status:
+              task.change === "completed"
+                ? t("chat.completed")
+                : task.owner === null
+                  ? t("chat.unclaimed")
+                  : t("chat.owned_by", { name: accountName(accounts, task.owner) }),
+          })}
+          onPress={() => onTask(task)}
           style={({ pressed }) => ({
             padding: 12,
             gap: 4,
@@ -124,28 +137,35 @@ export function ChatMessage({
               <View style={{ height: 1.5, width: 6, backgroundColor: c.accent }} />
             </View>
             <View style={{ flex: 1, gap: 4 }}>
-              <Copy>{t.title}</Copy>
+              <Copy>{task.title}</Copy>
               <Caption>
-                {t.change === "completed"
-                  ? "已完成"
-                  : t.owner === null
-                    ? "无人认领"
-                    : `${accountName(accounts, t.owner)}${t.owner === me ? "（你）" : ""}负责`}
+                {task.change === "completed"
+                  ? t("chat.completed")
+                  : task.owner === null
+                    ? t("chat.unclaimed")
+                    : t("chat.owned_by", {
+                        name:
+                          task.owner === me
+                            ? t("common.you_name", { name: accountName(accounts, task.owner) })
+                            : accountName(accounts, task.owner),
+                      })}
               </Caption>
             </View>
           </View>
-          <Text style={{ color: c.accent, fontSize: 15, marginLeft: 30 }}>查看任务 ›</Text>
+          <Text style={{ color: c.accent, fontSize: 15, marginLeft: 30 }}>
+            {t("chat.view_task_")}
+          </Text>
         </Pressable>
       ))}
       {!isRoot && knownReplies && (
         <Pressable
           testID={`reply-${entry.messageId}`}
           accessibilityRole="button"
-          accessibilityLabel="回复讨论串"
+          accessibilityLabel={t("chat.reply_in_thread")}
           onPress={() => onThread(entry)}
           style={{ minHeight: 44, justifyContent: "center", alignSelf: "flex-start" }}
         >
-          <Text style={{ fontSize: 15, color: c.accent }}>查看讨论串</Text>
+          <Text style={{ fontSize: 15, color: c.accent }}>{t("chat.view_thread")}</Text>
         </Pressable>
       )}
     </View>

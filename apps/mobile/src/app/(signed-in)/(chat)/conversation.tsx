@@ -1,3 +1,4 @@
+import { t, dateText, numberText } from "../../../i18n";
 import { z } from "zod";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { router, Stack, useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -37,13 +38,13 @@ type Panel =
   | { kind: "message"; entry: Message }
   | { kind: "create-task"; entry: Message; presentation: TaskCreationPresentation }
   | { kind: "task"; task: Task; presentation: TaskPresentation };
-const verbs = {
-  created: "创建了任务",
-  claimed: "认领了任务",
-  yielded: "让出了任务",
-  transferred: "转交了任务",
-  completed: "完成了任务",
-};
+const taskChangeKey = {
+  created: "chat.task_created",
+  claimed: "chat.task_claimed",
+  yielded: "chat.task_yielded",
+  transferred: "chat.task_transferred",
+  completed: "chat.task_completed",
+} as const;
 export default function ConversationScreen() {
   const headerHeight = useHeaderHeight();
   const params = useLocalSearchParams<{
@@ -186,7 +187,7 @@ export default function ConversationScreen() {
       () => {
         if (activeList.current !== listKey) return;
         marked.current = "";
-        setReadError("已读状态未同步，点此重试。");
+        setReadError(t("chat.read_status_is_not_synced_tap_to"));
       },
     );
   }, [focused, bottom, count, newest, key, timeline.loaded, ready, destination]);
@@ -249,7 +250,11 @@ export default function ConversationScreen() {
     setRootError("");
     void chat.locate({ conversation: id }, { messageId: thread }, cancel.signal).then((result) => {
       if (!cancel.signal.aborted && result !== "found" && result !== "cancelled")
-        setRootError(result === "failed" ? "根消息加载失败，请重试。" : "根消息已不可用。");
+        setRootError(
+          result === "failed"
+            ? t("chat.could_not_load_the_root_message_retry")
+            : t("chat.the_root_message_is_no_longer_available"),
+        );
     });
     return () => cancel.abort();
   }, [chat, id, thread, focused, ready, destinationRetry]);
@@ -292,10 +297,10 @@ export default function ConversationScreen() {
   if (!conversation)
     return (
       <Empty
-        title={state.me ? "找不到这个会话" : "正在读取会话…"}
-        message={state.me ? "它可能已不可用。返回聊天选择其他会话。" : ""}
+        title={state.me ? t("chat.conversation_not_found") : t("chat.loading_conversation")}
+        message={state.me ? t("chat.it_may_no_longer_be_available_return") : ""}
       >
-        <Button title="返回聊天" onPress={() => router.replace("/chat")} />
+        <Button title={t("chat.back_to_chat")} onPress={() => router.replace("/chat")} />
       </Empty>
     );
   return (
@@ -307,27 +312,29 @@ export default function ConversationScreen() {
           headerTransparent: false,
           headerStyle: { backgroundColor: c.background },
           title:
-            thread === null ? conversationLabel(conversation, state.accounts, state.me) : "讨论串",
+            thread === null
+              ? conversationLabel(conversation, state.accounts, state.me)
+              : t("chat.thread"),
         }}
       />
       {agentReturn !== null && (
         <Stack.Toolbar placement="left">
           <Stack.Toolbar.Button
             icon="chevron.left"
-            accessibilityLabel="返回 Agent 总览"
+            accessibilityLabel={t("chat.back_to_agent_overview")}
             onPress={() => {
               if (router.canDismiss()) router.dismiss();
               router.navigate({ pathname: "/agents/[id]", params: { id: agentReturn } });
             }}
           >
-            Agent
+            {t("chat.agent")}
           </Stack.Toolbar.Button>
         </Stack.Toolbar>
       )}
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
           icon="ellipsis"
-          accessibilityLabel="更多"
+          accessibilityLabel={t("chat.more")}
           onPress={() =>
             setPanel({
               kind: "conversation",
@@ -335,7 +342,7 @@ export default function ConversationScreen() {
             })
           }
         >
-          更多
+          {t("chat.more")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <KeyboardAvoidingView
@@ -355,25 +362,25 @@ export default function ConversationScreen() {
             {root ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="查看原帖"
+                accessibilityLabel={t("chat.view_original_post")}
                 onPress={() => setPanel({ kind: "root" })}
                 style={{ minHeight: 44, justifyContent: "center", gap: 4 }}
               >
                 <Caption>
                   {conversationLabel(conversation, state.accounts, state.me)} ·{" "}
-                  {accountName(state.accounts, root.author)}的原帖
+                  {t("chat.original_post_by", { name: accountName(state.accounts, root.author) })}
                 </Caption>
                 <Text numberOfLines={2} style={{ fontSize: 16, color: c.foreground }}>
                   {root.body.split("\n")[0]}
                 </Text>
-                <Caption accent>查看原帖</Caption>
+                <Caption accent>{t("chat.view_original_post")}</Caption>
               </Pressable>
             ) : (
-              <Caption>{rootError || "正在读取原帖…"}</Caption>
+              <Caption>{rootError || t("chat.loading_original_post")}</Caption>
             )}
             {rootError && (
               <Button
-                title="重试根消息"
+                title={t("chat.retry_root_message")}
                 onPress={() =>
                   void chat.retryLoad({ conversation: id }).then(() => {
                     if (activeList.current === listKey) setDestinationRetry((x) => x + 1);
@@ -387,14 +394,14 @@ export default function ConversationScreen() {
           <View style={{ padding: 12 }}>
             <Label>
               {destination === "missing"
-                ? "这条消息已不可用，或不在当前时间线中。"
+                ? t("chat.this_message_is_unavailable_or_not_in")
                 : destination === "failed"
-                  ? "消息定位失败，请重试。"
-                  : "正在定位消息…"}
+                  ? t("chat.could_not_locate_the_message_retry")
+                  : t("chat.locating_message")}
             </Label>
             {(destination === "failed" || destination === "missing") && (
               <Button
-                title="重试定位消息"
+                title={t("chat.retry_locating_message")}
                 onPress={() =>
                   void chat.retryLoad(ref).then(() => {
                     if (activeList.current === listKey) setDestinationRetry((x) => x + 1);
@@ -402,7 +409,10 @@ export default function ConversationScreen() {
                 }
               />
             )}
-            <Button title="查看最新消息" onPress={() => router.setParams({ seq: undefined })} />
+            <Button
+              title={t("chat.view_latest_messages")}
+              onPress={() => router.setParams({ seq: undefined })}
+            />
           </View>
         )}
         <FlatList
@@ -466,7 +476,7 @@ export default function ConversationScreen() {
                   new Date(previous.at).toDateString() !== new Date(item.at).toDateString()) && (
                   <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 }}>
                     <Caption>
-                      {new Date(item.at).toLocaleDateString("zh-CN", {
+                      {dateText(item.at, {
                         month: "long",
                         day: "numeric",
                       })}
@@ -479,7 +489,7 @@ export default function ConversationScreen() {
                   <Pressable
                     testID={`entry-${item.seq}`}
                     accessibilityRole="button"
-                    accessibilityLabel={`查看任务 ${item.title}`}
+                    accessibilityLabel={t("chat.view_named_task", { title: item.title })}
                     onPress={() =>
                       setPanel({
                         kind: "task",
@@ -494,9 +504,16 @@ export default function ConversationScreen() {
                       backgroundColor: item.seq === seq ? c.tint : c.subtle,
                     }}
                   >
-                    {item.seq === seq && <Caption accent>定位到的消息 · #{seq}</Caption>}
+                    {item.seq === seq && (
+                      <Caption accent>
+                        {t("chat.located_message", { seq: numberText(seq ?? 0) })}
+                      </Caption>
+                    )}
                     <Caption>
-                      {accountName(state.accounts, item.actor)} {verbs[item.change]}「{item.title}」
+                      {t(taskChangeKey[item.change], {
+                        name: accountName(state.accounts, item.actor),
+                        title: item.title,
+                      })}
                     </Caption>
                   </Pressable>
                 )}
@@ -507,10 +524,10 @@ export default function ConversationScreen() {
             <View style={styles.page}>
               <Label>
                 {timeline.loading
-                  ? "正在加载…"
+                  ? t("chat.loading")
                   : timeline.error
-                    ? "消息加载失败。"
-                    : "还没有消息，在下面说点什么。"}
+                    ? t("chat.could_not_load_messages")
+                    : t("chat.no_messages_yet_say_something_below")}
               </Label>
             </View>
           }
@@ -519,10 +536,10 @@ export default function ConversationScreen() {
               <View style={{ padding: 12, backgroundColor: c.subtle }}>
                 <Label muted>
                   {state.connection === "loading"
-                    ? "正在连接…"
+                    ? t("chat.connecting")
                     : state.connection === "connecting"
-                      ? "正在连接实时消息…"
-                      : "连接中断，正在自动重连。草稿会保留。"}
+                      ? t("chat.connecting_to_live_messages")
+                      : t("chat.disconnected_reconnecting_automatically_your_draft_is_kept")}
                 </Label>
               </View>
             ) : undefined
@@ -533,7 +550,7 @@ export default function ConversationScreen() {
                 <View style={styles.page}>
                   <ErrorLine text={timeline.error} />
                   <Button
-                    title="重试加载"
+                    title={t("chat.retry_loading")}
                     onPress={() => void chat.retryLoad(ref, timeline.loaded)}
                   />
                 </View>
@@ -541,7 +558,7 @@ export default function ConversationScreen() {
               {entries[0] && !timeline.exhausted && (
                 <View style={{ padding: 12 }}>
                   <Button
-                    title={timeline.loading ? "正在加载…" : "加载更早的消息"}
+                    title={timeline.loading ? t("chat.loading") : t("chat.load_earlier_messages")}
                     disabled={timeline.loading}
                     onPress={() => void chat.load(ref, true)}
                   />
@@ -560,7 +577,8 @@ export default function ConversationScreen() {
                     if (activeList.current === listKey) setReadError("");
                   },
                   () => {
-                    if (activeList.current === listKey) setReadError("已读状态未同步，点此重试。");
+                    if (activeList.current === listKey)
+                      setReadError(t("chat.read_status_is_not_synced_tap_to"));
                   },
                 )
               }
@@ -572,7 +590,7 @@ export default function ConversationScreen() {
             ? destination !== "missing" && destination !== "failed"
             : !bottom && destination === "done") && (
             <Button
-              title={count ? `${count} 条未读 · 回到最新消息` : "回到最新消息"}
+              title={count ? t("chat.unread_latest", { count }) : t("chat.back_to_latest_messages")}
               onPress={() => {
                 if (seq !== null) router.setParams({ seq: undefined });
                 else {
@@ -588,10 +606,16 @@ export default function ConversationScreen() {
             accounts={state.accounts}
             destination={
               thread !== null
-                ? `回复 ${conversationLabel(conversation, state.accounts, state.me)} 的讨论串…`
+                ? t("chat.reply_placeholder", {
+                    name: conversationLabel(conversation, state.accounts, state.me),
+                  })
                 : conversation.kind === "dm"
-                  ? `发消息给 ${conversationLabel(conversation, state.accounts, state.me)}…`
-                  : `发送到 ${conversationLabel(conversation, state.accounts, state.me)}…`
+                  ? t("chat.dm_placeholder", {
+                      name: conversationLabel(conversation, state.accounts, state.me),
+                    })
+                  : t("chat.channel_placeholder", {
+                      name: conversationLabel(conversation, state.accounts, state.me),
+                    })
             }
             onEdit={(text) => chat.edit(ref, text)}
             onSend={() => void chat.send(ref)}
@@ -602,14 +626,14 @@ export default function ConversationScreen() {
           <View style={styles.page}>
             <Label>
               {conversation.archived
-                ? "这个频道已归档，只能阅读。"
+                ? t("chat.this_channel_is_archived_and_can_only")
                 : conversation.kind === "dm"
-                  ? "这段私信仅供阅读。"
-                  : "你还没有加入这个会话，加入后才能发言。"}
+                  ? t("chat.this_direct_message_can_only_be_read")
+                  : t("chat.you_have_not_joined_this_conversation_join")}
             </Label>
             {conversation.kind !== "dm" && !conversation.archived && (
               <Button
-                title="加入频道"
+                title={t("chat.join_channel")}
                 onPress={() =>
                   setPanel({
                     kind: "conversation",
@@ -625,14 +649,14 @@ export default function ConversationScreen() {
         visible={panel !== null}
         title={
           panel?.kind === "conversation"
-            ? "会话与成员"
+            ? t("chat.conversation_and_members")
             : panel?.kind === "root"
-              ? "原帖"
+              ? t("chat.original_post")
               : panel?.kind === "create-task"
-                ? "转为任务"
+                ? t("chat.make_a_task")
                 : panel?.kind === "task"
-                  ? "消息任务"
-                  : "消息"
+                  ? t("chat.message_tasks")
+                  : t("chat.message")
         }
         onClose={() => {
           sourceLocate.current?.abort();
@@ -652,8 +676,7 @@ export default function ConversationScreen() {
         {messageMenu && (
           <>
             <Caption>
-              {accountName(state.accounts, messageMenu.author)} ·{" "}
-              {new Date(messageMenu.at).toLocaleString("zh-CN")}
+              {accountName(state.accounts, messageMenu.author)} · {dateText(messageMenu.at)}
             </Caption>
             <Text numberOfLines={3} style={{ fontSize: 17, color: c.foreground, lineHeight: 26 }}>
               {messageMenu.body}
@@ -661,7 +684,7 @@ export default function ConversationScreen() {
             <Section>
               {thread === null && (
                 <Row
-                  title="回复讨论串"
+                  title={t("chat.reply_in_thread")}
                   onPress={() => {
                     const entry = messageMenu;
                     setPanel(null);
@@ -674,7 +697,7 @@ export default function ConversationScreen() {
               )}
               {canWrite && (
                 <Row
-                  title="转为任务"
+                  title={t("chat.make_a_task")}
                   testID={`create-task-${messageMenu.messageId}`}
                   onPress={() => {
                     const saved = state.operations.get(
@@ -692,7 +715,11 @@ export default function ConversationScreen() {
                 />
               )}
               <Row
-                title={copiedMessage === messageMenu.messageId ? "已复制消息" : "复制消息"}
+                title={
+                  copiedMessage === messageMenu.messageId
+                    ? t("chat.message_copied")
+                    : t("chat.copy_message")
+                }
                 onPress={() =>
                   void setStringAsync(messageMenu.body).then(() =>
                     setCopiedMessage(messageMenu.messageId),
@@ -738,7 +765,9 @@ export default function ConversationScreen() {
                 .entries.find((e) => e.kind === "message" && e.messageId === sourceId);
               if (result !== "found" || !source)
                 throw new Error(
-                  result === "failed" ? "来源消息读取失败，请重试。" : "来源消息已不可用。",
+                  result === "failed"
+                    ? t("chat.could_not_load_the_source_message_retry")
+                    : t("chat.the_source_message_is_no_longer_available"),
                 );
               setPanel(null);
               router.setParams({ seq: String(source.seq) });

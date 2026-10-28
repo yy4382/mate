@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { NodeStatusResult } from "@mate/admin";
 import { View } from "react-native";
 import type { ReadableAgent } from "./Agents";
@@ -22,19 +23,29 @@ function NodeGrant({
     <View>
       <Row
         title={node.name}
-        subtitle={`${node.online ? "在线" : "离线"}${node.system ? ` · ${node.system.platform} / ${node.system.arch}` : ""}`}
-        value={home ? "主 Node" : granted ? "已授权" : "未授权"}
+        subtitle={`${node.online ? t("management.online") : t("management.offline")}${node.system ? ` · ${node.system.platform} / ${node.system.arch}` : ""}`}
+        value={
+          home
+            ? t("management.home_node")
+            : granted
+              ? t("management.granted")
+              : t("management.not_granted")
+        }
       />
       <View style={{ paddingHorizontal: 16, paddingBottom: 12, gap: 8 }}>
         {home ? (
-          <Caption>固定可访问，主工作区和 MEMORY.md 在这里。</Caption>
+          <Caption>{t("management.always_accessible_the_home_workspace_and_memorymd")}</Caption>
         ) : (
           <>
             {!node.online && granted && (
-              <Caption>访问权已生效，工作区准备会在 Node 在线后进行。</Caption>
+              <Caption>{t("management.access_is_granted_the_workspace_will_be")}</Caption>
             )}
             <Button
-              title={`${granted ? "收回" : "授权"} ${node.name} 访问`}
+              title={
+                granted
+                  ? t("management.revoke_access", { name: node.name })
+                  : t("management.grant_access", { name: node.name })
+              }
               disabled={operation.busy}
               onPress={() => {
                 void operation
@@ -45,10 +56,10 @@ function NodeGrant({
                         granted ? "DELETE" : "PUT",
                       ),
                     granted
-                      ? "已收回授权。已启动的命令继续运行，工作区保留。"
+                      ? t("management.access_revoked_commands_already_running_continue_and")
                       : node.online
-                        ? "访问权已生效，从下一次调用起可以访问。"
-                        : "访问权已生效。离线 Node 的工作区准备延后进行。",
+                        ? t("management.access_granted_it_applies_to_the_next")
+                        : t("management.access_granted_workspace_preparation_is_deferred_while"),
                   )
                   .then((ok) => {
                     if (ok) refresh();
@@ -66,11 +77,16 @@ export function NodeAccess({ agent, refresh }: { agent: ReadableAgent; refresh()
   const nodes = useResource<NodeStatusResult[]>("/api/admin/nodes", 3000);
   return (
     <>
-      <Copy muted>允许 Agent 访问其他 Node 上自己的工作区。授权和收回只影响之后开始的调用。</Copy>
+      <Copy muted>{t("management.allow_the_agent_to_access_its_own")}</Copy>
       <ErrorLine error={nodes.error} />
-      {nodes.error != null && <Button title="重新读取 Node" onPress={nodes.refresh} />}
+      {nodes.error != null && (
+        <Button title={t("management.reload_nodes")} onPress={nodes.refresh} />
+      )}
       <Loading loading={nodes.loading && !nodes.data} />
-      <Section title="已配对的 Node" footer="收回访问不会删除文件，也不会中止已经开始的命令。">
+      <Section
+        title={t("management.paired_nodes")}
+        footer={t("management.revoking_access_does_not_delete_files_or")}
+      >
         {nodes.data?.map((node) => (
           <NodeGrant key={node.nodeId} node={node} agent={agent} refresh={refresh} />
         ))}

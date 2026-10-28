@@ -1,14 +1,20 @@
+import { t, numberText, currencyText } from "../i18n";
 import type { SnapshotEvent } from "@mate/admin";
 import { View } from "react-native";
 import { Caption, Copy, Empty, Row, Section } from "../ui";
 
 export function Usage({ usage }: { usage: SnapshotEvent["usage"] }) {
   const buckets = [
-    { label: "模型", values: usage.models },
-    { label: "工具", values: usage.tools },
+    { label: t("management.models"), values: usage.models },
+    { label: t("management.tools"), values: usage.tools },
   ];
   if (buckets.every((bucket) => Object.keys(bucket.values).length === 0))
-    return <Empty title="尚无用量记录" message="这里显示模型与工具已记录的用量。" />;
+    return (
+      <Empty
+        title={t("management.no_usage_recorded_yet")}
+        message={t("management.recorded_model_and_tool_usage_appears_here")}
+      />
+    );
   return (
     <>
       {buckets.map((bucket) =>
@@ -17,23 +23,37 @@ export function Usage({ usage }: { usage: SnapshotEvent["usage"] }) {
             <View style={{ padding: 16, gap: 8 }}>
               <Copy>{name}</Copy>
               <Caption>
-                {counters.totalTokens.toLocaleString()} tokens · 记录费用 $
-                {counters.cost.total.toFixed(6)}
+                {t("management.usage_summary", {
+                  tokens: numberText(counters.totalTokens),
+                  cost: currencyText(counters.cost.total),
+                })}
               </Caption>
             </View>
-            <Row title="输入" value={counters.input.toLocaleString()} />
-            <Row title="输出" value={counters.output.toLocaleString()} />
-            <Row title="缓存读取" value={counters.cacheRead.toLocaleString()} />
-            <Row title="缓存写入" value={counters.cacheWrite.toLocaleString()} />
+            <Row title={t("management.input")} value={numberText(counters.input)} />
+            <Row title={t("management.output")} value={numberText(counters.output)} />
+            <Row title={t("management.cache_read")} value={numberText(counters.cacheRead)} />
+            <Row title={t("management.cache_write")} value={numberText(counters.cacheWrite)} />
             {counters.reasoning !== undefined && (
-              <Row title="其中思考" value={counters.reasoning.toLocaleString()} />
+              <Row
+                title={t("management.reasoning_included")}
+                value={numberText(counters.reasoning)}
+              />
             )}
-            <Row title="总 tokens" value={counters.totalTokens.toLocaleString()} />
-            <Row title="输入费用" value={`$${counters.cost.input.toFixed(6)}`} />
-            <Row title="输出费用" value={`$${counters.cost.output.toFixed(6)}`} />
-            <Row title="缓存读取费用" value={`$${counters.cost.cacheRead.toFixed(6)}`} />
-            <Row title="缓存写入费用" value={`$${counters.cost.cacheWrite.toFixed(6)}`} />
-            <Row title="记录总费用" value={`$${counters.cost.total.toFixed(6)}`} />
+            <Row title={t("management.total_tokens")} value={numberText(counters.totalTokens)} />
+            <Row title={t("management.input_cost")} value={currencyText(counters.cost.input)} />
+            <Row title={t("management.output_cost")} value={currencyText(counters.cost.output)} />
+            <Row
+              title={t("management.cache_read_cost")}
+              value={currencyText(counters.cost.cacheRead)}
+            />
+            <Row
+              title={t("management.cache_write_cost")}
+              value={currencyText(counters.cost.cacheWrite)}
+            />
+            <Row
+              title={t("management.total_recorded_cost")}
+              value={currencyText(counters.cost.total)}
+            />
           </Section>
         )),
       )}
