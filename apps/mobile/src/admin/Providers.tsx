@@ -1,3 +1,4 @@
+import { t, thinkingText, listText } from "../i18n";
 import type { CatalogModel, ProviderView } from "@mate/admin";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
@@ -32,15 +33,17 @@ export function Providers({
   return (
     <Screen onRefresh={providers.refresh} refreshing={providers.loading}>
       <ErrorLine error={providers.error} />
-      {providers.error != null && <Button title="重新读取" onPress={providers.refresh} />}
+      {providers.error != null && (
+        <Button title={t("management.reload")} onPress={providers.refresh} />
+      )}
       <Loading loading={providers.loading && !providers.data} />
       {providers.data && (
-        <Section footer="凭据保存在服务器。已保存不代表已验证连接。">
+        <Section footer={t("management.credentials_are_stored_on_the_server_saving")}>
           {providers.data.map((p) => (
             <Row
               key={p.provider}
               title={p.name}
-              value={p.credentials ? "已保存" : "未设置"}
+              value={p.credentials ? t("management.saved") : t("management.not_set")}
               onPress={() => onOpenProvider(p.provider)}
             />
           ))}
@@ -72,21 +75,36 @@ export function ProviderDetail({
   };
   return (
     <Screen onRefresh={providers.refresh} refreshing={providers.loading}>
-      <Stack.Screen options={{ title: provider?.name ?? "提供商" }} />
+      <Stack.Screen options={{ title: provider?.name ?? t("management.provider") }} />
       <ErrorLine error={providers.error} />
       <Loading loading={providers.loading && !providers.data} />
-      {providers.error != null && <Button title="重新读取" onPress={providers.refresh} />}
-      {providers.data && !provider && <Empty title="找不到这个提供商" />}
+      {providers.error != null && (
+        <Button title={t("management.reload")} onPress={providers.refresh} />
+      )}
+      {providers.data && !provider && <Empty title={t("management.provider_not_found")} />}
       {provider && (
         <>
-          <Section title="凭据" footer="修改从下一次模型请求起生效。">
-            <Row title="API key" value={provider.credentials ? "已保存" : "未设置"} />
-            {provider.credentials && (
-              <Row title="已保存的密钥" subtitle={provider.credentials.apiKey} />
-            )}
-            <Row title="接口地址" subtitle={provider.credentials?.baseUrl ?? "提供商默认地址"} />
+          <Section
+            title={t("management.credentials")}
+            footer={t("management.changes_take_effect_with_the_next_model")}
+          >
             <Row
-              title={provider.credentials ? "编辑凭据" : "设置凭据"}
+              title={t("management.api_key")}
+              value={provider.credentials ? t("management.saved") : t("management.not_set")}
+            />
+            {provider.credentials && (
+              <Row title={t("management.saved_key")} subtitle={provider.credentials.apiKey} />
+            )}
+            <Row
+              title={t("management.api_endpoint")}
+              subtitle={provider.credentials?.baseUrl ?? t("management.provider_default_endpoint")}
+            />
+            <Row
+              title={
+                provider.credentials
+                  ? t("management.edit_credentials")
+                  : t("management.set_credentials")
+              }
               onPress={() => {
                 operation.reset();
                 setBaseUrl(provider.credentials?.baseUrl ?? "");
@@ -96,23 +114,23 @@ export function ProviderDetail({
           </Section>
           <Section>
             <Row
-              title="模型目录"
-              subtitle="模型标识、上下文窗口与思考级别"
+              title={t("management.model_catalog")}
+              subtitle={t("management.model_ids_context_windows_and_thinking_levels")}
               onPress={() => onOpenCatalog(provider.provider)}
             />
           </Section>
           {!editing && <Outcome operation={operation} />}
           {provider.credentials && (
             <ConfirmButton
-              title="删除凭据"
-              question={`删除 ${provider.name} 的凭据？`}
-              message="使用这家提供商的 Agent 将无法请求模型，直到重新保存密钥。"
-              confirmLabel="删除凭据"
+              title={t("management.delete_credentials")}
+              question={t("management.delete_provider_credentials", { name: provider.name })}
+              message={t("management.agents_using_this_provider_cannot_request_models")}
+              confirmLabel={t("management.delete_credentials")}
               danger
               disabled={operation.busy}
               onConfirm={() => {
                 void operation
-                  .run(() => client.request(path, "DELETE"), "凭据已删除。")
+                  .run(() => client.request(path, "DELETE"), t("management.credentials_deleted"))
                   .then((ok) => {
                     if (ok) {
                       setApiKey("");
@@ -123,14 +141,14 @@ export function ProviderDetail({
             />
           )}
           <Sheet
-            title={`编辑 ${provider.name} 凭据`}
+            title={t("management.edit_provider_credentials", { name: provider.name })}
             visible={editing}
             onClose={() => setEditing(false)}
           >
             <Card>
               <Field
-                label="API key"
-                hint="每次保存都需要完整密钥，包括只修改接口地址时。"
+                label={t("management.api_key")}
+                hint={t("management.enter_the_full_key_each_time_you")}
                 value={apiKey}
                 onChangeText={(v) => {
                   operation.reset();
@@ -142,8 +160,8 @@ export function ProviderDetail({
                 autoComplete="off"
               />
               <Field
-                label="接口地址（可选）"
-                hint="留空使用默认地址。填写时替换这家提供商所有模型的接口。"
+                label={t("management.api_endpoint_optional")}
+                hint={t("management.leave_blank_to_use_the_default_endpoint")}
                 value={baseUrl}
                 onChangeText={(v) => {
                   operation.reset();
@@ -156,7 +174,7 @@ export function ProviderDetail({
               <Outcome operation={operation} />
             </Card>
             <Button
-              title={operation.busy ? "保存中…" : "保存凭据"}
+              title={operation.busy ? t("settings.saving") : t("management.save_credentials")}
               primary
               disabled={operation.busy || !apiKey.trim()}
               onPress={() => {
@@ -204,7 +222,13 @@ export function ProviderCatalog() {
   };
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.background }} edges={["left", "right"]}>
-      <Stack.Screen options={{ title: `${provider?.name ?? "提供商"} 模型目录` }} />
+      <Stack.Screen
+        options={{
+          title: t("management.provider_catalog", {
+            name: provider?.name ?? t("management.provider"),
+          }),
+        }}
+      />
       <FlatList
         data={catalog}
         keyExtractor={(m) => m.modelId}
@@ -217,7 +241,7 @@ export function ProviderCatalog() {
           <View style={{ gap: 16, paddingBottom: 16 }}>
             <ErrorLine error={providers.error ?? models.error} />
             {(providers.error ?? models.error) != null && (
-              <Button title="重新读取" onPress={refresh} />
+              <Button title={t("management.reload")} onPress={refresh} />
             )}
             <Loading
               loading={
@@ -227,21 +251,27 @@ export function ProviderCatalog() {
             />
             {provider?.credentials && (
               <Field
-                label="搜索模型"
-                placeholder="名称或完整模型标识"
+                label={t("management.search_models")}
+                placeholder={t("management.name_or_full_model_id")}
                 value={query}
                 onChangeText={setQuery}
                 clearButtonMode="while-editing"
               />
             )}
-            {providers.data && !provider && <Empty title="找不到这个提供商" />}
+            {providers.data && !provider && <Empty title={t("management.provider_not_found")} />}
             {provider && !provider.credentials && (
-              <Empty title="先设置凭据" message="保存这家提供商的 API key 后可查看模型目录。">
-                <Button title="返回提供商" onPress={() => router.back()} />
+              <Empty
+                title={t("management.set_credentials_first")}
+                message={t("management.save_this_providers_api_key_to_view")}
+              >
+                <Button title={t("management.back_to_provider")} onPress={() => router.back()} />
               </Empty>
             )}
             {provider?.credentials && models.data && catalog.length === 0 && (
-              <Empty title="没有匹配模型" message="换一个关键词试试。" />
+              <Empty
+                title={t("management.no_matching_models")}
+                message={t("common.try_another_keyword")}
+              />
             )}
           </View>
         }
@@ -249,33 +279,45 @@ export function ProviderCatalog() {
           <Row
             title={item.name}
             subtitle={item.modelId}
-            value={`${item.contextWindow.toLocaleString()} tokens`}
+            value={t("management.token_count", { count: item.contextWindow })}
             onPress={() => setSelected(item)}
           />
         )}
         ListFooterComponent={
           provider?.credentials ? (
             <View style={{ padding: 16 }}>
-              <Caption>浏览目录不会改变 Agent 的模型。</Caption>
+              <Caption>{t("management.browsing_the_catalog_does_not_change_the")}</Caption>
             </View>
           ) : (
             <></>
           )
         }
       />
-      <Sheet title="模型详情" visible={selected !== null} onClose={() => setSelected(null)}>
+      <Sheet
+        title={t("management.model_details")}
+        visible={selected !== null}
+        onClose={() => setSelected(null)}
+      >
         {selected && (
           <>
             <Copy title>{selected.name}</Copy>
-            <Section title="模型标识">
+            <Section title={t("management.model_id")}>
               <View style={{ padding: 16 }}>
                 <Copy mono>{selected.modelId}</Copy>
               </View>
             </Section>
             <Section>
-              <Row title="提供商" value={provider?.name ?? id} />
-              <Row title="上下文窗口" value={`${selected.contextWindow.toLocaleString()} tokens`} />
-              <Row title="思考级别" subtitle={selected.thinkingLevels.join("、") || "默认"} />
+              <Row title={t("management.provider")} value={provider?.name ?? id} />
+              <Row
+                title={t("management.context_window")}
+                value={t("management.token_count", { count: selected.contextWindow })}
+              />
+              <Row
+                title={t("management.thinking_level")}
+                subtitle={
+                  listText(selected.thinkingLevels.map(thinkingText)) || t("management.default")
+                }
+              />
             </Section>
           </>
         )}

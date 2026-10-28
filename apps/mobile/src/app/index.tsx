@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
 import {
   ActivityIndicator,
@@ -48,11 +49,11 @@ function ServerForm({
   };
   return (
     <>
-      <Heading>{initial ? "更换服务器" : "连接 Mate"}</Heading>
-      <Copy muted>输入你的 Mate 服务器地址，使用人类账号登录。</Copy>
+      <Heading>{initial ? t("auth.switch_server") : t("auth.connect_to_mate")}</Heading>
+      <Copy muted>{t("auth.enter_your_mate_server_address_and_sign")}</Copy>
       <Card>
         <Field
-          label="服务器地址"
+          label={t("auth.server_address")}
           testID="server-address"
           value={address}
           onChangeText={setAddress}
@@ -60,7 +61,7 @@ function ServerForm({
           keyboardType="url"
           textContentType="URL"
           placeholder="https://mate.example.com"
-          hint="使用 HTTPS 地址，不含账号、路径或查询参数。"
+          hint={t("auth.use_an_https_address_without_credentials_a")}
           returnKeyType="done"
           onSubmitEditing={Keyboard.dismiss}
         />
@@ -68,22 +69,22 @@ function ServerForm({
       </Card>
       {initial ? (
         <ConfirmButton
-          title="保存服务器"
-          question="更换服务器？"
-          message="当前登录会退出，本次登录的草稿会清除。你需要在新服务器重新登录。"
-          confirmLabel="更换并退出"
+          title={t("auth.save_server")}
+          question={t("auth.switch_server_2")}
+          message={t("auth.you_will_be_signed_out_and_this")}
+          confirmLabel={t("auth.switch_and_sign_out")}
           disabled={busy || !address.trim()}
           onConfirm={() => void save()}
         />
       ) : (
         <Button
-          title={busy ? "正在连接…" : "保存服务器"}
+          title={busy ? t("chat.connecting") : t("auth.save_server")}
           primary
           disabled={busy || !address.trim()}
           onPress={() => void save()}
         />
       )}
-      {initial && <Button title="取消" disabled={busy} onPress={onClose} />}
+      {initial && <Button title={t("common.cancel")} disabled={busy} onPress={onClose} />}
     </>
   );
 }
@@ -101,11 +102,11 @@ function LoginForm({ busy, message }: { busy: boolean; message: string }) {
   };
   return (
     <>
-      <Heading>登录 Mate</Heading>
-      <Copy muted>使用这台服务器上的人类账号。</Copy>
+      <Heading>{t("auth.sign_in_to_mate")}</Heading>
+      <Copy muted>{t("auth.use_a_human_account_on_this_server")}</Copy>
       <Card>
         <Field
-          label="Handle"
+          label={t("settings.handle")}
           testID="login-handle"
           value={handle}
           onChangeText={setHandle}
@@ -116,10 +117,12 @@ function LoginForm({ busy, message }: { busy: boolean; message: string }) {
           submitBehavior="submit"
         />
         <View style={{ gap: 6 }}>
-          <Text style={{ fontSize: 15, fontWeight: "500", color: c.muted }}>密码</Text>
+          <Text style={{ fontSize: 15, fontWeight: "500", color: c.muted }}>
+            {t("auth.password")}
+          </Text>
           <TextInput
             ref={passwordField}
-            accessibilityLabel="密码"
+            accessibilityLabel={t("auth.password")}
             testID="login-password"
             value={password}
             onChangeText={setPassword}
@@ -147,7 +150,7 @@ function LoginForm({ busy, message }: { busy: boolean; message: string }) {
         )}
       </Card>
       <Button
-        title={busy ? "正在登录…" : "登录"}
+        title={busy ? t("auth.signing_in") : t("auth.sign_in")}
         primary
         disabled={busy || !handle.trim() || !password}
         onPress={submit}
@@ -197,9 +200,13 @@ export default function HomeScreen({ account = false }: { account?: boolean }) {
               {(state.kind === "starting" || state.kind === "checking" || clearing) && (
                 <View style={{ gap: 20, paddingVertical: 48, alignItems: "center" }}>
                   <ActivityIndicator />
-                  <Heading>{clearing ? "正在退出登录" : "正在验证身份"}</Heading>
+                  <Heading>
+                    {clearing ? t("auth.signing_out") : t("auth.verifying_identity")}
+                  </Heading>
                   <Copy muted>
-                    {clearing ? "正在完成退出，请稍候。" : "验证后继续原来的任务。"}
+                    {clearing
+                      ? t("auth.finishing_signout_please_wait")
+                      : t("auth.continue_your_task_after_verification")}
                   </Copy>
                 </View>
               )}
@@ -215,31 +222,40 @@ export default function HomeScreen({ account = false }: { account?: boolean }) {
                   <Section>
                     <Row
                       title={state.human.displayName}
-                      subtitle={`@${state.human.handle} · ${state.human.role === "admin" ? "管理员" : "普通人类"}`}
+                      subtitle={`@${state.human.handle} · ${state.human.role === "admin" ? t("settings.administrator") : t("settings.human_member")}`}
                       leading={<Avatar name={state.human.displayName} />}
                     />
                   </Section>
-                  <Section title="当前连接">
-                    <Row title="服务器" subtitle={server} />
-                    <Row title="账号 ID" value={String(state.human.accountId)} />
-                    <Row title="重新验证登录" onPress={() => void auth.revalidate()} />
+                  <Section title={t("auth.current_connection")}>
+                    <Row title={t("settings.server")} subtitle={server} />
+                    <Row title={t("auth.account_id")} value={String(state.human.accountId)} />
+                    <Row
+                      title={t("auth.revalidate_session")}
+                      onPress={() => void auth.revalidate()}
+                    />
                   </Section>
                 </>
               )}
               {state.kind === "unavailable" && (
                 <>
-                  <Heading>暂时无法连接</Heading>
+                  <Heading>{t("auth.unable_to_connect_right_now")}</Heading>
                   <ErrorLine text={state.message} />
-                  <Button title="重试连接" primary onPress={() => void auth.retry()} />
+                  <Button
+                    title={t("chat.retry_connection")}
+                    primary
+                    onPress={() => void auth.retry()}
+                  />
                 </>
               )}
               {server && !clearing && (
-                <Section title={state.kind === "signed-in" ? "账号" : "服务器"}>
+                <Section
+                  title={state.kind === "signed-in" ? t("auth.account") : t("settings.server")}
+                >
                   {state.kind !== "signed-in" && (
                     <Row title={new URL(server).host} subtitle={server} />
                   )}
                   <Row
-                    title="更换服务器"
+                    title={t("auth.switch_server")}
                     disabled={state.kind === "logging-in"}
                     onPress={() => setEditingServer(true)}
                   />
@@ -250,16 +266,16 @@ export default function HomeScreen({ account = false }: { account?: boolean }) {
                   state.kind === "unavailable" ||
                   state.kind === "checking") && (
                   <ConfirmButton
-                    title="退出登录"
-                    question="退出当前登录？"
-                    message="本次登录的聊天与创建草稿会清除。再次使用时需要重新登录。"
-                    confirmLabel="退出登录"
+                    title={t("auth.sign_out")}
+                    question={t("auth.sign_out_of_this_session")}
+                    message={t("auth.chat_and_creation_drafts_from_this_session")}
+                    confirmLabel={t("auth.sign_out")}
                     danger
                     onConfirm={() => void auth.logout()}
                   />
                 )}
               {state.kind === "signed-out" && (
-                <Caption>密码只用于此次登录，不会保存在本机。</Caption>
+                <Caption>{t("auth.your_password_is_only_used_to_sign")}</Caption>
               )}
             </>
           )}

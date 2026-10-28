@@ -1,3 +1,4 @@
+import { t, thinkingText } from "../i18n";
 import type { CatalogModel } from "@mate/admin";
 import { useState, type ReactNode } from "react";
 import type { AgentSettingsInput } from "./client";
@@ -17,7 +18,7 @@ export function settingsBody(
   models: readonly CatalogModel[],
 ): AgentSettingsInput {
   const model = models.find((model) => `${model.provider}/${model.modelId}` === value.model);
-  if (!model) throw "请选择一个模型。";
+  if (!model) throw t("management.select_a_model");
   return {
     model: { provider: model.provider, modelId: model.modelId },
     ...(value.thinking ? { thinkingLevel: value.thinking } : {}),
@@ -42,12 +43,12 @@ export function SettingsFields({
   return (
     <>
       <Section
-        title="运行配置"
-        footer={node ? "主 Node 执行默认命令并保存主工作区，创建后不能更换。" : ""}
+        title={t("management.runtime_configuration")}
+        footer={node ? t("management.the_home_node_runs_commands_by_default") : ""}
       >
         {node}
         <Select
-          label="模型"
+          label={t("management.models")}
           disabled={disabled}
           value={value.model}
           options={models.map((model) => ({
@@ -57,20 +58,23 @@ export function SettingsFields({
           onChange={(model) => onChange({ ...value, model, thinking: "" })}
         />
         <Select
-          label="思考级别"
+          label={t("management.thinking_level")}
           disabled={disabled || !selected}
           value={value.thinking}
           options={[
-            { value: "", label: "默认" },
-            ...(selected?.thinkingLevels ?? []).map((value) => ({ value, label: value })),
+            { value: "", label: t("management.default") },
+            ...(selected?.thinkingLevels ?? []).map((value) => ({
+              value,
+              label: thinkingText(value),
+            })),
           ]}
           onChange={(thinking) => onChange({ ...value, thinking })}
         />
       </Section>
-      <Section footer="模型和说明文字可以稍后修改，从下一次模型请求起生效。">
+      <Section footer={t("management.the_model_and_instructions_can_be_changed")}>
         <Row
-          title="说明文字"
-          value={value.instructions.trim() ? "已填写" : "可选"}
+          title={t("management.instructions")}
+          value={value.instructions.trim() ? t("management.filled_in") : t("management.optional")}
           subtitle={
             value.instructions.trim() ? (value.instructions.split("\n")[0] ?? "").slice(0, 90) : ""
           }
@@ -78,9 +82,13 @@ export function SettingsFields({
           onPress={() => setInstructionsOpen(true)}
         />
       </Section>
-      <Sheet visible={instructionsOpen} title="说明文字" onClose={() => setInstructionsOpen(false)}>
+      <Sheet
+        visible={instructionsOpen}
+        title={t("management.instructions")}
+        onClose={() => setInstructionsOpen(false)}
+      >
         <Field
-          label="给 Agent 的说明"
+          label={t("management.instructions_for_the_agent")}
           testID="agent-instructions"
           value={value.instructions}
           multiline
@@ -88,8 +96,8 @@ export function SettingsFields({
           editable={!disabled}
           onChangeText={(instructions) => onChange({ ...value, instructions })}
         />
-        <Caption>说明会随模型设置一起保存。返回不会提交更改。</Caption>
-        <Button title="完成" onPress={() => setInstructionsOpen(false)} />
+        <Caption>{t("management.instructions_are_saved_with_the_model_settings")}</Caption>
+        <Button title={t("observation.done")} onPress={() => setInstructionsOpen(false)} />
       </Sheet>
     </>
   );

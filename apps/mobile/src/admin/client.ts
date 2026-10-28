@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { Admin, AgentEvent, AgentView } from "@mate/admin";
 import { HumanView } from "@mate/auth";
 import { z } from "zod";
@@ -31,38 +32,40 @@ export class ApiError extends Error {
 }
 
 const refusals: Record<string, string> = {
-  "handle-taken": "这个 Handle 已被占用。",
-  "name-taken": "这个名字已被其他 Node 使用。",
-  "last-admin": "必须至少保留一个有效的管理员。",
-  "admin-only": "需要管理员权限。",
-  "wrong-password": "当前密码不对。",
-  "too-many-attempts": "尝试的人太多了，请稍后再试。",
-  "invalid-input": "输入不合法，请检查名字、Handle、密码和设置。",
-  "unknown-agent": "找不到这个 Agent，它可能已被删除。",
-  "unknown-account": "找不到这个人类账号。",
-  "unknown-node": "这个 Node 尚未配对。",
-  "no-credentials": "请先保存这家提供商的 API key。",
-  "unknown-model": "模型已不在目录中，请重新选择。",
-  "unsupported-thinking-level": "这个模型不支持所选思考级别。",
-  "agent-closed": "Agent 没有在运行，恢复后才能观察。",
-  "unknown-assistant": "找不到这个工作助手，请刷新列表。",
-  "agent-exists": "这个 Agent 已存在，请返回列表查看。",
-  "creation-failed": "创建中断，重试会继续创建同一个 Agent。",
-  "inactive-account": "这个账号已停用，不能再次使用。",
-  "node-offline": "Node 离线，连接后请重试。",
-  "outside-workspace": "只能查看 Agent 工作区内的路径。",
-  "not-found": "路径不存在。",
-  unreadable: "无法读取这个文件或目录。",
+  "handle-taken": t("management.this_handle_is_already_taken"),
+  "name-taken": t("management.another_node_is_using_this_name"),
+  "last-admin": t("management.at_least_one_active_administrator_must_remain"),
+  "admin-only": t("management.administrator_access_required"),
+  "wrong-password": t("management.incorrect_current_password"),
+  "too-many-attempts": t("auth.too_many_people_are_trying_try_again"),
+  "invalid-input": t("management.invalid_input_check_the_name_handle_password"),
+  "unknown-agent": t("management.this_agent_could_not_be_found_it"),
+  "unknown-account": t("management.this_human_account_could_not_be_found"),
+  "unknown-node": t("management.this_node_has_not_been_paired"),
+  "no-credentials": t("management.save_this_providers_api_key_first"),
+  "unknown-model": t("management.the_model_is_no_longer_in_the"),
+  "unsupported-thinking-level": t("management.this_model_does_not_support_the_selected"),
+  "agent-closed": t("management.the_agent_is_not_running_resume_it"),
+  "unknown-assistant": t("management.this_assistant_could_not_be_found_refresh"),
+  "agent-exists": t("management.this_agent_already_exists_return_to_the"),
+  "creation-failed": t("management.creation_was_interrupted_retrying_continues_creating_the"),
+  "inactive-account": t("management.this_account_has_been_deactivated_and_cannot"),
+  "node-offline": t("management.the_node_is_offline_retry_after_it"),
+  "outside-workspace": t("management.only_paths_within_the_agents_workspace_can"),
+  "not-found": t("management.this_path_does_not_exist"),
+  unreadable: t("management.could_not_read_this_file_or_directory"),
 };
 
 export function errorText(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof ApiError)
     return error.status === 401
-      ? "登录已失效，请重新登录。"
-      : (refusals[error.reason] ?? `服务器拒绝了操作（${error.status}，${error.reason}）。`);
-  if (error instanceof Error && error.name === "AbortError") return "请求已取消或超时，请重试。";
-  return "无法完成请求，请检查网络和服务器后重试。";
+      ? t("auth.your_session_has_expired_sign_in_again")
+      : (refusals[error.reason] ??
+          t("management.server_refusal", { status: error.status, reason: error.reason }));
+  if (error instanceof Error && error.name === "AbortError")
+    return t("management.the_request_was_cancelled_or_timed_out");
+  return t("management.could_not_complete_the_request_check_your");
 }
 
 /** Requests belong to one login, never to the next human or selected server. */

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { NodeStatusResult } from "@mate/admin";
 import * as Clipboard from "expo-clipboard";
 import { router, Stack, useLocalSearchParams } from "expo-router";
@@ -55,21 +56,23 @@ export function Nodes({
   return (
     <Screen onRefresh={nodes.refresh} refreshing={nodes.loading}>
       <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button onPress={() => setPairing(true)}>配对</Stack.Toolbar.Button>
+        <Stack.Toolbar.Button onPress={() => setPairing(true)}>
+          {t("management.pair")}
+        </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <ErrorLine error={nodes.error} />
-      {nodes.error != null && <Button title="重新读取" onPress={nodes.refresh} />}
+      {nodes.error != null && <Button title={t("management.reload")} onPress={nodes.refresh} />}
       <Loading loading={nodes.loading && !nodes.data} />
       {nodes.data?.length === 0 && (
         <Empty
-          title="还没有 Node"
-          message="配对一台机器，让 Agent 在自己的工作区中执行命令和读写文件。"
+          title={t("management.no_nodes_yet")}
+          message={t("management.pair_a_machine_so_agents_can_run")}
         >
-          <Button title="配对 Node" onPress={() => setPairing(true)} />
+          <Button title={t("management.pair_node")} onPress={() => setPairing(true)} />
         </Empty>
       )}
       {!!nodes.data?.length && (
-        <Section footer="Node 是 Agent 执行命令、读写文件的机器。">
+        <Section footer={t("management.a_node_is_a_machine_where_agents")}>
           {nodes.data.map((n) => (
             <Row
               key={n.nodeId}
@@ -77,60 +80,72 @@ export function Nodes({
               subtitle={
                 n.system
                   ? `${n.system.platform} · ${n.system.arch} · ${n.system.hostname}`
-                  : "尚未收到系统信息"
+                  : t("management.no_system_information_received_yet")
               }
-              value={n.online ? "在线" : "离线"}
+              value={n.online ? t("management.online") : t("management.offline")}
               onPress={() => onOpenNode(n.nodeId)}
             />
           ))}
         </Section>
       )}
-      <Sheet title="配对 Node" visible={pairing} onClose={() => setPairing(false)}>
+      <Sheet title={t("management.pair_node")} visible={pairing} onClose={() => setPairing(false)}>
         {token ? (
           <>
             <Caption>
               {expired
-                ? "令牌已到期，请重新生成后使用。"
-                : `一次性令牌，${dateText(token.expiresAt)} 前有效。`}
+                ? t("management.the_token_has_expired_generate_another_before")
+                : t("management.token_expiry", { time: dateText(token.expiresAt) })}
             </Caption>
             <Card>
-              <Copy>在目标机器上运行</Copy>
+              <Copy>{t("management.run_on_the_target_machine")}</Copy>
               <Copy mono>{command}</Copy>
             </Card>
             <Button
-              title="复制配对命令"
+              title={t("management.copy_pairing_command")}
               primary
               disabled={expired || copy.busy}
               onPress={() =>
-                void copy.run(() => Clipboard.setStringAsync(command), "配对命令已复制。")
+                void copy.run(
+                  () => Clipboard.setStringAsync(command),
+                  t("management.pairing_command_copied"),
+                )
               }
             />
             <Outcome operation={copy} />
-            <Section title="手动配对">
-              <Row title="配对令牌" subtitle={token.pairingToken} />
+            <Section title={t("management.manual_pairing")}>
+              <Row title={t("management.pairing_token")} subtitle={token.pairingToken} />
             </Section>
             <Button
-              title="复制令牌"
+              title={t("management.copy_token")}
               disabled={expired || copy.busy}
               onPress={() =>
-                void copy.run(() => Clipboard.setStringAsync(token.pairingToken), "令牌已复制。")
+                void copy.run(
+                  () => Clipboard.setStringAsync(token.pairingToken),
+                  t("management.token_copied"),
+                )
               }
             />
             <Button
-              title="查看 Node 列表"
+              title={t("management.view_node_list")}
               onPress={() => {
                 setPairing(false);
                 nodes.refresh();
               }}
             />
-            <Caption>执行命令后，返回列表核对机器名字与在线状态。</Caption>
+            <Caption>{t("management.after_running_the_command_check_the_machine")}</Caption>
           </>
         ) : (
-          <Copy>生成一次性令牌后，在目标机器运行配对命令。</Copy>
+          <Copy>{t("management.generate_a_singleuse_token_then_run_the")}</Copy>
         )}
         <Outcome operation={operation} />
         <Button
-          title={operation.busy ? "生成中…" : token ? "重新生成令牌" : "生成配对令牌"}
+          title={
+            operation.busy
+              ? t("management.generating")
+              : token
+                ? t("management.regenerate_token")
+                : t("management.generate_pairing_token")
+          }
           primary={!token}
           disabled={operation.busy}
           onPress={generate}
@@ -152,35 +167,44 @@ export function NodeDetail() {
   const valid = /^[a-z0-9][a-z0-9-]{0,31}$/.test(name);
   return (
     <Screen onRefresh={nodes.refresh} refreshing={nodes.loading}>
-      <Stack.Screen options={{ title: node?.name ?? "Node 详情" }} />
+      <Stack.Screen options={{ title: node?.name ?? t("management.node_details") }} />
       <ErrorLine error={nodes.error} />
-      {nodes.error != null && <Button title="重新读取" onPress={nodes.refresh} />}
+      {nodes.error != null && <Button title={t("management.reload")} onPress={nodes.refresh} />}
       <Loading loading={nodes.loading && !nodes.data} />
       {nodes.data && !node && (
-        <Empty title="找不到这个 Node" message="返回列表查看当前已配对的机器。" />
+        <Empty
+          title={t("management.node_not_found")}
+          message={t("management.return_to_the_list_to_see_currently")}
+        />
       )}
       {node && (
         <>
-          <Section title="连接">
-            <Row title={node.name} value={node.online ? "在线" : "离线"} />
-            <Row title="上次连接" subtitle={dateText(node.lastConnectedAt)} />
+          <Section title={t("management.connection")}>
+            <Row
+              title={node.name}
+              value={node.online ? t("management.online") : t("management.offline")}
+            />
+            <Row title={t("management.last_connected")} subtitle={dateText(node.lastConnectedAt)} />
           </Section>
-          <Section title="系统信息">
+          <Section title={t("management.system_information")}>
             {node.system ? (
               <>
-                <Row title="系统" subtitle={`${node.system.platform} · ${node.system.osRelease}`} />
-                <Row title="架构" value={node.system.arch} />
-                <Row title="主机名" subtitle={node.system.hostname} />
-                <Row title="Node 版本" subtitle={node.system.version} />
+                <Row
+                  title={t("management.operating_system")}
+                  subtitle={`${node.system.platform} · ${node.system.osRelease}`}
+                />
+                <Row title={t("management.architecture")} value={node.system.arch} />
+                <Row title={t("management.hostname")} subtitle={node.system.hostname} />
+                <Row title={t("management.node_version")} subtitle={node.system.version} />
               </>
             ) : (
-              <Row title="尚未收到系统信息" />
+              <Row title={t("management.no_system_information_received_yet")} />
             )}
-            <Row title="Node ID" subtitle={node.nodeId} />
+            <Row title={t("management.node_id")} subtitle={node.nodeId} />
           </Section>
           <Section>
             <Row
-              title="修改名字"
+              title={t("management.rename")}
               onPress={() => {
                 setName(node.name);
                 operation.reset();
@@ -188,12 +212,16 @@ export function NodeDetail() {
               }}
             />
           </Section>
-          <Sheet title="修改 Node 名字" visible={editing} onClose={() => setEditing(false)}>
-            <Caption>当前名字 · {node.name}</Caption>
+          <Sheet
+            title={t("management.rename_node")}
+            visible={editing}
+            onClose={() => setEditing(false)}
+          >
+            <Caption>{t("management.current_name", { name: node.name })}</Caption>
             <Card>
               <Field
-                label="Node 名字"
-                hint="1 到 32 个小写字母、数字或 -，以字母或数字开头。"
+                label={t("management.node_name")}
+                hint={t("management.1_to_32_lowercase_letters_digits_or")}
                 maxLength={32}
                 value={name}
                 onChangeText={(v) => {
@@ -205,7 +233,7 @@ export function NodeDetail() {
               <Outcome operation={operation} />
             </Card>
             <Button
-              title={operation.busy ? "保存中…" : "保存名字"}
+              title={operation.busy ? t("settings.saving") : t("management.save_name")}
               primary
               disabled={operation.busy || !valid}
               onPress={() => {

@@ -1,3 +1,4 @@
+import en from "../src/locales/en.json";
 const randomUUID = () => globalThis.crypto.randomUUID();
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -252,7 +253,7 @@ describe("native notification lifecycle public interface", () => {
     const old = f.notice();
     f.offline();
     const message = await f.app.endSession();
-    expect(message).toContain("未能确认服务器取消订阅");
+    expect(message).toContain(en.settings.server_unsubscription_could_not_be_confirmed_the);
     expect(f.saved?.current).toBeNull();
     expect(f.saved?.cleanup).toHaveLength(1);
     expect(f.app.getSnapshot()).toMatchObject({
@@ -338,7 +339,9 @@ describe("native notification lifecycle public interface", () => {
     await restored.setSession(f.scope);
     expect(restored.getSnapshot()).toMatchObject({
       kind: "disabled",
-      message: expect.stringContaining("未能确认服务器取消订阅"),
+      message: expect.stringContaining(
+        en.settings.server_unsubscription_could_not_be_confirmed_the,
+      ),
     });
     expect(await f.post()).toEqual(["ab".repeat(32)]);
     f.failures.clear();
@@ -562,7 +565,9 @@ describe("native notification lifecycle public interface", () => {
     expect(restarted.shouldPresent(previous)).toBe(false);
     expect(f.events.indexOf("unregister")).toBeLessThan(f.events.indexOf("clear-cookies"));
     expect(auth.getSnapshot()).toMatchObject({
-      message: expect.stringContaining("未能确认服务器取消订阅"),
+      message: expect.stringContaining(
+        en.settings.server_unsubscription_could_not_be_confirmed_the,
+      ),
     });
   });
 });

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { ReactNode } from "react";
 import type { AgentView, WorkspaceListing } from "@mate/admin";
 import { router, Stack } from "expo-router";
@@ -32,28 +33,26 @@ export function Workspace({
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
           icon="arrow.clockwise"
-          accessibilityLabel="重新读取工作区"
+          accessibilityLabel={t("management.reload_workspace")}
           hidden={!ready}
           disabled={result.loading}
           onPress={result.refresh}
         >
-          重新读取
+          {t("management.reload")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Screen grouped={false} onRefresh={result.refresh} refreshing={result.loading}>
         {navigation}
-        <Caption>
-          {name} · 主 Node {nodeName} · 只读
-        </Caption>
+        <Caption>{t("management.workspace_summary", { name, node: nodeName })}</Caption>
         <Section>
           <Row
-            title={path === "." ? "根目录" : path}
-            subtitle={path === "." ? "" : "相对于 Agent 主工作区"}
+            title={path === "." ? t("management.root_directory") : path}
+            subtitle={path === "." ? "" : t("management.relative_to_the_agents_home_workspace")}
           />
-          {path !== "." && <Row title="根目录" onPress={() => open(".")} />}
+          {path !== "." && <Row title={t("management.root_directory")} onPress={() => open(".")} />}
           {path !== "." && path.includes("/") && (
             <Row
-              title="上一级"
+              title={t("management.parent_directory")}
               onPress={() => open(path.split("/").slice(0, -1).join("/") || ".")}
             />
           )}
@@ -61,11 +60,17 @@ export function Workspace({
         <ErrorLine error={result.error} />
         {result.error != null && (
           <>
-            {data && <Caption>以下为上次读取的内容，当前结果尚未更新。</Caption>}
+            {data && (
+              <Caption>{t("management.showing_the_previously_loaded_content_the_current")}</Caption>
+            )}
             {outside ? (
-              <Button title="返回根目录" onPress={() => open(".")} />
+              <Button title={t("management.back_to_root")} onPress={() => open(".")} />
             ) : (
-              <Button title="重试读取" disabled={result.loading} onPress={result.refresh} />
+              <Button
+                title={t("management.retry_loading")}
+                disabled={result.loading}
+                onPress={result.refresh}
+              />
             )}
           </>
         )}
@@ -74,20 +79,20 @@ export function Workspace({
           <Section
             footer={
               data.truncated
-                ? "目录过大，只列出了部分条目。"
-                : "按名称排列。Agent 暂停时仍可阅读工作区。"
+                ? t("management.this_directory_is_too_large_only_some")
+                : t("management.sorted_by_name_the_workspace_can_still")
             }
           >
-            {data.entries.length === 0 && <Empty title="空目录" />}
+            {data.entries.length === 0 && <Empty title={t("management.empty_directory")} />}
             {data.entries.map((entry) => (
               <Row
                 key={entry.name}
                 title={entry.name}
                 subtitle={
                   entry.kind === "directory"
-                    ? "目录"
+                    ? t("management.directory")
                     : entry.kind === "symlink"
-                      ? "符号链接 · 目标需位于工作区内"
+                      ? t("management.symbolic_link_target_must_be_within_the")
                       : ""
                 }
                 value={entry.kind === "file" ? bytesText(entry.size) : ""}
@@ -99,20 +104,24 @@ export function Workspace({
         {data && data.kind !== "directory" && (
           <>
             <Caption>
-              {bytesText(data.size)}
-              {data.kind === "file" && data.truncated ? " · 仅显示文件开头" : ""}
+              {data.kind === "file" && data.truncated
+                ? t("management.truncated_size", { size: bytesText(data.size) })
+                : bytesText(data.size)}
             </Caption>
             {data.kind === "file" ? (
               data.content.length ? (
                 <Copy mono>{data.content}</Copy>
               ) : (
-                <Empty title="空文件" />
+                <Empty title={t("management.empty_file")} />
               )
             ) : (
-              <Empty title="二进制文件" message="此文件只有大小信息，无法预览内容。" />
+              <Empty
+                title={t("management.binary_file")}
+                message={t("management.only_the_size_is_available_this_file")}
+              />
             )}
             {data.kind === "file" && data.truncated && (
-              <Caption>文件过大，当前内容已截断。</Caption>
+              <Caption>{t("management.this_file_is_too_large_the_content")}</Caption>
             )}
           </>
         )}
@@ -127,12 +136,17 @@ export function AgentWorkspace({ agentId, path }: { agentId: string; path: strin
   return (
     <>
       <Stack.Screen
-        options={{ title: path === "." ? "工作区" : (path.split("/").pop() ?? "工作区") }}
+        options={{
+          title:
+            path === "."
+              ? t("management.workspace")
+              : (path.split("/").pop() ?? t("management.workspace")),
+        }}
       />
       {agent && agent.state !== "unreadable" ? (
         <Workspace
           agentId={agentId}
-          name={agent.displayName ?? "Agent"}
+          name={agent.displayName ?? t("chat.agent")}
           nodeName={agent.nodeName}
           path={path}
         />
@@ -140,8 +154,12 @@ export function AgentWorkspace({ agentId, path }: { agentId: string; path: strin
         <Screen>
           <ErrorLine error={agents.error} />
           <Loading loading={agents.loading && !agents.data} />
-          {agents.data && <Empty title={agent ? "无法读取 Agent" : "找不到这个 Agent"} />}
-          <Button title="重新读取 Agent" onPress={agents.refresh} />
+          {agents.data && (
+            <Empty
+              title={agent ? t("management.cannot_read_agent") : t("management.agent_not_found")}
+            />
+          )}
+          <Button title={t("management.reload_agent")} onPress={agents.refresh} />
         </Screen>
       )}
     </>

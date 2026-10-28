@@ -1,3 +1,4 @@
+import { t } from "../../../../i18n";
 import { router } from "expo-router";
 import { Row, Screen, Section } from "../../../../ui";
 export default function AdminScreen() {
@@ -5,14 +6,18 @@ export default function AdminScreen() {
     <Screen>
       <Section>
         <Row
-          title="模型提供商"
-          subtitle="凭据与模型目录"
+          title={t("management.model_providers")}
+          subtitle={t("management.credentials_and_model_catalogs")}
           onPress={() => router.push("/admin/providers")}
         />
-        <Row title="Node" subtitle="机器、连接与配对" onPress={() => router.push("/admin/nodes")} />
         <Row
-          title="人类"
-          subtitle="账号、角色与安全"
+          title={t("common.node")}
+          subtitle={t("management.machines_connections_and_pairing")}
+          onPress={() => router.push("/admin/nodes")}
+        />
+        <Row
+          title={t("chat.human")}
+          subtitle={t("management.accounts_roles_and_security")}
           onPress={() => router.push("/admin/humans")}
         />
       </Section>

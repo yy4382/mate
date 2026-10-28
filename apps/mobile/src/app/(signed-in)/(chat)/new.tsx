@@ -1,3 +1,4 @@
+import { t } from "../../../i18n";
 import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
@@ -44,22 +45,25 @@ export default function NewConversation() {
       router.back();
       router.push({ pathname: "/conversation", params: { id: result.conversationId } });
     } catch (e) {
-      if (mounted.current) setError(e instanceof Error ? e.message : "无法创建会话，请重试。");
+      if (mounted.current)
+        setError(
+          e instanceof Error ? e.message : t("chat.could_not_create_the_conversation_retry"),
+        );
     }
   }
   const [query, setQuery] = useState("");
   return (
-    <Sheet title="新建会话" onClose={() => router.back()}>
+    <Sheet title={t("chat.new_conversation")} onClose={() => router.back()}>
       <View style={styles.row}>
         <Button
           disabled={!!pending}
-          title="频道"
+          title={t("chat.channel")}
           primary={mode === "channel"}
           onPress={() => setMode("channel")}
         />
         <Button
           disabled={!!pending}
-          title="私信"
+          title={t("chat.direct_message")}
           primary={mode === "dm"}
           onPress={() => setMode("dm")}
         />
@@ -68,7 +72,7 @@ export default function NewConversation() {
         <>
           <Card>
             <Field
-              label="频道名称"
+              label={t("chat.channel_name")}
               testID="channel-name"
               editable={!pending}
               value={name}
@@ -76,21 +80,21 @@ export default function NewConversation() {
             />
           </Card>
           <Section
-            title="可见性"
+            title={t("chat.visibility")}
             footer={
               visibility === "public"
-                ? "公开频道。Agent 不加入也可读；发言与建任务需要加入。人类可阅读所有会话。"
-                : "私有频道。Agent 只有成员可读。人类仍可阅读所有会话；发言与建任务需要加入。"
+                ? t("chat.public_channel_agents_can_read_without_joining")
+                : t("chat.private_channel_only_agent_members_can_read")
             }
           >
             <Row
-              title="公开"
+              title={t("chat.public")}
               selected={visibility === "public"}
               disabled={!!pending}
               onPress={() => setVisibility("public")}
             />
             <Row
-              title="私有"
+              title={t("chat.private")}
               selected={visibility === "private"}
               disabled={!!pending}
               onPress={() => setVisibility("private")}
@@ -100,12 +104,12 @@ export default function NewConversation() {
       ) : (
         <>
           <Field
-            label="查找账号"
+            label={t("chat.find_account")}
             value={query}
             onChangeText={setQuery}
             clearButtonMode="while-editing"
           />
-          <Section title="选择私信对象">
+          <Section title={t("chat.choose_a_recipient")}>
             {state.accounts
               .filter(
                 (a) =>
@@ -119,7 +123,7 @@ export default function NewConversation() {
                 <Row
                   key={a.accountId}
                   title={a.displayName}
-                  subtitle={`@${a.handle} · ${a.kind === "agent" ? "Agent" : "人类"}`}
+                  subtitle={`@${a.handle} · ${a.kind === "agent" ? t("chat.agent") : t("chat.human")}`}
                   leading={<Avatar name={a.displayName} kind={a.kind} />}
                   selected={other === a.accountId}
                   disabled={!!pending}
@@ -129,17 +133,17 @@ export default function NewConversation() {
           </Section>
         </>
       )}
-      {pending && <Label>上次操作结果尚未确认，重试将使用原请求。</Label>}
+      {pending && <Label>{t("chat.the_previous_operation_is_unconfirmed_retrying_uses")}</Label>}
       <ErrorLine text={pending?.error || error} />
       <Button
         title={
           busy
-            ? "正在打开…"
+            ? t("chat.opening")
             : pending
-              ? "重试打开会话"
+              ? t("chat.retry_opening_conversation")
               : mode === "channel"
-                ? "创建频道"
-                : "打开私信"
+                ? t("chat.create_channel")
+                : t("chat.open_direct_message")
         }
         primary
         disabled={busy || (mode === "channel" ? !name.trim() : other === null)}

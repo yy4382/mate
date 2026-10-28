@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { useEffect, useRef, useState } from "react";
 import type { ConversationView, Entry } from "@mate/chat/contracts";
 import { accountName, conversationLabel } from "./chat";
@@ -38,7 +39,8 @@ export function useAction(key: string) {
         await action();
         return mounted.current;
       } catch (e) {
-        if (mounted.current) setError(e instanceof Error ? e.message : "操作失败，请重试。");
+        if (mounted.current)
+          setError(e instanceof Error ? e.message : t("chat.the_operation_failed_retry"));
         return false;
       }
     },
@@ -85,13 +87,15 @@ export function ConversationActionsContent({
   );
   return (
     <>
-      {page !== "info" && <Button title="返回频道资料" onPress={() => setPage("info")} />}
+      {page !== "info" && (
+        <Button title={t("chat.back_to_channel_details")} onPress={() => setPage("info")} />
+      )}
       <Heading>{name}</Heading>
       {pending?.kind === "conversation-action" && (
         <Card>
-          <Copy>上次操作结果尚未确认，关闭界面不会取消它。</Copy>
+          <Copy>{t("chat.the_previous_operation_is_unconfirmed_closing_this")}</Copy>
           <Button
-            title="重试上次操作"
+            title={t("chat.retry_previous_operation")}
             primary
             disabled={action.busy}
             onPress={() => void act(pending.action, pending.invitee)}
@@ -101,28 +105,43 @@ export function ConversationActionsContent({
       {page === "info" ? (
         <>
           <Caption>
-            {conversation.archived
-              ? "已归档 · 只读"
-              : conversation.member
-                ? "你已加入这个会话"
-                : "尚未加入 · 可阅读"}
-            {conversation.kind === "dm"
-              ? ""
-              : conversation.kind === "private"
-                ? " · 私有频道"
-                : " · 公开频道"}
+            {t("chat.conversation_status", {
+              status: conversation.archived
+                ? t("chat.archived_readonly")
+                : conversation.member
+                  ? t("chat.you_have_joined_this_conversation")
+                  : t("chat.not_joined_readable"),
+              kind:
+                conversation.kind === "dm"
+                  ? t("chat.direct_message")
+                  : conversation.kind === "private"
+                    ? t("chat.private_channel")
+                    : t("chat.public_channel"),
+            })}
           </Caption>
-          <Section title={`成员 · ${conversation.members.length}`}>
+          <Section title={t("chat.members", { count: conversation.members.length })}>
             {conversation.members.map((id) => {
               const a = state.accounts.find((x) => x.accountId === id);
               return (
                 <Row
                   key={id}
-                  title={`${accountName(state.accounts, id)}${id === state.me ? "（你）" : ""}`}
+                  title={
+                    id === state.me
+                      ? t("common.you_name", { name: accountName(state.accounts, id) })
+                      : accountName(state.accounts, id)
+                  }
                   subtitle={
                     a
-                      ? `@${a.handle} · ${a.kind === "agent" ? "Agent" : "人类"}${a.active ? "" : " · 已停用"}`
-                      : "账号已不可用"
+                      ? a.active
+                        ? t("chat.account_label", {
+                            handle: a.handle,
+                            kind: a.kind === "agent" ? t("chat.agent") : t("chat.human"),
+                          })
+                        : t("chat.inactive_account_label", {
+                            handle: a.handle,
+                            kind: a.kind === "agent" ? t("chat.agent") : t("chat.human"),
+                          })
+                      : t("chat.account_unavailable")
                   }
                   leading={
                     <Avatar name={accountName(state.accounts, id)} kind={a?.kind ?? "human"} />
@@ -135,7 +154,7 @@ export function ConversationActionsContent({
             <>
               {!conversation.member && (
                 <Button
-                  title="加入频道"
+                  title={t("chat.join_channel")}
                   primary
                   disabled={action.busy || blocked}
                   onPress={() => void act("join")}
@@ -143,15 +162,23 @@ export function ConversationActionsContent({
               )}
               {write && (
                 <Section>
-                  <Row title="邀请成员" disabled={blocked} onPress={() => setPage("invite")} />
+                  <Row
+                    title={t("chat.invite_members")}
+                    disabled={blocked}
+                    onPress={() => setPage("invite")}
+                  />
                 </Section>
               )}
-              <Section title="频道操作">
+              <Section title={t("chat.channel_actions")}>
                 {write && (
-                  <Row title="离开频道…" disabled={blocked} onPress={() => setPage("leave")} />
+                  <Row
+                    title={t("chat.leave_channel")}
+                    disabled={blocked}
+                    onPress={() => setPage("leave")}
+                  />
                 )}
                 <Row
-                  title="归档频道…"
+                  title={t("chat.archive_channel")}
                   danger
                   disabled={blocked}
                   onPress={() => setPage("archive")}
@@ -163,7 +190,7 @@ export function ConversationActionsContent({
       ) : page === "invite" ? (
         <>
           <Field
-            label="查找账号"
+            label={t("chat.find_account")}
             value={query}
             onChangeText={setQuery}
             clearButtonMode="while-editing"
@@ -173,7 +200,7 @@ export function ConversationActionsContent({
               <Row
                 key={a.accountId}
                 title={a.displayName}
-                subtitle={`@${a.handle} · ${a.kind === "agent" ? "Agent" : "人类"}`}
+                subtitle={`@${a.handle} · ${a.kind === "agent" ? t("chat.agent") : t("chat.human")}`}
                 selected={invitee === a.accountId}
                 leading={<Avatar name={a.displayName} kind={a.kind} />}
                 disabled={blocked}
@@ -183,12 +210,16 @@ export function ConversationActionsContent({
           </Section>
           {!candidates.length && (
             <Empty
-              title="没有可邀请的账号"
-              message={query ? "换一个关键词试试。" : "活跃账号都已在这个频道中。"}
+              title={t("chat.no_accounts_to_invite")}
+              message={
+                query
+                  ? t("common.try_another_keyword")
+                  : t("chat.all_active_accounts_are_already_in_this")
+              }
             />
           )}
           <Button
-            title="邀请加入"
+            title={t("chat.invite")}
             primary
             disabled={action.busy || blocked || invitee === null}
             onPress={() => {
@@ -200,17 +231,17 @@ export function ConversationActionsContent({
         <>
           <Copy>
             {page === "leave"
-              ? "离开后不再关注频道消息，也不能发言。你仍可阅读，并可重新加入。"
-              : "所有人都将只能阅读，不能再发言。归档无法恢复，已有消息和讨论串保留。"}
+              ? t("chat.leaving_unfollows_channel_messages_and_prevents_posting")
+              : t("chat.everyone_will_only_be_able_to_read")}
           </Copy>
           <Button
-            title={page === "leave" ? "确认离开" : "确认归档"}
+            title={page === "leave" ? t("chat.confirm_leaving") : t("chat.confirm_archiving")}
             primary
             danger={page === "archive"}
             disabled={action.busy || blocked}
             onPress={() => void act(page)}
           />
-          <Button title="取消" onPress={() => setPage("info")} />
+          <Button title={t("common.cancel")} onPress={() => setPage("info")} />
         </>
       )}
       <ErrorLine text={action.error} />
@@ -237,19 +268,19 @@ export function CreateTaskContent({
     <>
       <Card>
         <Field
-          label="任务标题"
+          label={t("chat.task_title")}
           testID="task-title"
           maxLength={200}
           editable={!action.operation}
           value={title}
           onChangeText={setTitle}
-          hint="任务创建后尚无人认领。"
+          hint={t("chat.newly_created_tasks_are_unclaimed")}
         />
       </Card>
-      <Section title="来源消息">
+      <Section title={t("chat.source_message")}>
         <Row
-          title={entry.body.split("\n")[0]?.slice(0, 80) || "原消息"}
-          subtitle={source ? "收起全文" : "展开原消息"}
+          title={entry.body.split("\n")[0]?.slice(0, 80) || t("chat.original_message")}
+          subtitle={source ? t("chat.collapse_full_text") : t("chat.expand_original_message")}
           onPress={() => setSource(!source)}
         />
         {source && (
@@ -258,10 +289,10 @@ export function CreateTaskContent({
           </Card>
         )}
       </Section>
-      {action.operation && <Copy>创建结果尚未确认。标题与原请求已保留，关闭后可继续。</Copy>}
+      {action.operation && <Copy>{t("chat.creation_is_unconfirmed_the_title_and_original")}</Copy>}
       <ErrorLine text={action.error} />
       <Button
-        title={action.operation ? "重试创建任务" : "创建任务"}
+        title={action.operation ? t("chat.retry_task_creation") : t("chat.create_task")}
         primary
         disabled={action.busy || !title.trim()}
         onPress={() =>
@@ -315,23 +346,28 @@ export function TaskActionsContent({
       <Heading>{task.title}</Heading>
       <Copy>
         {task.change === "completed"
-          ? "已完成"
+          ? t("chat.completed")
           : task.owner === null
-            ? "无人认领"
-            : `${accountName(state.accounts, task.owner)}${task.owner === state.me ? "（你）" : ""}负责`}
+            ? t("chat.unclaimed")
+            : t("chat.owned_by", {
+                name:
+                  task.owner === state.me
+                    ? t("common.you_name", { name: accountName(state.accounts, task.owner) })
+                    : accountName(state.accounts, task.owner),
+              })}
       </Copy>
-      <Section title="来源消息">
+      <Section title={t("chat.source_message")}>
         <Row
-          title={source?.body.split("\n")[0]?.slice(0, 80) || "查看来源消息"}
+          title={source?.body.split("\n")[0]?.slice(0, 80) || t("chat.view_source_message")}
           {...(source ? { subtitle: accountName(state.accounts, source.author) } : {})}
           {...(onSource ? { onPress: () => void action.run(onSource) } : {})}
         />
       </Section>
       {action.operation?.input.kind === "task-change" && (
         <>
-          <Copy>上次操作结果尚未确认。重试沿用原请求。</Copy>
+          <Copy>{t("chat.the_previous_operation_is_unconfirmed_retrying_uses")}</Copy>
           <Button
-            title="重试上次操作"
+            title={t("chat.retry_previous_operation")}
             primary
             disabled={action.busy}
             onPress={() => {
@@ -346,7 +382,7 @@ export function TaskActionsContent({
         task.change !== "completed" &&
         (task.owner === null ? (
           <Button
-            title="认领任务"
+            title={t("chat.claim_task")}
             primary
             disabled={action.busy}
             onPress={() => void act({ kind: "claim" })}
@@ -355,7 +391,7 @@ export function TaskActionsContent({
           transfer ? (
             <>
               <Field
-                label="查找账号"
+                label={t("chat.find_account")}
                 value={query}
                 onChangeText={setQuery}
                 clearButtonMode="while-editing"
@@ -365,7 +401,7 @@ export function TaskActionsContent({
                   <Row
                     key={a.accountId}
                     title={a.displayName}
-                    subtitle={`@${a.handle} · ${a.kind === "agent" ? "Agent" : "人类"}`}
+                    subtitle={`@${a.handle} · ${a.kind === "agent" ? t("chat.agent") : t("chat.human")}`}
                     selected={to === a.accountId}
                     leading={<Avatar name={a.displayName} kind={a.kind} />}
                     onPress={() => setTo(a.accountId)}
@@ -373,35 +409,35 @@ export function TaskActionsContent({
                 ))}
               </Section>
               <Button
-                title="确认转交"
+                title={t("chat.confirm_transfer")}
                 primary
                 disabled={action.busy || to === null}
                 onPress={() => {
                   if (to !== null) void act({ kind: "transfer", to });
                 }}
               />
-              <Button title="取消转交" onPress={() => setTransfer(false)} />
+              <Button title={t("chat.cancel_transfer")} onPress={() => setTransfer(false)} />
             </>
           ) : (
             <>
               <Button
-                title="完成任务"
+                title={t("chat.complete_task")}
                 primary
                 disabled={action.busy}
                 onPress={() => void act({ kind: "complete" })}
               />
               <Section>
-                <Row title="转交任务…" onPress={() => setTransfer(true)} />
+                <Row title={t("chat.transfer_task")} onPress={() => setTransfer(true)} />
                 <Row
-                  title="让出任务"
-                  subtitle="让出后可由其他账号认领"
+                  title={t("chat.yield_task")}
+                  subtitle={t("chat.allow_another_account_to_claim_it")}
                   onPress={() => void act({ kind: "yield" })}
                 />
               </Section>
             </>
           )
         ) : (
-          <Caption>只有当前负责人可以完成、让出或转交任务。</Caption>
+          <Caption>{t("chat.only_the_current_owner_can_complete_yield")}</Caption>
         ))}
       <ErrorLine text={action.error} />
     </>

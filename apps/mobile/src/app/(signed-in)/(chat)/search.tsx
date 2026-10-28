@@ -1,3 +1,4 @@
+import { t, dateText, numberText } from "../../../i18n";
 import { Stack } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Keyboard, Text, View } from "react-native";
@@ -43,13 +44,13 @@ export default function Search() {
           disabled={!query.trim() || result.kind === "loading"}
           onPress={() => void search()}
         >
-          搜索
+          {t("chat.search")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Field
         testID="search-query"
-        accessibilityLabel="搜索词"
-        placeholder="在所有可见会话中搜索"
+        accessibilityLabel={t("chat.search_terms")}
+        placeholder={t("chat.search_all_visible_conversations")}
         value={query}
         onChangeText={setQuery}
         returnKeyType="search"
@@ -58,25 +59,31 @@ export default function Search() {
       />
       <Caption>
         {result.kind === "ready"
-          ? `“${result.query}” · ${result.hits.length} 项结果`
-          : "所有可见会话中的消息"}
+          ? t("chat.search_results", { query: result.query, count: result.hits.length })
+          : t("chat.messages_in_all_visible_conversations")}
       </Caption>
-      {result.kind === "loading" && <ActivityIndicator accessibilityLabel="正在搜索" />}
+      {result.kind === "loading" && <ActivityIndicator accessibilityLabel={t("chat.searching")} />}
       {result.kind === "idle" && (
-        <Empty title="输入关键词查找消息" message="使用键盘搜索键或右上角搜索。" />
+        <Empty
+          title={t("chat.enter_keywords_to_find_messages")}
+          message={t("chat.use_the_keyboard_search_key_or_search")}
+        />
       )}
       {result.kind === "error" && (
         <>
-          <ErrorLine text="搜索未完成，已保留关键词。" />
-          <Button title="重试搜索" onPress={() => void search()} />
+          <ErrorLine text={t("chat.search_did_not_finish_your_keywords_are")} />
+          <Button title={t("chat.retry_search")} onPress={() => void search()} />
         </>
       )}
       {result.kind === "ready" && (
         <>
           {result.hits.length === 0 ? (
-            <Empty title="没有找到匹配的消息" message="换一个关键词，或清除当前搜索。">
+            <Empty
+              title={t("chat.no_matching_messages")}
+              message={t("chat.try_another_keyword_or_clear_this_search")}
+            >
               <Button
-                title="清除搜索"
+                title={t("chat.clear_search")}
                 onPress={() => {
                   request.current++;
                   setQuery("");
@@ -85,7 +92,7 @@ export default function Search() {
               />
             </Empty>
           ) : (
-            <Caption>搜索结果暂不支持跳转到原消息，可在这里阅读完整内容。</Caption>
+            <Caption>{t("chat.search_results_cannot_open_the_original_message")}</Caption>
           )}
           {result.hits.map((hit) =>
             hit.kind === "message" ? (
@@ -93,7 +100,10 @@ export default function Search() {
             ) : (
               <View key={`task-${hit.seq}`}>
                 <Caption>
-                  {accountName(state.accounts, hit.actor)} · 任务{hit.title}
+                  {t("chat.search_task", {
+                    name: accountName(state.accounts, hit.actor),
+                    title: hit.title,
+                  })}
                 </Caption>
               </View>
             ),
@@ -110,7 +120,7 @@ function SearchHit({ hit }: { hit: Extract<Entry, { kind: "message" }> }) {
   return (
     <View style={{ paddingVertical: 16, gap: 10, borderBottomWidth: 1, borderColor: c.border }}>
       <Caption>
-        {accountName(state.accounts, hit.author)} · {new Date(hit.at).toLocaleString("zh-CN")}
+        {accountName(state.accounts, hit.author)} · {dateText(hit.at)}
       </Caption>
       {expanded || hit.body.length <= 240 ? (
         <MessageBody text={hit.body} accounts={state.accounts} mentions={hit.mentions} />
@@ -121,14 +131,14 @@ function SearchHit({ hit }: { hit: Extract<Entry, { kind: "message" }> }) {
       )}
       {hit.body.length > 240 && (
         <Button
-          title={expanded ? "收起消息" : "展开完整消息"}
+          title={expanded ? t("chat.collapse_message") : t("chat.expand_full_message")}
           onPress={() => setExpanded(!expanded)}
         />
       )}
       {expanded &&
         hit.attachments.map((a, i) => (
           <Caption key={i}>
-            附件：{a.name}（{a.size} 字节，暂不支持下载）
+            {t("chat.attachment", { name: a.name, count: a.size, size: numberText(a.size) })}
           </Caption>
         ))}
     </View>

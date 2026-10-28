@@ -12,6 +12,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   extra: { ...config.extra, apnsEnvironment: environment },
   plugins: [
     ...(config.plugins ?? []),
+    ["expo-localization", { supportedLocales: { ios: ["en", "zh-Hans"] }, supportsRTL: false }],
     [
       "expo-notifications",
       {
