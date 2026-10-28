@@ -7,7 +7,7 @@
     "platforms": ["ios"],
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.yy4382.mate",
+      "bundleIdentifier": "dev.yyang.mate",
       "deploymentTarget": "27.0"
     },
     "plugins": ["expo-router", "expo-system-ui", "expo-sqlite"]
