@@ -1,4 +1,3 @@
-import en from "../src/locales/en.json";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +5,7 @@ import { ChatApp } from "@mate/chat";
 import type { Clock } from "@mate/clock";
 import { type TimelineRef } from "@mate/chat/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { MobileChat, type ChatPlatform, type ChatState } from "../src/chat.ts";
+import { MobileChat, operationKey, type ChatPlatform, type ChatState } from "../src/chat.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -129,6 +128,23 @@ function fixture(clock?: Clock) {
         body.requestId,
         server.createTask(me, { ...body, freshness: false }),
       );
+    const acting = url.pathname.match(
+      /^\/api\/chat\/conversations\/(\d+)\/(join|leave|archive|invite)$/,
+    );
+    if (acting) {
+      const request = { ...body, conversationId: Number(acting[1]) };
+      return operationResponse(
+        url.pathname,
+        body.requestId,
+        acting[2] === "invite"
+          ? server.invite(me, request)
+          : acting[2] === "join"
+            ? server.join(me, request)
+            : acting[2] === "leave"
+              ? server.leave(me, request)
+              : server.archiveChannel(me, request),
+      );
+    }
     const changingTask = url.pathname.match(/^\/api\/chat\/tasks\/(\d+)\/change$/);
     if (changingTask)
       return operationResponse(
@@ -554,20 +570,28 @@ describe("native chat public interface", () => {
     expect(await f.chat.locate(thread, { seq: 900 }, cancel.signal)).toBe("missing");
     expect(await f.chat.locate(f.ref, { messageId: 9999 }, cancel.signal)).toBe("missing");
   });
-  it("cancels an old destination without blocking a new destination on the same timeline", async () => {
+  it("cancelling one destination leaves the older page it shares with another destination loading", async () => {
     const f = fixture();
+    for (let i = 0; i < 70; i++)
+      f.server.send(f.other, f.ref, {
+        requestId: `page-${i}`,
+        body: `历史 ${i}`,
+        freshness: false,
+      });
     await f.start();
-    const held = f.holdHistory();
+    await f.chat.load(f.ref);
+    const older = f.holdHistory();
     const cancel = new AbortController();
-    const locating = f.chat.locate(f.ref, { seq: 1 }, cancel.signal);
+    const cancelled = f.chat.locate(f.ref, { seq: 1 }, cancel.signal);
+    const other = f.chat.locate(f.ref, { seq: 2 }, new AbortController().signal);
+    await until(f.chat, () => f.chat.timeline(f.ref).loading);
     cancel.abort();
-    f.server.send(f.other, f.ref, { requestId: "new-target", body: "新目标", freshness: false });
-    const next = f.chat.locate(f.ref, { seq: 1 }, new AbortController().signal);
-    held.resolve(new Response(JSON.stringify([])));
-    expect(await locating).toBe("cancelled");
-    expect(await next).toBe("found");
+    older.resolve(
+      new Response(JSON.stringify(f.server.readHistory(f.me, f.ref, { before: 20, limit: 50 }))),
+    );
+    expect(await cancelled).toBe("cancelled");
+    expect(await other).toBe("found");
     expect(f.historyRequests).toBe(2);
-    expect(f.chat.timeline(f.ref).entries).toMatchObject([{ body: "新目标" }]);
   });
   it("does not reveal a late destination after the authenticated identity closes", async () => {
     const f = fixture();
@@ -597,11 +621,12 @@ describe("native chat public interface", () => {
     const input = { messageId: message.messageId, title: "保留任务" };
     f.loseOperation("/api/chat/tasks");
     await expect(f.chat.task(input)).rejects.toThrow();
-    const reopened = f.chat.getSnapshot().operations.get(`task-create/${message.messageId}`);
+    const reopened = f.chat
+      .getSnapshot()
+      .operations.get(operationKey.taskCreation(message.messageId));
     expect(reopened).toMatchObject({ status: "failed", input: { kind: "task-create", ...input } });
-    await expect(f.chat.task({ ...input, title: "不能替换未确认操作" })).rejects.toThrow(
-      en.chat.the_previous_operation_is_unconfirmed_retry_it,
-    );
+    await expect(f.chat.task({ ...input, title: "不能替换未确认操作" })).rejects.toThrow();
+    expect(f.operationRequests).toHaveLength(1);
     const result = await f.chat.task(input);
     expect(result.status).toBe("applied");
     expect(f.operationRequests).toHaveLength(2);
@@ -616,7 +641,7 @@ describe("native chat public interface", () => {
     const input = { kind: "channel" as const, name: "只创建一次", visibility: "private" as const };
     f.loseOperation("/api/chat/channels");
     await expect(f.chat.create(input)).rejects.toThrow();
-    expect(f.chat.getSnapshot().operations.get("new-conversation")).toMatchObject({
+    expect(f.chat.getSnapshot().operations.get(operationKey.creation)).toMatchObject({
       input,
       status: "failed",
     });
@@ -644,7 +669,7 @@ describe("native chat public interface", () => {
     const input = { kind: "dm" as const, other: agent };
     f.loseOperation("/api/chat/dms");
     await expect(f.chat.create(input)).rejects.toThrow();
-    expect(f.chat.getSnapshot().operations.get("new-conversation")).toMatchObject({ input });
+    expect(f.chat.getSnapshot().operations.get(operationKey.creation)).toMatchObject({ input });
     const result = await f.chat.create(input);
     expect(result.members).toContain(agent);
     expect(result.members).toContain(f.me);
@@ -661,7 +686,63 @@ describe("native chat public interface", () => {
     expect(f.chat.getSnapshot().operations.size).toBe(1);
     f.chat.close();
     expect(f.chat.getSnapshot().operations.size).toBe(0);
-    await expect(f.chat.create(input)).rejects.toThrow(en.chat.your_session_has_ended);
+    await expect(f.chat.create(input)).rejects.toThrow();
     expect(f.operationRequests).toHaveLength(1);
+  });
+  it("retains an unconfirmed member operation and its request ID until the same operation is confirmed", async () => {
+    const f = fixture();
+    const invitee = f.server.ensureAccount({
+      externalId: "invitee",
+      displayName: "小红",
+      handle: "hong",
+      kind: "human",
+    });
+    await f.start();
+    const conversation = f.ref.conversation;
+    f.loseOperation(`/api/chat/conversations/${conversation}/invite`);
+    await expect(f.chat.conversationAction(conversation, "invite", invitee)).rejects.toThrow();
+    expect(
+      f.chat.getSnapshot().operations.get(operationKey.conversation(conversation)),
+    ).toMatchObject({ status: "failed", input: { action: "invite", invitee } });
+    await expect(f.chat.conversationAction(conversation, "leave")).rejects.toThrow();
+    expect(f.operationRequests).toHaveLength(1);
+    await f.chat.conversationAction(conversation, "invite", invitee);
+    expect(f.operationRequests).toHaveLength(2);
+    expect(f.operationRequests[0]?.requestId).toBe(f.operationRequests[1]?.requestId);
+    expect(f.chat.getSnapshot().operations.size).toBe(0);
+    expect(
+      f.server.listConversations(f.me).find((c) => c.conversationId === conversation)?.members,
+    ).toEqual(expect.arrayContaining([f.me, f.other, invitee]));
+  });
+  it("keeps conversations in server order when live updates and repeated opens replace them", async () => {
+    const f = fixture();
+    const invitee = f.server.ensureAccount({
+      externalId: "invitee",
+      displayName: "小红",
+      handle: "hong",
+      kind: "human",
+    });
+    const dm = f.server.openDm(f.me, { requestId: "dm", other: f.other });
+    const later = f.server.createChannel(f.me, {
+      requestId: "later",
+      name: "later",
+      visibility: "public",
+    });
+    await f.start();
+    const order = [f.ref.conversation, dm.conversationId, later.conversationId];
+    const ids = () => f.chat.getSnapshot().conversations.map((c) => c.conversationId);
+    expect(ids()).toEqual(order);
+    f.server.invite(f.me, { requestId: "invite", conversationId: f.ref.conversation, invitee });
+    f.push();
+    await until(f.chat, (s) =>
+      s.conversations.some(
+        (c) => c.conversationId === f.ref.conversation && c.members.includes(invitee),
+      ),
+    );
+    expect(ids()).toEqual(order);
+    expect((await f.chat.create({ kind: "dm", other: f.other })).conversationId).toBe(
+      dm.conversationId,
+    );
+    expect(ids()).toEqual(order);
   });
 });

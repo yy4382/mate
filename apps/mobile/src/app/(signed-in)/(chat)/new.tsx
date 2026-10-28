@@ -2,23 +2,14 @@ import { t } from "../../../i18n";
 import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
+import { operationKey } from "../../../chat";
+import { AccountPicker } from "../../../chat-actions";
 import { useChat, useChatState } from "../../../session";
-import {
-  Avatar,
-  Button,
-  Card,
-  ErrorLine,
-  Field,
-  Label,
-  Row,
-  Section,
-  Sheet,
-  styles,
-} from "../../../ui";
+import { Button, Card, ErrorLine, Field, Label, Row, Section, Sheet, styles } from "../../../ui";
 export default function NewConversation() {
   const chat = useChat();
   const state = useChatState();
-  const pending = state.operations.get("new-conversation");
+  const pending = state.operations.get(operationKey.creation);
   const saved = pending?.input;
   const [mode, setMode] = useState<"channel" | "dm">(saved?.kind === "dm" ? "dm" : "channel");
   const [visibility, setVisibility] = useState<"public" | "private">(
@@ -41,14 +32,12 @@ export default function NewConversation() {
     setError("");
     try {
       const result = await chat.create(input);
+      // A sheet closed during the request must not navigate the screen beneath it.
       if (!mounted.current) return;
       router.back();
       router.push({ pathname: "/conversation", params: { id: result.conversationId } });
     } catch (e) {
-      if (mounted.current)
-        setError(
-          e instanceof Error ? e.message : t("chat.could_not_create_the_conversation_retry"),
-        );
+      setError(e instanceof Error ? e.message : t("chat.could_not_create_the_conversation_retry"));
     }
   }
   const [query, setQuery] = useState("");
@@ -102,36 +91,15 @@ export default function NewConversation() {
           </Section>
         </>
       ) : (
-        <>
-          <Field
-            label={t("chat.find_account")}
-            value={query}
-            onChangeText={setQuery}
-            clearButtonMode="while-editing"
-          />
-          <Section title={t("chat.choose_a_recipient")}>
-            {state.accounts
-              .filter(
-                (a) =>
-                  a.active &&
-                  a.accountId !== state.me &&
-                  `${a.displayName} ${a.handle}`
-                    .toLocaleLowerCase()
-                    .includes(query.toLocaleLowerCase()),
-              )
-              .map((a) => (
-                <Row
-                  key={a.accountId}
-                  title={a.displayName}
-                  subtitle={`@${a.handle} · ${a.kind === "agent" ? t("chat.agent") : t("chat.human")}`}
-                  leading={<Avatar name={a.displayName} kind={a.kind} />}
-                  selected={other === a.accountId}
-                  disabled={!!pending}
-                  onPress={() => setOther(a.accountId)}
-                />
-              ))}
-          </Section>
-        </>
+        <AccountPicker
+          title={t("chat.choose_a_recipient")}
+          accounts={state.accounts.filter((a) => a.active && a.accountId !== state.me)}
+          query={query}
+          onQuery={setQuery}
+          selected={other}
+          onSelect={setOther}
+          disabled={!!pending}
+        />
       )}
       {pending && <Label>{t("chat.the_previous_operation_is_unconfirmed_retrying_uses")}</Label>}
       <ErrorLine text={pending?.error || error} />

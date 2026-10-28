@@ -1,7 +1,7 @@
 import { t, dateText, numberText } from "./i18n";
 import { Pressable, Text, View } from "react-native";
 import type { AccountView, Entry } from "@mate/chat/contracts";
-import { accountName } from "./chat";
+import { accountName, taskStatus } from "./chat";
 import { MessageBody } from "./message-body";
 import { Avatar, Caption, Copy } from "./ui";
 import { useTheme } from "./theme";
@@ -45,7 +45,7 @@ export function ChatMessage({
       }}
     >
       {entry.seq === targetSeq && !isRoot && (
-        <Caption accent>{t("chat.located_message", { seq: numberText(targetSeq ?? 0) })}</Caption>
+        <Caption accent>{t("chat.located_message", { seq: numberText(targetSeq) })}</Caption>
       )}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
         <Avatar
@@ -101,12 +101,7 @@ export function ChatMessage({
           accessibilityRole="button"
           accessibilityLabel={t("chat.task_accessibility", {
             title: task.title,
-            status:
-              task.change === "completed"
-                ? t("chat.completed")
-                : task.owner === null
-                  ? t("chat.unclaimed")
-                  : t("chat.owned_by", { name: accountName(accounts, task.owner) }),
+            status: taskStatus(task, accounts, me),
           })}
           onPress={() => onTask(task)}
           style={({ pressed }) => ({
@@ -138,18 +133,7 @@ export function ChatMessage({
             </View>
             <View style={{ flex: 1, gap: 4 }}>
               <Copy>{task.title}</Copy>
-              <Caption>
-                {task.change === "completed"
-                  ? t("chat.completed")
-                  : task.owner === null
-                    ? t("chat.unclaimed")
-                    : t("chat.owned_by", {
-                        name:
-                          task.owner === me
-                            ? t("common.you_name", { name: accountName(accounts, task.owner) })
-                            : accountName(accounts, task.owner),
-                      })}
-              </Caption>
+              <Caption>{taskStatus(task, accounts, me)}</Caption>
             </View>
           </View>
           <Text style={{ color: c.accent, fontSize: 15, marginLeft: 30 }}>
