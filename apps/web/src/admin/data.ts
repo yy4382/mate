@@ -2,7 +2,7 @@ import { t } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentView, CatalogModel, NodeStatusResult, ProviderView } from "@mate/admin";
 import { get } from "../shell/api.ts";
-import type { ListedHuman } from "../shell/humans.ts";
+import type { HumanView } from "../shell/humans.ts";
 
 export type NodeView = NodeStatusResult;
 
@@ -41,7 +41,7 @@ export const useNodes = (poll = false) =>
   });
 
 export const useHumans = () =>
-  useQuery({ queryKey: adminKeys.humans, queryFn: () => get<ListedHuman[]>("/api/humans") });
+  useQuery({ queryKey: adminKeys.humans, queryFn: () => get<HumanView[]>("/api/humans") });
 
 /** The tokens an Agent has used so far, summed over its models. */
 export function totalTokens(agent: Extract<AgentView, { usage: unknown }>): number {

@@ -1,5 +1,5 @@
 import { t, noticeText } from "./i18n";
-import { HumanView, LoginResult, type LoginInput } from "@mate/auth";
+import { HumanView, LoginResult, type LoginInput } from "@mate/control-plane/contracts";
 
 export type AuthState =
   | { kind: "starting" }

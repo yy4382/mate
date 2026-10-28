@@ -3,7 +3,6 @@ import { z } from "zod";
 import { ChatError } from "./chat-error.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
-export { AccountView, AccountKind } from "./contracts.ts";
 
 /** What an account is called: the one place the rules for display names and handles are written. */
 export const AccountNames = z.object({

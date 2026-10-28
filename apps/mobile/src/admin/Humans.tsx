@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import { HumanView, Role, type HumanView as Human } from "@mate/auth";
+import { HumanView, Role, type HumanView as Human } from "@mate/control-plane/contracts";
 import { randomUUID } from "expo-crypto";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";

@@ -1,7 +1,6 @@
-import type { LiveEvent, LiveEvents, LiveSnapshot } from "./contracts.ts";
-export type { LiveEvent, LiveEvents, LiveSnapshot } from "./contracts.ts";
 import { z } from "zod";
 import { accountView, listAccounts, type Actor } from "./accounts.ts";
+import type { LiveEvent, LiveEvents, LiveSnapshot, TimelineRef } from "./contracts.ts";
 import { conversationById, conversationView, listConversations } from "./conversations.ts";
 import type { ChatDatabase } from "./database.ts";
 import { loadEntries } from "./entries.ts";
@@ -9,7 +8,7 @@ import { Id } from "./identifiers.ts";
 import { unreadSummary } from "./inbox.ts";
 import { readPosition } from "./read-positions.ts";
 import { HistoryQuery, readHistory } from "./send.ts";
-import { resolveTimeline, timelineById, timelineOfEntry, type TimelineRef } from "./timelines.ts";
+import { resolveTimeline, timelineById, timelineOfEntry } from "./timelines.ts";
 
 /** How long a live event is kept. A client that falls further behind than this loads a new snapshot. */
 const LIVE_RETENTION_MS = 24 * 60 * 60 * 1000;

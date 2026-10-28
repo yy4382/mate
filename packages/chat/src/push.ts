@@ -1,13 +1,15 @@
 import type { Clock } from "@mate/clock";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
-import { ConversationKind } from "./conversations.ts";
+import {
+  ConversationKind,
+  PushSubscription,
+  type PushAddress,
+  type TimelineRef,
+} from "./contracts.ts";
 import { SqlBoolean, type ChatDatabase } from "./database.ts";
 import { Id } from "./identifiers.ts";
-import { timelineRefOf, type TimelineRef } from "./timelines.ts";
-
-import { PushSubscription, type PushAddress } from "./push-contract.ts";
-export { PushSubscription, PushAddress } from "./push-contract.ts";
+import { timelineRefOf } from "./timelines.ts";
 
 /**
  * What a push carries: who wrote where, and where to open it, but never the message body. `tag` is the same for every

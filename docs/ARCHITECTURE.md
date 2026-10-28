@@ -208,7 +208,7 @@ interface ChatApp {
    - 游标是一个不透明字符串，由**纪元**和事件 ID 组成，可以直接用作 SSE 的事件 ID。纪元在新建 `chat.sqlite` 时随机生成，之后不变：数据重置（换了新文件）后纪元不同，旧游标随之作废。
    - 事件保留一天，过期的在之后的写操作里删掉。游标的纪元不对、早于保留的事件、超前于库里最新的事件（例如恢复了旧备份）或者根本不是游标，`liveEvents` 都回答 `resnapshot`，客户端重新拉快照。恢复旧备份只在库里的事件追上客户端的游标之前能被发现；追上之后同一个纪元下的事件 ID 已经指向别的变化，所以恢复备份后应当让浏览器重新加载。
 
-**原生传输。** `@mate/chat/push` 公开不依赖 Node 的 Zod 契约。浏览器继续提交 endpoint 和 keys；iOS 提交 `transport: "apns"`、十六进制 token、`sandbox | production` 环境和本次登记的随机 `binding`。两者共用收件规则和每条消息的持久队列。订阅的自然键是浏览器 endpoint 或 APNs 环境与 token。换账号或换原生 binding 时删除旧订阅再新增，旧队列随之删除，迟到的投递回答不能影响新订阅。原生取消订阅同时匹配账号和 binding，旧的取消请求不能撤销新登记。退出之后才到达的登记请求由 Web 外壳以 401 拒绝（4.7 路由），聊天 app 不另记取消。推送内容增加接收账号 ID，仍然不含消息正文。
+**原生传输。** 订阅和原生通知数据的 Zod 契约在 `@mate/chat/contracts`（4.8）。浏览器继续提交 endpoint 和 keys；iOS 提交 `transport: "apns"`、十六进制 token、`sandbox | production` 环境和本次登记的随机 `binding`。两者共用收件规则和每条消息的持久队列。订阅的自然键是浏览器 endpoint 或 APNs 环境与 token。换账号或换原生 binding 时删除旧订阅再新增，旧队列随之删除，迟到的投递回答不能影响新订阅。原生取消订阅同时匹配账号和 binding，旧的取消请求不能撤销新登记。退出之后才到达的登记请求由 Web 外壳以 401 拒绝（4.7 路由），聊天 app 不另记取消。推送内容增加接收账号 ID，仍然不含消息正文。
 
 聊天库第 5 版把 Web Push 的 endpoint 和 keys 迁为 `subscription_key` 与 `subscription_json`，保留订阅 ID、账号、AUTOINCREMENT 计数和推送队列。升级验证继续使用已发布版本的存储夹具。
 
@@ -569,13 +569,13 @@ interface Admin {
 
 离线取消不保证服务器停止发送，也不能收回已由 APNs 接受的通知。此时保留 cleanup 记录，在同一账号再次验证时重试；本机立即禁止旧通知导航并尝试向系统取消注册。重新注册后，旧服务器仍可能送来通用提示，所以界面明确说明取消未确认。真实 APNs 投递需要 Apple 凭据和具备推送能力的签名；simctl 注入只验证原生接收和点击，不证明远程投递。
 
-`@mate/auth` 只拥有实际共享的认证契约 `Role`、`HumanView`、`LoginInput` 和 `LoginResult`。控制面、网页和移动端从同一处消费这些类型，移动端在网络边界用 schema 解析响应；控制面的 cookie、Origin 和路由行为保持不变。
+Web 外壳的登录与人类契约 `Role`、`HumanView`、`LoginInput` 和 `LoginResult` 在控制面的 `@mate/control-plane/contracts`，这个入口只依赖 Zod 和 `@mate/chat/contracts`，不带 Node。控制面、网页和移动端从同一处消费这些类型，移动端在网络边界用 schema 解析响应。
 
 原生聊天由一个登录身份所属的 `MobileChat` 实例持有数据、草稿和未完成发送。频道与讨论串各有草稿；导航、短暂断线和前台重验保留实例，退出或换服务器立即关闭实例、取消请求并清空数据。草稿只在本次登录的内存中保存，不跨 app 重启。发送使用 Expo Crypto 生成请求 ID，响应丢失后的重试沿用同一个 ID；成功后只移除发送覆盖的文字。频道创建、成员操作和任务操作的未确认输入与请求 ID 同样由登录会话持有，关闭并重开界面不会丢失；确认完成或收到明确拒绝后清除。未确认期间先重试原操作，避免用另一份输入产生重复创建。
 
 聊天复用现有 HTTP 路由和 SSE 协议。快照先建立游标，再加载时间线；快照就绪后历史、定位和发送即可使用，不等待原生事件流的首个数据块，实时连接仍单独显示连接中状态；历史加载期间收到的实时条目按序号合并。SSE 通过 `expo/fetch` 流式读取，帧解析使用不依赖平台的 `eventsource-parser`，凭据来自与认证相同的 Foundation cookie 存储；断线带最后一个已应用游标重连，40 秒没有数据或心跳时重新连接。`resnapshot` 重新拉取服务端数据并保留草稿。回到前台先验证登录，等旧流关闭后恢复事件流；后台不推进已读位置。历史读取失败会停止，只有显式重试才重新请求；同一时间线的读取共用进行中的请求。在当前可见时间线底部阅读时，客户端使用现有 `read` 操作推进已读位置，失败提供重试。
 
-`@mate/chat/contracts` 是不依赖 SQLite 或 Node 的公开契约入口。账号、会话、条目、未读、读取、发送、任务和实时数据形状只在这里定义；后端继续消费同一份定义，原生端在网络边界解析它们。`@mate/clock` 同时提供原生入口，聊天重连和超时共用已有时钟接口。
+`@mate/chat/contracts` 是不依赖 SQLite 或 Node 的公开契约入口。账号、会话、条目、未读、读取、发送、任务、实时数据和推送订阅形状只在这里定义；聊天 app 内部也从这里导入，不经各模块转发；后端继续消费同一份定义，原生端在网络边界解析它们。`@mate/clock` 同时提供原生入口，聊天重连和超时共用已有时钟接口。
 
 原生导航使用 Expo Router，消息虚拟列表使用 React Native `FlatList`，键盘避让使用 `KeyboardAvoidingView` 和导航栏实际高度。连接状态放在可滚动的消息列表中，不占用输入区上方的固定高度。Markdown 由 `react-native-enriched-markdown` 渲染为原生文本，支持选择、代码块、表格、链接与 Dynamic Type；关闭数学、视频和语法高亮附加模块，不增加编辑或附件上传协议。`/conversation` 接受正整数 `id`（会话 ID）、可选 `thread`（根消息 ID）和 `seq`（目标时间线内序号）。没有 `thread` 时定位频道或私信，存在时定位讨论串；通过现有历史分页加载目标并滚动到可见位置，定位开始就保留回到最新消息按钮的空间，等目标条目和列表视口完成实际测量后再确认定位，长消息从开头显示，定位完成后保留当前可见位置以接收实时任务变化。加载或定位失败可重试，不可用目标明确提示，离开页面或切换身份取消未完成定位。搜索结果缺少会话位置、历史消息缺少完整回复数、任务没有独立列表接口的限制与网页相同。
 登录后进入聊天 Tab。管理员使用聊天、Agent、设置三个原生 Tab，普通人类使用聊天和设置。各 Tab 有独立 Stack。Agent Tab 的实际路径是 `/agents`；旧 `/admin/agents`、创建和详情 URL 在有角色保护的管理 Stack 中保留兼容入口，管理员重定向到 Agent Tab，普通人类显示权限说明。原生外部 `/agents/**` 链接先通过 `+native-intent` 进入既有 `/admin/agents?target=` 角色保护入口，管理员再转到 `target` 指定的 `/agents` 路径，普通人类停在权限说明。这样隐藏 Agent Tab 时不会由 NativeTabs 静默回退聊天；不增加旧管理子路由树。三个既有兼容入口共用 `AgentRedirect`，跨 Tab 转发前先在设置 Stack 内退回已有 `/account`，下一原生帧再切换到 Agent，让原生设置栈先提交移除兼容入口的变化，避免再次选择设置时停在空白入口或重复转发。`/chat`、`/conversation`、`/profile` 等旧 URL 不变。设置提供个人资料、通知、账号与连接和管理员的管理 Mate 入口。Agent 详情的「发消息」使用同一登录下的聊天操作打开该 Agent 聊天账号的私信，再进入 `/conversation?id=`，不直接发送消息。来自 Agent 总览时额外传 `sourceAgent=<Agent UUID>`，会话的原生返回按钮先移除这次聊天详情，再用 `navigate` 回到 `/agents/[id]`，禁用跨 Tab 的侧滑返回；普通聊天与讨论串保留默认返回行为。新 Agent 子路由统一放在 `/agents/**`，不扩充旧管理路径的兼容路由树。根 Stack 上方保留登录所属的聊天 provider 和 `AgentCreationProvider`。
@@ -592,7 +592,7 @@ Agent 总览只显示身份、状态和运行环境，提供一个私信入口�
 
 `ManagementScope` 位于全部已登录 Tab 之上，每次登录只有一个 `ManagementClient` 与 QueryClient，切换 Tab 不创建另一份客户端或缓存。共享 `PresentationAccess` 与当前页面焦点一起控制原生 modal。React Native 在隐藏 modal 后会卸载它的子树，所以短表单、邀请和任务转交的展示草稿由 modal 外的页面持有；这些是本次页面的展示状态；聊天的未确认请求和 UUID 仍只归 `MobileChat`。`ManagementClient` 只给当前服务器和人类的这次登录发 cookie 请求。前台重验时中止旧请求、隐藏并禁止访问管理界面，选择器和危险操作确认页也随访问状态隐藏并禁止交互，但保持当前导航、表单草稿、选择器搜索条件和查询缓存挂载在内存中；连接故障时继续暂停访问，重试验证相同服务器、账号和角色后恢复原页面，重新读取数据和连接观察流。登录结束、401 确认失效、服务器、账号或角色改变则关闭这次登录的界面与缓存。已取消请求的迟到响应即使在恢复后也不能交付，不持久化管理数据或草稿。HTTP 401 和 SSE 的 `login` 事件要求认证模块重新验证。资料保存响应经 `HumanView` schema 解析，`MobileAuth.updateHuman(previous, human)` 只更新提交它的同一次登录，不重新清理 cookie；密码修改继续使用服务端保留当前会话的规则。
 
-请求状态用与网页同版本的 TanStack Query，SSE 分帧用 `eventsource-parser`，长表单的键盘滚动用 Expo 58 对应的 Keyboard Controller。对话记录和模型选项用 React Native `FlatList`；其余小表单用原生输入框、按钮和确认框，不生成表单 schema 或引入整体 UI 框架。管理数据的类型从 `@mate/admin` 推导，个人身份从 `@mate/auth` 取得，不复制服务端协议。
+请求状态用与网页同版本的 TanStack Query，SSE 分帧用 `eventsource-parser`，长表单的键盘滚动用 Expo 58 对应的 Keyboard Controller。对话记录和模型选项用 React Native `FlatList`；其余小表单用原生输入框、按钮和确认框，不生成表单 schema 或引入整体 UI 框架。管理数据的类型从 `@mate/admin` 推导，个人身份从 `@mate/control-plane/contracts` 取得，不复制服务端协议。
 
 当前不做折叠屏 iPhone Duo 的专用适配，不增加折叠状态处理或专用布局。
 

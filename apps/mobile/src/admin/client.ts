@@ -1,6 +1,6 @@
 import { t } from "../i18n";
 import type { Admin, AgentEvent, AgentView } from "@mate/admin";
-import { HumanView } from "@mate/auth";
+import { HumanView } from "@mate/control-plane/contracts";
 import { z } from "zod";
 import { createParser } from "eventsource-parser";
 import type { AuthState, MobileAuth } from "../auth";

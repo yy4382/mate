@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatApp } from "@mate/chat";
-import { ApnsSubscription } from "@mate/chat/push";
+import { ApnsSubscription } from "@mate/chat/contracts";
 import { describe, expect, it, onTestFinished } from "vitest";
 import {
   MobileNotifications,

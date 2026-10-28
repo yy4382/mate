@@ -1,6 +1,6 @@
 import apn from "@parse/node-apn";
 import type { PushSender } from "@mate/chat";
-import { ApnsEnvironment, NativePushNotice, PushOrigin } from "@mate/chat/push";
+import { ApnsEnvironment, NativePushNotice, PushOrigin } from "@mate/chat/contracts";
 import { z } from "zod";
 
 export const ApnsConfig = z.object({

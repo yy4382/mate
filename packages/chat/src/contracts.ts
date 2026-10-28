@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { Id } from "./identifiers.ts";
 
+export { Id };
+
 /** A human reads every conversation and has the live view and push; an Agent reads what it is let into. */
 export const AccountKind = z.enum(["human", "agent"]);
 export type AccountKind = z.output<typeof AccountKind>;
@@ -157,6 +159,11 @@ export const TaskResult = z.discriminatedUnion("status", [
 ]);
 export type TaskResult = z.output<typeof TaskResult>;
 
+/**
+ * Everything a human's client renders, as of one moment, and the cursor of that moment. `me` is the viewer's account.
+ * `page` is the newest page of the timeline the client opened (newest first, as `readHistory` returns it) with the
+ * viewer's read position there.
+ */
 export const LiveSnapshot = z.object({
   cursor: z.string(),
   me: Id,
@@ -168,6 +175,12 @@ export const LiveSnapshot = z.object({
     .nullable(),
 });
 export type LiveSnapshot = z.output<typeof LiveSnapshot>;
+
+/**
+ * One change to what a human's client shows. An entry is immutable, so its event carries it in full; the other
+ * kinds carry their subject's current state, so applying a stale or repeated one converges on the same view.
+ * `cursor` is the position just after this event.
+ */
 export const LiveEvent = z.discriminatedUnion("type", [
   z.object({
     cursor: z.string(),
@@ -187,6 +200,13 @@ export const LiveEvent = z.discriminatedUnion("type", [
   }),
 ]);
 export type LiveEvent = z.output<typeof LiveEvent>;
+
+/**
+ * Events after a cursor, with the viewer's unread summary as of the same read, so a client replaces its unread counts
+ * instead of working out which timelines the viewer follows. `resnapshot` when the cursor does not name a position the
+ * log still holds. `cursor` is where the read got to, past every event that is not for this viewer, so a viewer who is
+ * rarely addressed still moves forward; asking again from it returns what came after.
+ */
 export const LiveEvents = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("events"),
@@ -197,3 +217,66 @@ export const LiveEvents = z.discriminatedUnion("status", [
   z.object({ status: z.literal("resnapshot") }),
 ]);
 export type LiveEvents = z.output<typeof LiveEvents>;
+
+const Base64Url = z
+  .string()
+  .max(512)
+  .regex(/^[A-Za-z0-9_-]+=*$/, "a key is base64url");
+
+/** A browser's Web Push subscription, in the shape `PushSubscription.toJSON()` gives it. Other fields are ignored. */
+export const WebPushSubscription = z.object({
+  transport: z.undefined().optional(),
+  endpoint: z.url({ protocol: /^https$/ }).max(2048),
+  keys: z.object({ p256dh: Base64Url, auth: Base64Url }),
+});
+export type WebPushSubscription = z.output<typeof WebPushSubscription>;
+
+export const ApnsEnvironment = z.enum(["sandbox", "production"]);
+
+/** An iOS app's APNs device token, the APNs environment it belongs to, and the enrollment's random binding. */
+export const ApnsSubscription = z.object({
+  transport: z.literal("apns"),
+  token: z
+    .string()
+    .max(512)
+    .regex(/^(?:[a-fA-F0-9]{2})+$/)
+    .transform((s) => s.toLowerCase()),
+  environment: ApnsEnvironment,
+  binding: z.uuid(),
+});
+export type ApnsSubscription = z.output<typeof ApnsSubscription>;
+
+export const PushSubscription = z.union([ApnsSubscription, WebPushSubscription]);
+export type PushSubscription = z.output<typeof PushSubscription>;
+
+/** What names a subscription to remove: a browser's endpoint, or a native token with its binding. */
+export const PushAddress = z.union([
+  ApnsSubscription,
+  z.object({ transport: z.undefined().optional(), endpoint: z.string().min(1).max(2048) }),
+]);
+export type PushAddress = z.output<typeof PushAddress>;
+
+export const PushOrigin = z.url({ protocol: /^https$/ }).refine((value) => {
+  const url = new URL(value);
+  return url.origin === value && !url.username && !url.password;
+}, "an HTTPS origin without a trailing slash");
+
+/** The data a native push carries: an allowlisted destination, never a URL supplied by a notification. */
+export const NativePushNotice = z.object({
+  version: z.literal(1),
+  server: PushOrigin,
+  accountId: Id,
+  binding: z.uuid(),
+  conversationId: Id,
+  threadId: Id.nullable(),
+  seq: Id,
+  tag: z.string().min(1).max(64),
+  at: z.number().int().nonnegative(),
+});
+export type NativePushNotice = z.output<typeof NativePushNotice>;
+
+/** Whether this server sends native pushes, and if so to which APNs environment, under which origin. */
+export const NativePushCapability = z.discriminatedUnion("enabled", [
+  z.object({ enabled: z.literal(false) }),
+  z.object({ enabled: z.literal(true), environment: ApnsEnvironment, server: PushOrigin }),
+]);

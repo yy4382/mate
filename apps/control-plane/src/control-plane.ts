@@ -5,7 +5,7 @@ import { openAdmin } from "@mate/admin";
 import { ChatApp, type PushSender } from "@mate/chat";
 import { systemClock, type Clock } from "@mate/clock";
 import { createNodeGateway } from "@mate/gateway";
-import { LoginInput, type LoginResult } from "@mate/auth";
+import { LoginInput, type LoginResult } from "./contracts.ts";
 import { EventStream } from "./event-stream.ts";
 import { Frontend } from "./frontend.ts";
 import { humanRoutes } from "./human-routes.ts";
