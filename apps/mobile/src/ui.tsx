@@ -1,5 +1,12 @@
 import { t } from "./i18n";
-import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  type ComponentRef,
+  type ReactNode,
+  type Ref,
+} from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -313,7 +320,12 @@ export function Field({
   hint,
   error,
   ...props
-}: TextInputProps & { label?: string; hint?: string; error?: string }) {
+}: TextInputProps & {
+  label?: string;
+  hint?: string;
+  error?: string;
+  ref?: Ref<ComponentRef<typeof TextInput>>;
+}) {
   const c = useTheme();
   const dark = useColorScheme() === "dark";
   return (

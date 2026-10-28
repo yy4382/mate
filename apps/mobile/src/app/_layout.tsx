@@ -4,8 +4,6 @@ import { AgentCreationProvider } from "../admin/creation";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
 import { useColorScheme } from "react-native";
 import { StatusBar } from "expo-status-bar";
-import { AuthLifecycle } from "../lifecycle";
-import { NotificationIntegration } from "../notifications-root";
 import { useTheme } from "../theme";
 
 export default function RootLayout() {
@@ -29,8 +27,6 @@ export default function RootLayout() {
     >
       <Session>
         <AgentCreationProvider>
-          <AuthLifecycle />
-          <NotificationIntegration />
           <StatusBar style="auto" />
           <Stack
             screenOptions={{

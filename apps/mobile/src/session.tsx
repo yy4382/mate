@@ -8,48 +8,42 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { AppState, Keyboard } from "react-native";
+import { AppState } from "react-native";
+import { focusManager } from "@tanstack/react-query";
 import { auth } from "./auth-native";
 import { MobileChat } from "./chat";
+import { startMobileLifecycle } from "./lifecycle";
+import { listenToNotifications, notifications } from "./notifications-native";
 
 const ChatContext = createContext<MobileChat | null>(null);
+/** Root provider: starts the app lifecycle and exposes the signed-in identity's chat. */
 export function Session({ children }: { children: ReactNode }) {
   const [chat, setChat] = useState<MobileChat | null>(null);
   useEffect(() => {
-    let current: MobileChat | null = null;
-    let identity = "";
-    const sync = () => {
-      const state = auth.getSnapshot();
-      if (state.kind === "signed-in") {
-        const next = `${state.server}/${state.human.accountId}`;
-        if (next !== identity) {
-          current?.close();
-          current = new MobileChat(state.server, {
+    const stopNotifications = listenToNotifications();
+    const stopLifecycle = startMobileLifecycle({
+      auth,
+      notifications,
+      platform: {
+        appState: AppState.currentState,
+        subscribe: (listener) => {
+          const subscription = AppState.addEventListener("change", listener);
+          return () => subscription.remove();
+        },
+        focus: (foreground) => focusManager.setFocused(foreground),
+        openChat: (server) =>
+          new MobileChat(server, {
             fetch: (...args) => fetch(...args),
             stream: (...args) => streamFetch(...args),
             requestId: () => randomUUID(),
             expired: () => void auth.revalidate(),
-          });
-          identity = next;
-          setChat(current);
-        }
-        if (AppState.currentState !== "background") void current?.resume();
-        else current?.pause();
-      } else if (state.kind === "checking" || state.kind === "unavailable") {
-        Keyboard.dismiss();
-        current?.pause();
-      } else {
-        current?.close();
-        current = null;
-        identity = "";
-        setChat(null);
-      }
-    };
-    const unsubscribe = auth.subscribe(sync);
-    sync();
+          }),
+        showChat: (chat) => setChat(chat),
+      },
+    });
     return () => {
-      unsubscribe();
-      current?.close();
+      stopLifecycle();
+      stopNotifications();
     };
   }, []);
   return <ChatContext.Provider value={chat}>{children}</ChatContext.Provider>;

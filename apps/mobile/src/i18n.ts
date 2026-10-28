@@ -75,6 +75,3 @@ export const thinkingText = (value: string): string => {
   const key = thinkingKeys[value];
   return key ? t(key) : value;
 };
-
-export const noticeText = (...messages: readonly string[]): string =>
-  messages.filter(Boolean).join("\n\n");

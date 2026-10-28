@@ -376,5 +376,3 @@ app config 的输入 `MATE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`。它同时
 关闭通知、退出、换服务器和登录失效会尝试取消服务器登记，再清 cookie，并向 iOS 取消本机注册、清除已展示通知。离线时无法保证旧服务器立即停止或撤回已交给 APNs 的通知；界面说明取消未确认。聊天存储迁移 6 新增原生取消记录，不改动已有订阅或投递队列。已确认取消的账号/token/环境/binding 不可复用，迟到订阅回 400；重新开启和 token 轮换使用新 binding。未确认的旧 token 取消记录独立于当前登记保存，token 轮换和新登记不会覆盖它们；下次同一服务器和账号恢复验证、刷新或退出时重试，只有服务端确认后才删除。重新允许注册之后仍可能收到旧服务器的通用提示；旧数据不会打开当前其他账号或服务器的会话。
 
 实际远程投递仍需操作者确认付费 Apple Developer 资格，提供 APNs 凭据，并生成具有 Push Notifications capability 的签名 app。本任务不创建或修改 Apple Developer、EAS 账号或资源，不接触真实 key 内容，不向真实账号发送测试通知。普通 iOS 27 模拟器的正常构建、系统权限界面和 `simctl push` 注入可验证本机行为；模拟注入不是 APNs 或真机投递证明。没有凭据和签名之前，真实 APNs 投递保持未验证。
-
-合入聊天任务时保留根层的 `NotificationIntegration`，并在账号或资料入口链接 `/notifications`。点击目标是 `/conversation`，参数为 `id`、可选 `thread` 和 `seq`；聊天任务的已登录路由组持有该页面，通知任务不创建另一套聊天导航。需在整体 mobile 合入后验证最终页面与序号定位。

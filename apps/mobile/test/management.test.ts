@@ -22,6 +22,7 @@ async function connected() {
     clearCookies: async () => {
       cookiesCleared++;
     },
+    beforeClear: async () => {},
     fetch: async (url, init) => remote(url, init),
   };
   const auth = new MobileAuth(platform);

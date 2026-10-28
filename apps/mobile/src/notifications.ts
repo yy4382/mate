@@ -1,4 +1,3 @@
-import { t, noticeText } from "./i18n";
 import { ApnsSubscription, NativePushCapability, NativePushNotice } from "@mate/chat/push";
 import { z } from "zod";
 
@@ -18,7 +17,6 @@ const Registrations = z.object({
 type Registrations = z.output<typeof Registrations>;
 export type NotificationState = {
   kind: "signed-out" | "checking" | "disabled" | "enabled" | "denied" | "unavailable";
-  message: string;
   permission: NotificationPermission | "unknown";
   server: "unknown" | "available" | "unconfigured" | "mismatch";
   registration: "none" | "unconfirmed" | "registered";
@@ -31,7 +29,7 @@ const uncheckedFacts = {
   registration: "none",
   pendingCancellations: 0,
   localCleanup: "unknown",
-} satisfies Omit<NotificationState, "kind" | "message">;
+} satisfies Omit<NotificationState, "kind">;
 export type NotificationsPlatform = {
   read(): unknown;
   write(value: Registrations | null): void;
@@ -61,11 +59,7 @@ function sameRegistration(a: Registration, b: Registration): boolean {
 
 /** Owns the active registration and every unconfirmed cancellation across auth transitions. */
 export class MobileNotifications {
-  private state: NotificationState = {
-    kind: "signed-out",
-    message: t("settings.sign_in_first"),
-    ...uncheckedFacts,
-  };
+  private state: NotificationState = { kind: "signed-out", ...uncheckedFacts };
   private listeners = new Set<() => void>();
   private session: NotificationSession | null = null;
   private verified: NotificationSession | null = null;
@@ -91,17 +85,13 @@ export class MobileNotifications {
 
   private publish(
     kind: NotificationState["kind"],
-    message: string,
-    facts: Partial<
-      Omit<NotificationState, "kind" | "message" | "registration" | "pendingCancellations">
-    > = {},
+    facts: Partial<Omit<NotificationState, "kind" | "registration" | "pendingCancellations">> = {},
   ) {
     const registration = this.registrations.current;
     this.state = {
       ...this.state,
       ...facts,
       kind,
-      message,
       registration:
         registration && same(this.session, registration)
           ? kind === "enabled"
@@ -120,22 +110,15 @@ export class MobileNotifications {
 
   /** null suspends presentation/taps during auth validation without forgetting the registration. */
   setSession(session: NotificationSession | null): Promise<void> {
-    if (!same(this.session, session)) {
-      ++this.generation;
-      this.request?.abort();
-      this.session = session;
-      this.publish(
-        session ? "checking" : "signed-out",
-        session ? t("settings.checking_notifications") : t("settings.sign_in_first"),
-        uncheckedFacts,
-      );
-    }
-    if (session) {
-      this.verified = session;
-      this.consumeTap();
-      return this.refresh();
-    }
-    return Promise.resolve();
+    if (same(this.session, session)) return Promise.resolve();
+    ++this.generation;
+    this.request?.abort();
+    this.session = session;
+    this.publish(session ? "checking" : "signed-out", uncheckedFacts);
+    if (!session) return Promise.resolve();
+    this.verified = session;
+    this.consumeTap();
+    return this.refresh();
   }
 
   private run(operation: (session: NotificationSession, current: () => boolean) => Promise<void>) {
@@ -148,11 +131,7 @@ export class MobileNotifications {
       try {
         await operation(session, current);
       } catch {
-        if (current())
-          this.publish(
-            "unavailable",
-            t("settings.could_not_configure_notifications_check_your_network"),
-          );
+        if (current()) this.publish("unavailable");
       }
     });
     return this.pending;
@@ -179,63 +158,39 @@ export class MobileNotifications {
     }
   }
 
+  /** Publishes whether this server can push to this app; registration continues only when it can. */
+  private async checkCapability(session: NotificationSession, current: () => boolean) {
+    const capability = NativePushCapability.parse(await this.http(session, "native"));
+    if (!current()) return false;
+    const server = !capability.enabled
+      ? "unconfigured"
+      : capability.server !== session.server || capability.environment !== this.platform.environment
+        ? "mismatch"
+        : "available";
+    this.publish(server === "available" ? this.state.kind : "unavailable", { server });
+    return server === "available";
+  }
+
   refresh(): Promise<void> {
     return this.run(async (session, current) => {
-      this.publish("checking", t("settings.checking_notifications"));
+      this.publish("checking");
       const permission = await this.platform.permission(false);
       if (!current()) return;
-      this.publish(this.state.kind, this.state.message, { permission });
+      this.publish(this.state.kind, { permission });
       if (permission === "denied") {
-        const message = await this.remove(session);
-        if (current())
-          this.publish(
-            "denied",
-            noticeText(t("settings.system_notifications_are_off_allow_notifications_in"), message),
-          );
+        await this.remove(session);
+        if (current()) this.publish("denied");
         return;
       }
-      const cleanupMessage = await this.retire(session);
-      if (!current()) return;
-      const capability = NativePushCapability.parse(await this.http(session, "native"));
-      if (!current()) return;
-      this.publish(this.state.kind, this.state.message, {
-        server: !capability.enabled
-          ? "unconfigured"
-          : capability.server !== session.server ||
-              capability.environment !== this.platform.environment
-            ? "mismatch"
-            : "available",
-      });
-      if (!capability.enabled) {
-        this.publish(
-          "unavailable",
-          noticeText(t("settings.this_server_has_not_configured_apple_push"), cleanupMessage),
-        );
-        return;
-      }
-      if (
-        capability.server !== session.server ||
-        capability.environment !== this.platform.environment
-      ) {
-        this.publish(
-          "unavailable",
-          noticeText(t("settings.the_servers_push_origin_or_environment_does"), cleanupMessage),
-        );
-        return;
-      }
+      await this.retire(session);
+      if (!current() || !(await this.checkCapability(session, current))) return;
       const registration = this.registrations.current;
-      if (!registration || !same(session, registration)) {
-        this.publish(
-          "disabled",
-          noticeText(t("settings.notifications_are_off_only_direct_messages_and"), cleanupMessage),
-        );
-        return;
-      }
-      if (permission !== "allowed" && permission !== "quiet") {
-        this.publish(
-          "disabled",
-          noticeText(t("settings.allow_system_notifications_before_enabling_them"), cleanupMessage),
-        );
+      if (
+        !registration ||
+        !same(session, registration) ||
+        (permission !== "allowed" && permission !== "quiet")
+      ) {
+        this.publish("disabled");
         return;
       }
       await this.register(session, current);
@@ -244,44 +199,16 @@ export class MobileNotifications {
 
   enable(): Promise<void> {
     return this.run(async (session, current) => {
-      this.publish("checking", t("settings.enabling_notifications"));
+      this.publish("checking");
       const permission = await this.platform.permission(true);
       if (!current()) return;
-      this.publish(this.state.kind, this.state.message, { permission });
+      this.publish(this.state.kind, { permission });
       if (permission === "denied" || permission === "undetermined") {
-        const message = await this.remove(session);
-        if (current())
-          this.publish(
-            "denied",
-            noticeText(
-              t("settings.notification_permission_was_not_granted_allow_notifications"),
-              message,
-            ),
-          );
+        await this.remove(session);
+        if (current()) this.publish("denied");
         return;
       }
-      const capability = NativePushCapability.parse(await this.http(session, "native"));
-      if (!current()) return;
-      this.publish(this.state.kind, this.state.message, {
-        server: !capability.enabled
-          ? "unconfigured"
-          : capability.server !== session.server ||
-              capability.environment !== this.platform.environment
-            ? "mismatch"
-            : "available",
-      });
-      if (!capability.enabled) {
-        this.publish("unavailable", t("settings.system_notifications_are_allowed_but_this_server"));
-        return;
-      }
-      if (
-        capability.server !== session.server ||
-        capability.environment !== this.platform.environment
-      ) {
-        this.publish("unavailable", t("settings.the_servers_push_origin_or_environment_does"));
-        return;
-      }
-      await this.register(session, current);
+      if (await this.checkCapability(session, current)) await this.register(session, current);
     });
   }
 
@@ -333,15 +260,11 @@ export class MobileNotifications {
     });
     await this.http(session, "subscribe", subscription);
     if (!current()) return;
-    const message = await this.retire(session);
-    if (!current()) return;
-    this.publish(
-      "enabled",
-      noticeText(t("settings.notifications_registered_with_the_server_only_direct"), message),
-    );
+    await this.retire(session);
+    if (current()) this.publish("enabled");
   }
 
-  private async retire(session: NotificationSession | null): Promise<string> {
+  private async retire(session: NotificationSession | null) {
     for (const registration of this.registrations.cleanup) {
       if (!session || !same(session, registration)) continue;
       try {
@@ -356,49 +279,42 @@ export class MobileNotifications {
         /* Keep the scoped cancellation until the server acknowledges it. */
       }
     }
-    return this.registrations.cleanup.length
-      ? t("settings.server_unsubscription_could_not_be_confirmed_the")
-      : "";
   }
 
-  private async remove(session: NotificationSession | null): Promise<string> {
+  private async remove(session: NotificationSession | null) {
     const registration = this.registrations.current;
     if (registration)
       this.save({ current: null, cleanup: [...this.registrations.cleanup, registration] });
-    let message = t("settings.notifications_are_off_on_this_device");
     try {
       await this.platform.unregister();
       await this.platform.dismiss();
-      this.publish(this.state.kind, this.state.message, { localCleanup: "complete" });
+      this.publish(this.state.kind, { localCleanup: "complete" });
     } catch {
-      this.publish(this.state.kind, this.state.message, { localCleanup: "unconfirmed" });
-      message = t("settings.local_notification_cleanup_is_unconfirmed_turn_off");
+      this.publish(this.state.kind, { localCleanup: "unconfirmed" });
     }
-    const cancellation = await this.retire(session);
-    this.publish(this.state.kind, this.state.message);
-    return noticeText(message, cancellation);
+    await this.retire(session);
+    this.publish(this.state.kind);
   }
 
   disable(): Promise<void> {
     return this.run(async (session, current) => {
-      this.publish("checking", t("settings.disabling_notifications"));
-      const message = await this.remove(session);
-      if (current()) this.publish("disabled", message);
+      this.publish("checking");
+      await this.remove(session);
+      if (current()) this.publish("disabled");
     });
   }
 
   /** Auth awaits this barrier before logout/server-switch cookie cleanup, even if registration was in flight. */
-  async endSession(): Promise<string> {
+  async endSession(): Promise<void> {
     ++this.generation;
     this.session = null;
     this.request?.abort();
     this.tap = undefined;
     this.opened.clear();
-    this.publish("signed-out", t("settings.sign_in_first"), uncheckedFacts);
+    this.publish("signed-out", uncheckedFacts);
     await this.pending;
-    const message = await this.remove(this.verified);
+    await this.remove(this.verified);
     this.verified = null;
-    return message;
   }
 
   private matching(data: unknown): NativePushNotice | null {
