@@ -53,9 +53,6 @@ export function Copy({
     </Text>
   );
 }
-export function Label({ children, muted = false }: { children: ReactNode; muted?: boolean }) {
-  return <Copy muted={muted}>{children}</Copy>;
-}
 export function Heading({ children }: { children: ReactNode }) {
   return <Copy title>{children}</Copy>;
 }
@@ -194,7 +191,6 @@ export function Row({
   selected,
   danger = false,
   disabled = false,
-  testID,
   accessibilityLabel,
 }: {
   title: string;
@@ -205,7 +201,6 @@ export function Row({
   selected?: boolean;
   danger?: boolean;
   disabled?: boolean;
-  testID?: string;
   accessibilityLabel?: string;
 }) {
   const c = useTheme();
@@ -262,7 +257,6 @@ export function Row({
   };
   return onPress ? (
     <Pressable
-      testID={testID}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled, ...(selected !== undefined ? { selected } : {}) }}

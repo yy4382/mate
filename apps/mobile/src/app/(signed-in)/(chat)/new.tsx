@@ -5,7 +5,7 @@ import { View } from "react-native";
 import { operationKey } from "../../../chat";
 import { AccountPicker } from "../../../chat-actions";
 import { useChat, useChatState } from "../../../session";
-import { Button, Card, ErrorLine, Field, Label, Row, Section, Sheet, styles } from "../../../ui";
+import { Button, Card, ErrorLine, Field, Row, Section, Sheet, styles, Copy } from "../../../ui";
 export default function NewConversation() {
   const chat = useChat();
   const state = useChatState();
@@ -62,7 +62,6 @@ export default function NewConversation() {
           <Card>
             <Field
               label={t("chat.channel_name")}
-              testID="channel-name"
               editable={!pending}
               value={name}
               onChangeText={setName}
@@ -101,7 +100,7 @@ export default function NewConversation() {
           disabled={!!pending}
         />
       )}
-      {pending && <Label>{t("chat.the_previous_operation_is_unconfirmed_retrying_uses")}</Label>}
+      {pending && <Copy>{t("chat.the_previous_operation_is_unconfirmed_retrying_uses")}</Copy>}
       <ErrorLine text={pending?.error || error} />
       <Button
         title={

@@ -35,7 +35,6 @@ export function ChatMessage({
   const author = accounts.find((a) => a.accountId === entry.author);
   return (
     <View
-      testID={isRoot ? "thread-root" : `entry-${entry.seq}`}
       style={{
         paddingHorizontal: 20,
         paddingVertical: 10,
@@ -68,7 +67,6 @@ export function ChatMessage({
         </Caption>
         {!isRoot && (
           <Pressable
-            testID={`message-actions-${entry.messageId}`}
             accessibilityRole="button"
             accessibilityLabel={t("chat.message_actions", {
               name: accountName(accounts, entry.author),
@@ -144,7 +142,6 @@ export function ChatMessage({
       ))}
       {!isRoot && knownReplies && (
         <Pressable
-          testID={`reply-${entry.messageId}`}
           accessibilityRole="button"
           accessibilityLabel={t("chat.reply_in_thread")}
           onPress={() => onThread(entry)}

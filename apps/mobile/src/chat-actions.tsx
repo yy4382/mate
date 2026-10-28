@@ -300,7 +300,6 @@ export function CreateTaskContent({
       <Card>
         <Field
           label={t("chat.task_title")}
-          testID="task-title"
           maxLength={200}
           editable={!action.operation}
           value={title}

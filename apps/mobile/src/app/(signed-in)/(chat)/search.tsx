@@ -39,7 +39,6 @@ export default function Search() {
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Field
-        testID="search-query"
         accessibilityLabel={t("chat.search_terms")}
         placeholder={t("chat.search_all_visible_conversations")}
         value={query}

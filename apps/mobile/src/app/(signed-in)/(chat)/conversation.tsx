@@ -20,7 +20,7 @@ import { setStringAsync } from "expo-clipboard";
 import { ChatComposer } from "../../../chat-composer";
 import { ChatMessage } from "../../../chat-message";
 import { useChat, useChatState } from "../../../session";
-import { Button, Caption, Empty, ErrorLine, Label, Row, Section, Sheet, styles } from "../../../ui";
+import { Button, Caption, Empty, ErrorLine, Row, Section, Sheet, styles, Copy } from "../../../ui";
 import { useTheme } from "../../../theme";
 
 type Message = Extract<Entry, { kind: "message" }>;
@@ -242,7 +242,6 @@ export default function ConversationScreen() {
               message(item)
             ) : (
               <Pressable
-                testID={`entry-${item.seq}`}
                 accessibilityRole="button"
                 accessibilityLabel={t("chat.view_named_task", { title: item.title })}
                 onPress={() =>
@@ -296,13 +295,13 @@ export default function ConversationScreen() {
           />
         ) : (
           <View style={styles.page}>
-            <Label>
+            <Copy>
               {conversation.archived
                 ? t("chat.this_channel_is_archived_and_can_only")
                 : conversation.kind === "dm"
                   ? t("chat.this_direct_message_can_only_be_read")
                   : t("chat.you_have_not_joined_this_conversation_join")}
-            </Label>
+            </Copy>
             {conversation.kind !== "dm" && !conversation.archived && (
               <Button
                 title={t("chat.join_channel")}
@@ -370,7 +369,6 @@ export default function ConversationScreen() {
               {canWrite && (
                 <Row
                   title={t("chat.make_a_task")}
-                  testID={`create-task-${messageMenu.messageId}`}
                   onPress={() => {
                     const saved = state.operations.get(
                       operationKey.taskCreation(messageMenu.messageId),
@@ -585,13 +583,13 @@ function TimelineList({
     <>
       {seq !== null && destination !== "done" && (
         <View style={{ padding: 12 }}>
-          <Label>
+          <Copy>
             {destination === "missing"
               ? t("chat.this_message_is_unavailable_or_not_in")
               : destination === "failed"
                 ? t("chat.could_not_locate_the_message_retry")
                 : t("chat.locating_message")}
-          </Label>
+          </Copy>
           {(destination === "failed" || destination === "missing") && (
             <Button
               title={t("chat.retry_locating_message")}
@@ -672,25 +670,25 @@ function TimelineList({
         }}
         ListEmptyComponent={
           <View style={styles.page}>
-            <Label>
+            <Copy>
               {timeline.loading
                 ? t("chat.loading")
                 : timeline.error
                   ? t("chat.could_not_load_messages")
                   : t("chat.no_messages_yet_say_something_below")}
-            </Label>
+            </Copy>
           </View>
         }
         ListHeaderComponent={
           state.connection !== "live" ? (
             <View style={{ padding: 12, backgroundColor: c.subtle }}>
-              <Label muted>
+              <Copy muted>
                 {state.connection === "loading"
                   ? t("chat.connecting")
                   : state.connection === "connecting"
                     ? t("chat.connecting_to_live_messages")
                     : t("chat.disconnected_reconnecting_automatically_your_draft_is_kept")}
-              </Label>
+              </Copy>
             </View>
           ) : undefined
         }
