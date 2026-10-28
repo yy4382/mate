@@ -1,18 +1,33 @@
-import { t } from "../i18n";
-import type { AgentEvent, SnapshotEvent } from "@mate/admin";
+/**
+ * Pure helpers both clients run on what the control plane serves: the observation reducer over an Agent's event stream,
+ * and the node pairing command. Node-free, so the web and native apps import it at runtime.
+ */
+import type { AgentEvent, SnapshotEvent } from "@mate/runtime";
 
 export type Entry = SnapshotEvent["entries"][number];
 type Block = Extract<NonNullable<Entry["model"]>[number], { role: "assistant" }>["content"][number];
-type Tool = { name: string; args: unknown; output: string; status: "pending" | "running" | "done" };
+type ObservedTool = {
+  name: string;
+  args: unknown;
+  output: string;
+  status: "pending" | "running" | "done";
+};
+/** Something worth telling the reader that is not an entry; each client words it. */
+export type ObservationNote =
+  | { kind: "request-retry"; error: string }
+  | { kind: "compacting" }
+  | { kind: "compaction-ended" }
+  | { kind: "model-retry"; attempt: number; error: string }
+  | { kind: "task-failed"; task: string; error: string };
 export type Observation = {
   entries: readonly Entry[];
   streaming: Record<number, Block>;
-  tools: Record<string, Tool>;
+  tools: Record<string, ObservedTool>;
   run: boolean;
   queued: number;
   usage: SnapshotEvent["usage"];
   agent: SnapshotEvent["agent"];
-  notes: string[];
+  notes: ObservationNote[];
   ended: boolean;
 };
 export const initialObservation: Observation = {
@@ -66,9 +81,9 @@ function apply(state: Observation, event: AgentEvent): Observation {
         ),
         notes: [
           ...(event.generation?.retry
-            ? [t("observation.request_retry", { error: event.generation.retry.error })]
+            ? [{ kind: "request-retry", error: event.generation.retry.error } as const]
             : []),
-          ...event.compactions.map(() => t("observation.compacting_context")),
+          ...event.compactions.map(() => ({ kind: "compacting" }) as const),
         ],
       };
     }
@@ -161,21 +176,18 @@ function apply(state: Observation, event: AgentEvent): Observation {
         ...state,
         notes: [
           ...state.notes,
-          t("observation.model_retry", { attempt: event.attempt, error: event.errorMessage }),
+          { kind: "model-retry", attempt: event.attempt, error: event.errorMessage },
         ],
       };
     case "task_failed":
       return {
         ...state,
-        notes: [
-          ...state.notes,
-          t("observation.operation_failed", { kind: event.kind, error: event.message }),
-        ],
+        notes: [...state.notes, { kind: "task-failed", task: event.kind, error: event.message }],
       };
     case "compaction_start":
-      return { ...state, notes: [...state.notes, t("observation.compacting_context")] };
+      return { ...state, notes: [...state.notes, { kind: "compacting" }] };
     case "compaction_end":
-      return { ...state, notes: [...state.notes, t("observation.context_compaction_ended")] };
+      return { ...state, notes: [...state.notes, { kind: "compaction-ended" }] };
     default:
       return state;
   }
@@ -183,3 +195,7 @@ function apply(state: Observation, event: AgentEvent): Observation {
 export function observeEvents(state: Observation, events: AgentEvent[] | "ended"): Observation {
   return events === "ended" ? { ...state, ended: true, run: false } : events.reduce(apply, state);
 }
+
+/** The command an operator runs on a node's machine to pair it with this control plane. */
+export const pairingCommand = (controlPlane: string, pairingToken: string) =>
+  `mate node configure --control-plane ${controlPlane} --pairing-token ${pairingToken}`;

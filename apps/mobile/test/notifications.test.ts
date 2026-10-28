@@ -53,7 +53,7 @@ function fixture() {
       return reply(
         path.endsWith("native")
           ? configured
-            ? { enabled: true, environment: "sandbox", server: new URL(path).origin }
+            ? { enabled: true, environment: "sandbox" }
             : { enabled: false }
           : {},
       );
@@ -66,7 +66,6 @@ function fixture() {
   const app = new MobileNotifications(platform);
   const notice = (overrides: object = {}) => ({
     version: 1,
-    ...session,
     binding: saved?.current?.subscription.binding,
     conversationId: 11,
     threadId: null,
@@ -423,8 +422,6 @@ describe("native notification lifecycle public interface", () => {
     await f.app.enable();
     for (const invalid of [
       { url: "https://evil.example/" },
-      f.notice({ server: "https://other.example" }),
-      f.notice({ accountId: 8 }),
       f.notice({ binding: randomUUID() }),
       f.notice({ at: now - 86_400_001 }),
       f.notice({ conversationId: "https://evil.example" }),

@@ -1,4 +1,4 @@
-import { t } from "./i18n";
+import { roleText, t } from "./i18n";
 import { useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
 import {
   ActivityIndicator,
@@ -87,7 +87,7 @@ function ServerForm({
       {initial ? (
         <ConfirmButton
           title={t("auth.save_server")}
-          question={t("auth.switch_server_2")}
+          question={t("auth.switch_server_question")}
           message={t("auth.you_will_be_signed_out_and_this")}
           confirmLabel={t("auth.switch_and_sign_out")}
           disabled={busy || !address.trim()}
@@ -233,7 +233,7 @@ export function HomeScreen({ account = false }: { account?: boolean }) {
                   <Section>
                     <Row
                       title={state.human.displayName}
-                      subtitle={`@${state.human.handle} · ${state.human.role === "admin" ? t("settings.administrator") : t("settings.human_member")}`}
+                      subtitle={`@${state.human.handle} · ${roleText(state.human.role)}`}
                       leading={<Avatar name={state.human.displayName} />}
                     />
                   </Section>

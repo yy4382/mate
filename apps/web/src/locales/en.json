@@ -334,7 +334,10 @@
     "retry_one": "Model request failed. Retry {{count, number}}: {{message}}",
     "retry_other": "Model request failed. Retry {{count, number}}: {{message}}",
     "thinking": "(Thinking) {{text}}",
-    "toolCall": "Call {{name}} {{arguments}}"
+    "toolCall": "Call {{name}} {{arguments}}",
+    "requestRetry": "Model request is being retried: {{message}}",
+    "compacting": "Compacting context…",
+    "compactionEnded": "Context compaction ended."
   },
   "thinking": {
     "off": "Off",

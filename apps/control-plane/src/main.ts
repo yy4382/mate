@@ -16,7 +16,6 @@ const Environment = z.object({
   MATE_APNS_TEAM_ID: z.string().min(1).optional(),
   MATE_APNS_TOPIC: z.string().min(1).optional(),
   MATE_APNS_ENVIRONMENT: z.enum(["sandbox", "production"]).optional(),
-  MATE_PUBLIC_ORIGIN: z.string().min(1).optional(),
   MATE_VAPID_SUBJECT: z
     .string()
     .regex(/^(mailto|https):/, "a mailto: or https: URL")
@@ -36,7 +35,6 @@ const apnsInput = {
   teamId: env.MATE_APNS_TEAM_ID,
   topic: env.MATE_APNS_TOPIC,
   environment: env.MATE_APNS_ENVIRONMENT,
-  server: env.MATE_PUBLIC_ORIGIN,
 };
 const apns = Object.values(apnsInput).some((value) => value !== undefined)
   ? ApnsConfig.safeParse(apnsInput)
@@ -44,7 +42,7 @@ const apns = Object.values(apnsInput).some((value) => value !== undefined)
 if (apns && !apns.success) {
   // Do not include environment values, paths or key contents in a configuration error.
   console.error(
-    "mate control plane: APNs requires MATE_APNS_KEY_FILE, MATE_APNS_KEY_ID, MATE_APNS_TEAM_ID, MATE_APNS_TOPIC, MATE_APNS_ENVIRONMENT and an HTTPS MATE_PUBLIC_ORIGIN",
+    "mate control plane: APNs requires MATE_APNS_KEY_FILE, MATE_APNS_KEY_ID, MATE_APNS_TEAM_ID, MATE_APNS_TOPIC and MATE_APNS_ENVIRONMENT",
   );
   process.exit(2);
 }

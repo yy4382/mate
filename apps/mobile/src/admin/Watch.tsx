@@ -8,8 +8,9 @@ import {
   toolCalls,
   type Entry,
   type Observation,
+  type ObservationNote,
   type ToolCall,
-} from "./observation";
+} from "@mate/admin/client";
 import { useClient, useManagementAccess, useResource } from "./session";
 import { useTheme } from "../theme";
 import { Button, Caption, Copy, Empty, Row, Section, Select, Sheet, styles } from "../ui";
@@ -17,6 +18,21 @@ import { Usage } from "./Usage";
 import { ErrorLine } from "./ui";
 
 type Message = NonNullable<Entry["model"]>[number];
+
+function noteText(note: ObservationNote): string {
+  switch (note.kind) {
+    case "request-retry":
+      return t("observation.request_retry", { error: note.error });
+    case "compacting":
+      return t("observation.compacting_context");
+    case "compaction-ended":
+      return t("observation.context_compaction_ended");
+    case "model-retry":
+      return t("observation.model_retry", { attempt: note.attempt, error: note.error });
+    case "task-failed":
+      return t("observation.operation_failed", { kind: note.task, error: note.error });
+  }
+}
 type ToolResult = { message: Extract<Message, { role: "toolResult" }>; entryId: number };
 /** Lookups over one observation's entries, built once per change instead of per row. */
 type Records = {
@@ -319,7 +335,7 @@ function ReadingBody({
           <Section title={t("observation.diagnostic_records")}>
             {state.notes.map((note, index) => (
               <View key={index} style={{ padding: 16 }}>
-                <Copy>{note}</Copy>
+                <Copy>{noteText(note)}</Copy>
               </View>
             ))}
           </Section>
@@ -617,7 +633,7 @@ function ObservationTarget({
               <View key={index} style={{ gap: 8 }}>
                 <Caption>
                   {block.type === "thinking"
-                    ? t("observation.thinking_2")
+                    ? t("observation.thinking_in_progress")
                     : block.type === "toolCall"
                       ? t("observation.preparing_tool_call")
                       : t("observation.writing")}

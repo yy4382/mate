@@ -256,16 +256,12 @@ export const PushAddress = z.union([
 ]);
 export type PushAddress = z.output<typeof PushAddress>;
 
-export const PushOrigin = z.url({ protocol: /^https$/ }).refine((value) => {
-  const url = new URL(value);
-  return url.origin === value && !url.username && !url.password;
-}, "an HTTPS origin without a trailing slash");
-
-/** The data a native push carries: an allowlisted destination, never a URL supplied by a notification. */
+/**
+ * The data a native push carries: an allowlisted destination, never a URL supplied by a notification. `binding` names
+ * the one registration it was sent to, which the app recorded with its server and account.
+ */
 export const NativePushNotice = z.object({
   version: z.literal(1),
-  server: PushOrigin,
-  accountId: Id,
   binding: z.uuid(),
   conversationId: Id,
   threadId: Id.nullable(),
@@ -275,8 +271,8 @@ export const NativePushNotice = z.object({
 });
 export type NativePushNotice = z.output<typeof NativePushNotice>;
 
-/** Whether this server sends native pushes, and if so to which APNs environment, under which origin. */
+/** Whether this server sends native pushes, and if so to which APNs environment. */
 export const NativePushCapability = z.discriminatedUnion("enabled", [
   z.object({ enabled: z.literal(false) }),
-  z.object({ enabled: z.literal(true), environment: ApnsEnvironment, server: PushOrigin }),
+  z.object({ enabled: z.literal(true), environment: ApnsEnvironment }),
 ]);

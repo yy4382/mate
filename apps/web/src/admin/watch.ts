@@ -1,103 +1,20 @@
 import { t } from "../i18n.ts";
-import type { AgentEvent } from "@mate/admin";
-
-type Entry = Extract<AgentEvent, { type: "snapshot" }>["entries"][number];
-
-export type ToolRun = { name: string; args: string; output: string; done: boolean };
-
-/** What an admin sees of an Agent's conversation, built from the event batches the control plane streams. */
-export type Watching = {
-  entries: Entry[];
-  /** The assistant message being written, by content index. */
-  streaming: Record<number, string>;
-  tools: Record<string, ToolRun>;
-  notes: string[];
-  ended: boolean;
-};
-
-export const initial: Watching = { entries: [], streaming: {}, tools: {}, notes: [], ended: false };
-
-const withEntry = (entries: Entry[], entry: Entry | undefined): Entry[] =>
-  entry === undefined || entries.some((e) => e.id === entry.id) ? entries : [...entries, entry];
-
-function apply(state: Watching, event: AgentEvent): Watching {
-  switch (event.type) {
-    case "snapshot":
-      return { ...state, entries: [...event.entries], streaming: {}, tools: {} };
-    case "message_update": {
-      const streaming = { ...state.streaming };
-      for (const change of event.changes) {
-        if (change.type === "text_start" || change.type === "thinking_start")
-          streaming[change.contentIndex] = "";
-        else if (change.type === "text_delta" || change.type === "thinking_delta")
-          streaming[change.contentIndex] = (streaming[change.contentIndex] ?? "") + change.delta;
-      }
-      return { ...state, streaming };
-    }
-    case "message_end":
-      return { ...state, entries: withEntry(state.entries, event.entry), streaming: {} };
-    case "entry_appended":
-      return { ...state, entries: withEntry(state.entries, event.entry) };
-    case "tool_execution_start":
-      return {
-        ...state,
-        tools: {
-          ...state.tools,
-          [event.toolCallId]: {
-            name: event.toolName,
-            args: JSON.stringify(event.args),
-            output: "",
-            done: false,
-          },
-        },
-      };
-    case "tool_execution_update": {
-      const run = state.tools[event.toolCallId];
-      if (run === undefined || event.output === undefined) return state;
-      const output =
-        "set" in event.output
-          ? event.output.set
-          : run.output.slice(event.output.trimStart ?? 0) + (event.output.append ?? "");
-      return { ...state, tools: { ...state.tools, [event.toolCallId]: { ...run, output } } };
-    }
-    case "tool_execution_end": {
-      const run = state.tools[event.toolCallId];
-      return {
-        ...state,
-        entries: withEntry(state.entries, event.entry),
-        tools:
-          run === undefined
-            ? state.tools
-            : { ...state.tools, [event.toolCallId]: { ...run, done: true } },
-      };
-    }
-    case "task_failed":
-      return {
-        ...state,
-        notes: [
-          ...state.notes,
-          t("watch.taskFailed", { kind: watchLabel(event.kind), message: event.message }),
-        ],
-      };
-    case "auto_retry_start":
-      return {
-        ...state,
-        notes: [
-          ...state.notes,
-          t("watch.retry", { count: event.attempt, message: event.errorMessage }),
-        ],
-      };
-    default:
-      return state;
-  }
-}
-
-export function reduce(state: Watching, action: AgentEvent[] | "ended"): Watching {
-  if (action === "ended") return { ...state, ended: true };
-  return action.reduce(apply, state);
-}
+import type { Entry, ObservationNote } from "@mate/admin/client";
 
 type Block = { type: string; text?: string; thinking?: string; name?: string; arguments?: unknown };
+
+/** One content block as a line of text. */
+export const blockText = (block: Block): string =>
+  block.type === "text"
+    ? (block.text ?? "")
+    : block.type === "thinking"
+      ? t("watch.thinking", { text: block.thinking ?? "" })
+      : block.type === "toolCall"
+        ? t("watch.toolCall", {
+            name: block.name ?? "?",
+            arguments: JSON.stringify(block.arguments),
+          })
+        : `[${block.type}]`;
 
 /** One readable line per message of an entry; entries that carry no model messages show their kind. */
 export function describeEntry(entry: Entry): { role: string; text: string }[] {
@@ -109,20 +26,7 @@ export function describeEntry(entry: Entry): { role: string; text: string }[] {
     text:
       typeof message.content === "string"
         ? message.content
-        : message.content
-            .map((block) =>
-              block.type === "text"
-                ? (block.text ?? "")
-                : block.type === "thinking"
-                  ? t("watch.thinking", { text: block.thinking ?? "" })
-                  : block.type === "toolCall"
-                    ? t("watch.toolCall", {
-                        name: block.name ?? "?",
-                        arguments: JSON.stringify(block.arguments),
-                      })
-                    : `[${block.type}]`,
-            )
-            .join("\n"),
+        : message.content.map(blockText).join("\n"),
   }));
 }
 
@@ -148,4 +52,19 @@ export function watchLabel(kind: string): string {
     "mate.background-command": t("watchLabels.mate_background_command"),
   };
   return labels[kind] ?? kind;
+}
+
+export function noteText(note: ObservationNote): string {
+  switch (note.kind) {
+    case "request-retry":
+      return t("watch.requestRetry", { message: note.error });
+    case "compacting":
+      return t("watch.compacting");
+    case "compaction-ended":
+      return t("watch.compactionEnded");
+    case "model-retry":
+      return t("watch.retry", { count: note.attempt, message: note.error });
+    case "task-failed":
+      return t("watch.taskFailed", { kind: watchLabel(note.task), message: note.error });
+  }
 }

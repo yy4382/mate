@@ -8,6 +8,12 @@
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     },
+    "./client": {
+      "react-native": "./src/client.ts",
+      "mate-source": "./src/client.ts",
+      "types": "./dist/src/client.d.ts",
+      "default": "./dist/src/client.js"
+    },
     "./contracts": {
       "react-native": "./src/contracts.ts",
       "mate-source": "./src/contracts.ts",

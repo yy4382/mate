@@ -22,7 +22,6 @@ describe("the chat store opened by newer code (MODULE_TESTS 3.10)", () => {
     expect(service.requests.map((request) => request.notice.messageId).sort()).toEqual(
       expected.sort(),
     );
-    expect(service.requests.every((request) => request.notice.accountId === owner)).toBe(true);
     expect(new Set(service.endpoints())).toEqual(new Set([facts.pushEndpoint]));
     app.close();
   });

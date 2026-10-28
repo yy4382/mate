@@ -25,7 +25,6 @@ export function ChatComposer({
   const dimensions = useWindowDimensions();
   return (
     <View
-      testID="message-composer-panel"
       style={{
         paddingHorizontal: 16,
         paddingVertical: 8,
@@ -94,7 +93,6 @@ export function ChatComposer({
       <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
         <View style={{ flex: 1 }}>
           <Field
-            testID="message-composer"
             accessibilityLabel={t("chat.message")}
             placeholder={destination}
             multiline

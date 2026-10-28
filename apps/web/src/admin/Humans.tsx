@@ -1,3 +1,4 @@
+import { passwordTooShort } from "@mate/control-plane/passwords";
 import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleUser, KeyRound, Plus, ShieldCheck, ShieldOff, UserX } from "lucide-react";
@@ -9,7 +10,6 @@ import {
   ROLE_LABEL,
   currentHumanKey,
   refusalText,
-  tooShort,
   useCurrentHuman,
   type HumanView,
   type Role,
@@ -55,7 +55,7 @@ function AddHuman({ onClose }: { onClose: () => void }) {
           setHandleError(null);
           setPasswordError(null);
           setError(null);
-          if (tooShort(password))
+          if (passwordTooShort(password))
             return setPasswordError(t("Humans.theInitialPasswordMustBeAtLeast12"));
           try {
             await post("/api/humans", {
@@ -139,7 +139,7 @@ function ResetPassword({ human, onClose }: { human: HumanView; onClose: () => vo
           event.preventDefault();
           setPasswordError(null);
           setError(null);
-          if (tooShort(password))
+          if (passwordTooShort(password))
             return setPasswordError(t("Humans.theNewPasswordMustBeAtLeast12"));
           try {
             await post(`/api/humans/${human.accountId}/password`, { password });

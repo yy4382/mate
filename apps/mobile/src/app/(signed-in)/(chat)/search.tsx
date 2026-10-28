@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ActivityIndicator, Keyboard, Text, View } from "react-native";
 import type { Entry } from "@mate/chat/contracts";
 import { useChat, useChatState } from "../../../session";
-import { accountName } from "../../../chat";
+import { accountName } from "@mate/chat/client";
 import { Button, Caption, Empty, ErrorLine, Field, Screen } from "../../../ui";
 import { MessageBody } from "../../../message-body";
 import { useTheme } from "../../../theme";
@@ -39,7 +39,6 @@ export default function Search() {
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Field
-        testID="search-query"
         accessibilityLabel={t("chat.search_terms")}
         placeholder={t("chat.search_all_visible_conversations")}
         value={query}

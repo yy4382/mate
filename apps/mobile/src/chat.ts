@@ -1,6 +1,16 @@
+import type { ChatErrorReason } from "@mate/chat";
+import {
+  accountName,
+  liveRetryDelay,
+  mentionsIn,
+  mergeEntries,
+  timelineKey,
+  timelineQuery,
+  unsentText,
+} from "@mate/chat/client";
 import { t, listText } from "./i18n";
-import { createParser } from "eventsource-parser";
 import { systemClock, type Clock } from "@mate/clock";
+import { readEvents, sendJson } from "./http";
 import {
   ConversationView,
   Entry,
@@ -15,10 +25,6 @@ import {
 } from "@mate/chat/contracts";
 import { z } from "zod";
 
-export const timelineKey = (ref: TimelineRef) =>
-  "conversation" in ref ? `c${ref.conversation}` : `t${ref.thread}`;
-const query = (ref: TimelineRef) =>
-  "conversation" in ref ? `conversation=${ref.conversation}` : `thread=${ref.thread}`;
 type Pending = {
   requestId: string;
   body: string;
@@ -99,7 +105,7 @@ class Refusal extends Error {
     super(message);
   }
 }
-const refusals: Record<string, string> = {
+const refusals: Record<ChatErrorReason, string> = {
   "not-member": t("chat.join_the_channel_first"),
   archived: t("chat.this_channel_is_archived_and_can_only"),
   "invalid-input": t("chat.check_your_input"),
@@ -107,11 +113,12 @@ const refusals: Record<string, string> = {
   "request-conflict": t("chat.the_request_has_changed_cancel_and_try"),
   "not-found": t("chat.this_conversation_or_message_could_not_be"),
   "inactive-account": t("chat.this_account_has_been_deactivated"),
+  "unknown-account": t("chat.account_not_found"),
+  "invalid-target": t("chat.this_action_cannot_be_applied_to_the_target"),
+  "human-only": t("chat.only_human_accounts_can_do_this"),
 };
 const errorText = (error: unknown) =>
   error instanceof Refusal ? error.message : t("chat.could_not_connect_to_the_server_check");
-const merge = (old: readonly Entry[], entries: readonly Entry[]) =>
-  [...new Map([...old, ...entries].map((e) => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
 /** Replaces or adds one row, keeping the server's order by ID. */
 const upsert = <T>(rows: readonly T[], row: T, id: (row: T) => number) =>
   [...rows.filter((r) => id(r) !== id(row)), row].sort((a, b) => id(a) - id(b));
@@ -161,13 +168,10 @@ export class MobileChat {
     const signal = AbortSignal.any([this.lifetime.signal, timeout.signal]);
     void this.clock.sleep(15_000, signal).then(() => timeout.abort());
     try {
-      const response = await this.platform.fetch(this.server + path, {
+      const response = await sendJson(this.platform.fetch, this.server + path, {
         method: body === undefined ? "GET" : "POST",
-        credentials: "include",
+        body,
         signal,
-        ...(body === undefined
-          ? {}
-          : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
       });
       if (signal.aborted) throw new Error("cancelled");
       await this.check(response);
@@ -193,7 +197,8 @@ export class MobileChat {
     throw new Refusal(
       response.status,
       error.success
-        ? (refusals[error.data.error] ?? t("chat.the_operation_did_not_finish_check_permissions"))
+        ? (refusals[error.data.error as ChatErrorReason] ??
+            t("chat.the_operation_did_not_finish_check_permissions"))
         : t("chat.the_server_cannot_process_this_right_now"),
     );
   }
@@ -276,52 +281,38 @@ export class MobileChat {
         await this.check(response);
         if (!response.body) throw new Error("stream missing");
         this.publish({ connection: "live", error: "" });
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let ended = false;
-        const parser = createParser({
-          onEvent: ({ event, data }) => {
-            if (ended || signal.aborted || this.lifetime.signal.aborted) return;
+        await readEvents(
+          response.body,
+          (event, data) => {
+            if (signal.aborted || this.lifetime.signal.aborted) return true;
             if (event === "login") {
-              ended = true;
               this.platform.expired();
               this.publish({ connection: "paused" });
-            } else if (event === "events" || event === "resnapshot") {
-              const batch = event === "events" ? LiveEvents.parse(JSON.parse(data)) : undefined;
-              if (batch?.status === "events") {
-                this.apply(batch);
-                failures = 0;
-                this.publish({ connection: "live", error: "" });
-              } else {
-                ended = true;
-                this.cursor = undefined;
-                ++this.snapshotVersion;
-                this.publish({ timelines: new Map(), connection: "loading" });
-              }
+              return true;
             }
+            if (event !== "events" && event !== "resnapshot") return;
+            const batch = event === "events" ? LiveEvents.parse(JSON.parse(data)) : undefined;
+            if (batch?.status === "events") {
+              this.apply(batch);
+              failures = 0;
+              this.publish({ connection: "live", error: "" });
+              return;
+            }
+            this.cursor = undefined;
+            ++this.snapshotVersion;
+            this.publish({ timelines: new Map(), connection: "loading" });
+            return true;
           },
-        });
-        try {
-          for (;;) {
-            const { value, done } = await reader.read();
-            touch();
-            if (signal.aborted || this.lifetime.signal.aborted) return;
-            if (done) throw new Error("stream ended");
-            parser.feed(decoder.decode(value, { stream: true }));
-            if (ended) {
-              if (this.cursor !== undefined) return;
-              break;
-            }
-          }
-        } finally {
-          await reader.cancel().catch(() => undefined);
-        }
+          touch,
+        );
+        // A login event or a close ends following; a resnapshot takes a new snapshot.
+        if (this.cursor !== undefined) return;
       } catch (error) {
         if (signal.aborted || this.lifetime.signal.aborted) return;
         watchdog?.abort();
         streamRequest.abort();
         this.publish({ connection: "reconnecting", error: errorText(error) });
-        await this.clock.sleep([500, 1000, 2000, 5000][Math.min(failures++, 3)], signal);
+        await this.clock.sleep(liveRetryDelay(failures++), signal);
       } finally {
         watchdog?.abort();
         streamRequest.abort();
@@ -336,7 +327,7 @@ export class MobileChat {
       if (event.type === "entry") {
         const key = timelineKey(event.timeline);
         const old = timelines.get(key);
-        if (old) timelines.set(key, { ...old, entries: merge(old.entries, [event.entry]) });
+        if (old) timelines.set(key, { ...old, entries: mergeEntries(old.entries, [event.entry]) });
       } else if (event.type === "account") {
         accounts = upsert(accounts, event.account, (a) => a.accountId);
       } else if (event.type === "conversation") {
@@ -382,12 +373,12 @@ export class MobileChat {
     try {
       const before = older ? old.entries[0]?.seq : undefined;
       const entries = await this.request(
-        `/api/chat/history?${query(ref)}&limit=50${before === undefined ? "" : `&before=${before - 1}`}`,
+        `/api/chat/history?${timelineQuery(ref)}&limit=50${before === undefined ? "" : `&before=${before - 1}`}`,
         z.array(Entry),
       );
       if (version !== this.snapshotVersion) return;
       this.setTimeline(ref, {
-        entries: merge(this.timeline(ref).entries, entries),
+        entries: mergeEntries(this.timeline(ref).entries, entries),
         loading: false,
         loaded: true,
         error: "",
@@ -493,19 +484,12 @@ export class MobileChat {
   async send(ref: TimelineRef): Promise<void> {
     const draft = this.draft(ref);
     if (draft.pending?.status === "sending" || (!draft.pending && !draft.text.trim())) return;
-    const mentions = new Set<number>();
-    for (const [, handle] of draft.text.matchAll(/@([\p{L}\p{N}][\p{L}\p{N}_.-]*)/gu)) {
-      const account = this.state.accounts.find(
-        (a) => a.active && a.handle.toLowerCase() === handle?.toLowerCase(),
-      );
-      if (account) mentions.add(account.accountId);
-    }
     const pending: Pending = {
       ...(draft.pending ?? {
         requestId: this.platform.requestId(),
         body: draft.text.trim(),
         text: draft.text,
-        mentions: [...mentions].sort((a, b) => a - b),
+        mentions: mentionsIn(draft.text, this.state.accounts),
       }),
       status: "sending",
     };
@@ -520,9 +504,7 @@ export class MobileChat {
       if (result.status !== "sent") throw new Error("held");
       const current = this.draft(ref);
       this.setDraft(ref, {
-        text: current.text.startsWith(pending.text)
-          ? current.text.slice(pending.text.length).trimStart()
-          : current.text,
+        text: unsentText(current.text, pending.text),
         pending: null,
         error: "",
       });
@@ -591,9 +573,6 @@ export class MobileChat {
   }
 }
 
-export function accountName(accounts: readonly AccountView[], id: number) {
-  return accounts.find((a) => a.accountId === id)?.displayName ?? `#${id}`;
-}
 export function taskStatus(
   task: Extract<Entry, { kind: "task" }>,
   accounts: readonly AccountView[],

@@ -1,5 +1,6 @@
 import { t } from "../i18n";
 import type { NodeStatusResult } from "@mate/admin";
+import { pairingCommand } from "@mate/admin/client";
 import * as Clipboard from "expo-clipboard";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
@@ -44,9 +45,7 @@ export function Nodes({
     return () => clearTimeout(timer);
   }, [token]);
   const expired = !!token && now >= Date.parse(token.expiresAt);
-  const command = token
-    ? `mate node configure --control-plane ${client.server} --pairing-token ${token.pairingToken}`
-    : "";
+  const command = token ? pairingCommand(client.server, token.pairingToken) : "";
   const generate = () => {
     void operation.run(async () => {
       const next = await client.request<PairingToken>("/api/admin/pairing-tokens", "POST");

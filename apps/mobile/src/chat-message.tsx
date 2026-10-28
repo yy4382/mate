@@ -1,7 +1,8 @@
 import { t, dateText, numberText } from "./i18n";
 import { Pressable, Text, View } from "react-native";
 import type { AccountView, Entry } from "@mate/chat/contracts";
-import { accountName, taskStatus } from "./chat";
+import { accountName } from "@mate/chat/client";
+import { taskStatus } from "./chat";
 import { MessageBody } from "./message-body";
 import { Avatar, Caption, Copy } from "./ui";
 import { useTheme } from "./theme";
@@ -34,7 +35,6 @@ export function ChatMessage({
   const author = accounts.find((a) => a.accountId === entry.author);
   return (
     <View
-      testID={isRoot ? "thread-root" : `entry-${entry.seq}`}
       style={{
         paddingHorizontal: 20,
         paddingVertical: 10,
@@ -67,7 +67,6 @@ export function ChatMessage({
         </Caption>
         {!isRoot && (
           <Pressable
-            testID={`message-actions-${entry.messageId}`}
             accessibilityRole="button"
             accessibilityLabel={t("chat.message_actions", {
               name: accountName(accounts, entry.author),
@@ -143,7 +142,6 @@ export function ChatMessage({
       ))}
       {!isRoot && knownReplies && (
         <Pressable
-          testID={`reply-${entry.messageId}`}
           accessibilityRole="button"
           accessibilityLabel={t("chat.reply_in_thread")}
           onPress={() => onThread(entry)}

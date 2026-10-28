@@ -4,7 +4,8 @@ import { useEffect, useReducer, useState } from "react";
 import type { AgentEvent } from "@mate/admin";
 import { get, redirectToLogin } from "../shell/api.ts";
 import { Badge, EmptyState, ErrorLine, Field, Notice, Select, cx } from "../shell/ui.tsx";
-import { describeEntry, initial, reduce, watchLabel } from "./watch.ts";
+import { initialObservation, observeEvents } from "@mate/admin/client";
+import { blockText, describeEntry, noteText, watchLabel } from "./watch.ts";
 
 function Line(props: { role: string; streaming?: boolean; text: string }) {
   return (
@@ -35,7 +36,7 @@ function Line(props: { role: string; streaming?: boolean; text: string }) {
 export function Watch({ agentId, open }: { agentId: string; open: boolean }) {
   const [assistants, setAssistants] = useState<string[]>([]);
   const [assistant, setAssistant] = useState("");
-  const [state, dispatch] = useReducer(reduce, initial);
+  const [state, dispatch] = useReducer(observeEvents, initialObservation);
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
@@ -107,8 +108,8 @@ export function Watch({ agentId, open }: { agentId: string; open: boolean }) {
         {lines.map((line) => (
           <Line key={line.key} role={line.role} text={line.text} />
         ))}
-        {streaming.map(([index, text]) => (
-          <Line key={`s${index}`} role="assistant" streaming text={text} />
+        {streaming.map(([index, block]) => (
+          <Line key={`s${index}`} role="assistant" streaming text={blockText(block)} />
         ))}
       </ol>
       {tools.length > 0 ? (
@@ -120,13 +121,13 @@ export function Watch({ agentId, open }: { agentId: string; open: boolean }) {
                 <div className="flex items-center gap-3">
                   <span className="shrink-0 text-sm font-medium">{run.name}</span>
                   <code
-                    title={run.args}
+                    title={JSON.stringify(run.args)}
                     className="min-w-0 flex-1 truncate font-mono text-xs text-muted"
                   >
-                    {run.args}
+                    {JSON.stringify(run.args)}
                   </code>
-                  <Badge tone={run.done ? "neutral" : "accent"}>
-                    {run.done ? t("Watch.complete") : t("Watch.running")}
+                  <Badge tone={run.status === "done" ? "neutral" : "accent"}>
+                    {run.status === "done" ? t("Watch.complete") : t("Watch.running")}
                   </Badge>
                 </div>
                 {run.output === "" ? null : (
@@ -145,7 +146,7 @@ export function Watch({ agentId, open }: { agentId: string; open: boolean }) {
         </section>
       ) : null}
       {state.notes.map((note, index) => (
-        <Notice key={index}>{note}</Notice>
+        <Notice key={index}>{noteText(note)}</Notice>
       ))}
     </div>
   );

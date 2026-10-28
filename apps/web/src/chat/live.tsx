@@ -1,3 +1,4 @@
+import { liveRetryDelay, timelineQuery } from "@mate/chat/client";
 import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
@@ -5,15 +6,12 @@ import { get, redirectToLogin } from "../shell/api.ts";
 import { useRoute, type Route } from "../shell/router.tsx";
 import { applyLive, keys, seed } from "./cache.ts";
 import type { LiveEvents, LiveSnapshot, TimelineRef } from "./types.ts";
-import { timelineQuery } from "./types.ts";
 
 /** The timeline the address names, if any: it is loaded with the snapshot, before the stream starts. */
 export function openTimeline(route: Route): TimelineRef | undefined {
   if (route.page !== "chat" || route.conversation === null) return undefined;
   return route.thread === null ? { conversation: route.conversation } : { thread: route.thread };
 }
-
-const RETRY_MS = [500, 1000, 2000, 5000];
 
 type Phase = "loading" | "ready";
 
@@ -59,7 +57,7 @@ export function ChatLive({ children }: { children: ReactNode }) {
             snapshot = await get<LiveSnapshot>("/api/chat/snapshot");
             break;
           } catch {
-            await new Promise((resolve) => setTimeout(resolve, RETRY_MS[Math.min(failures++, 3)]));
+            await new Promise((resolve) => setTimeout(resolve, liveRetryDelay(failures++)));
             if (stopped) return;
           }
         }
@@ -78,8 +76,8 @@ export function ChatLive({ children }: { children: ReactNode }) {
         // The browser retries a dropped connection itself. A closed one was refused: find out why.
         if (source?.readyState !== EventSource.CLOSED) return;
         void get("/api/chat/unread").then(
-          () => setTimeout(restart, RETRY_MS[Math.min(failures++, 3)]),
-          () => setTimeout(restart, RETRY_MS[3]),
+          () => setTimeout(restart, liveRetryDelay(failures++)),
+          () => setTimeout(restart, liveRetryDelay(Infinity)),
         );
       });
     })();

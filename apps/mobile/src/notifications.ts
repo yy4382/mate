@@ -164,7 +164,7 @@ export class MobileNotifications {
     if (!current()) return false;
     const server = !capability.enabled
       ? "unconfigured"
-      : capability.server !== session.server || capability.environment !== this.platform.environment
+      : capability.environment !== this.platform.environment
         ? "mismatch"
         : "available";
     this.publish(server === "available" ? this.state.kind : "unavailable", { server });
@@ -322,11 +322,7 @@ export class MobileNotifications {
     const registration = this.registrations.current;
     if (!parsed.success || !this.session || !registration) return null;
     const notice = parsed.data;
-    if (
-      !same(notice, this.session) ||
-      !same(registration, this.session) ||
-      notice.binding !== registration.subscription.binding
-    )
+    if (!same(registration, this.session) || notice.binding !== registration.subscription.binding)
       return null;
     const age = this.platform.now() - notice.at;
     return age >= -60_000 && age < 86_400_000 ? notice : null;

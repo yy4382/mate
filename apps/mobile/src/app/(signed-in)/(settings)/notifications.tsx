@@ -9,13 +9,13 @@ import type { NotificationState } from "../../../notifications";
 const openSettings = () => void Linking.openSettings();
 const summaries = {
   "signed-out": {
-    title: t("settings.sign_in_first_2"),
+    title: t("settings.sign_in_first_title"),
     description: t("settings.sign_in_to_configure_notifications_for_this"),
     action: "",
     run: () => {},
   },
   checking: {
-    title: t("settings.checking_notifications_2"),
+    title: t("settings.checking_notifications_title"),
     description: t("settings.checking_the_current_delivery_status_please_wait"),
     action: "",
     run: () => {},
@@ -51,7 +51,7 @@ const summaries = {
 const permissionLabel = {
   unknown: t("settings.not_checked"),
   undetermined: t("settings.not_allowed_yet"),
-  denied: t("management.closed"),
+  denied: t("settings.closed"),
   allowed: t("settings.allowed"),
   quiet: t("settings.deliver_quietly"),
 };
@@ -64,7 +64,7 @@ const serverLabel = {
 const registrationLabel = {
   none: t("settings.not_registered"),
   unconfirmed: t("settings.unconfirmed"),
-  registered: t("chat.completed"),
+  registered: t("settings.completed"),
 };
 
 export default function NotificationSettings() {
@@ -146,7 +146,7 @@ export default function NotificationSettings() {
             value={
               state.pendingCancellations
                 ? t("settings.pending_cancellations", { count: state.pendingCancellations })
-                : t("observation.none")
+                : t("settings.none")
             }
           />
           <Row
@@ -155,7 +155,7 @@ export default function NotificationSettings() {
               state.localCleanup === "unknown"
                 ? t("settings.not_performed_yet")
                 : state.localCleanup === "complete"
-                  ? t("chat.completed")
+                  ? t("settings.completed")
                   : t("settings.unconfirmed")
             }
           />

@@ -1,4 +1,5 @@
-import { t } from "../i18n";
+import { passwordTooShort } from "@mate/control-plane/passwords";
+import { roleText, t } from "../i18n";
 import { HumanView, Role, type HumanView as Human } from "@mate/control-plane/contracts";
 import { randomUUID } from "expo-crypto";
 import { router, Stack, useLocalSearchParams } from "expo-router";
@@ -23,9 +24,6 @@ import {
   Select,
   Sheet,
 } from "../ui";
-
-const roleLabel = { admin: t("settings.administrator"), member: t("settings.human_member") };
-const passwordTooShort = (value: string) => new TextEncoder().encode(value).length < 12;
 
 function AddHuman({ visible, onClose, done }: { visible: boolean; onClose(): void; done(): void }) {
   const client = useClient();
@@ -117,8 +115,8 @@ function AddHuman({ visible, onClose, done }: { visible: boolean; onClose(): voi
           value={role}
           disabled={locked}
           options={[
-            { value: "member", label: roleLabel.member },
-            { value: "admin", label: roleLabel.admin },
+            { value: "member", label: roleText("member") },
+            { value: "admin", label: roleText("admin") },
           ]}
           onChange={(v) => setRole(Role.parse(v))}
         />
@@ -178,7 +176,7 @@ export function Humans() {
                         ? t("common.you_name", { name: h.displayName })
                         : h.displayName
                     }
-                    subtitle={`@${h.handle} · ${roleLabel[h.role]}`}
+                    subtitle={`@${h.handle} · ${roleText(h.role)}`}
                     leading={<Avatar name={h.displayName} />}
                     onPress={() =>
                       router.push({ pathname: "/admin/humans/[id]", params: { id: h.accountId } })
@@ -245,7 +243,7 @@ export function HumanDetail() {
               subtitle={`@${human.handle}`}
               leading={<Avatar name={human.displayName} size={48} />}
             />
-            <Row title={t("settings.role")} value={roleLabel[human.role]} />
+            <Row title={t("settings.role")} value={roleText(human.role)} />
             <Row
               title={t("management.account_status")}
               value={
@@ -263,7 +261,7 @@ export function HumanDetail() {
               <Section title={t("management.permissions")}>
                 <Row
                   title={t("management.change_role")}
-                  value={roleLabel[human.role]}
+                  value={roleText(human.role)}
                   disabled={operation.busy}
                   onPress={() => {
                     operation.reset();
@@ -303,8 +301,8 @@ export function HumanDetail() {
               >
                 <Section>
                   <Row title={human.displayName} subtitle={`@${human.handle}`} />
-                  <Row title={t("management.current_role")} value={roleLabel[human.role]} />
-                  <Row title={t("management.change_to")} value={roleLabel[other]} />
+                  <Row title={t("management.current_role")} value={roleText(human.role)} />
+                  <Row title={t("management.change_to")} value={roleText(other)} />
                 </Section>
                 <Copy>
                   {isMe
@@ -314,7 +312,7 @@ export function HumanDetail() {
                 <Caption>{t("management.at_least_one_active_administrator_must_remain")}</Caption>
                 <Outcome operation={operation} />
                 <Button
-                  title={t("management.set_role", { role: roleLabel[other] })}
+                  title={t("management.set_role", { role: roleText(other) })}
                   primary
                   disabled={operation.busy}
                   onPress={() => run("role", { role: other })}

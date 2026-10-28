@@ -16,7 +16,6 @@ import { timelineRefOf } from "./timelines.ts";
  * delivery of one message, so a delivery that is repeated replaces the notification instead of adding a second one.
  */
 export type PushNotice = {
-  accountId: number;
   tag: string;
   messageId: number;
   conversationId: number;
@@ -167,7 +166,6 @@ const subscriptionOf = (row: DueRow): PushSubscription =>
   PushSubscription.parse(JSON.parse(row.subscription_json));
 
 const noticeOf = (row: DueRow): PushNotice => ({
-  accountId: row.account_id,
   tag: `message-${row.entry_id}`,
   messageId: row.entry_id,
   conversationId: row.conversation_id,

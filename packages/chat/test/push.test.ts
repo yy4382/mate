@@ -118,7 +118,6 @@ describe("3.8 push", () => {
     );
     for (const { notice } of service.requests) {
       expect(notice, "where the message is, and who wrote it").toEqual({
-        accountId: owner,
         tag: expect.any(String),
         messageId: sent.messageId,
         conversationId: sent.conversationId,

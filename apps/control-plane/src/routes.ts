@@ -209,10 +209,7 @@ export function chatRoutes(chat: ChatApp, vapidPublicKey: string, apns?: ApnsCon
     {
       method: "GET",
       path: "/api/chat/push/native",
-      json: () =>
-        apns
-          ? { enabled: true, environment: apns.environment, server: apns.server }
-          : { enabled: false },
+      json: () => (apns ? { enabled: true, environment: apns.environment } : { enabled: false }),
     },
     {
       method: "GET",
