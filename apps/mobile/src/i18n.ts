@@ -1,3 +1,6 @@
+import "@formatjs/intl-listformat/polyfill.js";
+import "@formatjs/intl-listformat/locale-data/en.js";
+import "@formatjs/intl-listformat/locale-data/zh.js";
 import { createInstance } from "i18next";
 import { initReactI18next } from "react-i18next";
 import en from "./locales/en.json";
