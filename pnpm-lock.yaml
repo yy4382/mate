@@ -29,9 +29,6 @@ importers:
       '@mate/admin':
         specifier: workspace:*
         version: link:../../packages/admin
-      '@mate/auth':
-        specifier: workspace:*
-        version: link:../../packages/auth
       '@mate/chat':
         specifier: workspace:*
         version: link:../../packages/chat
@@ -78,15 +75,15 @@ importers:
       '@mate/admin':
         specifier: workspace:*
         version: link:../../packages/admin
-      '@mate/auth':
-        specifier: workspace:*
-        version: link:../../packages/auth
       '@mate/chat':
         specifier: workspace:*
         version: link:../../packages/chat
       '@mate/clock':
         specifier: workspace:*
         version: link:../../packages/clock
+      '@mate/control-plane':
+        specifier: workspace:*
+        version: link:../control-plane
       '@preeternal/react-native-cookie-manager':
         specifier: 7.0.0
         version: 7.0.0(react-native@0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
@@ -221,9 +218,6 @@ importers:
       '@fontsource-variable/geist-mono':
         specifier: 5.3.0
         version: 5.3.0
-      '@mate/auth':
-        specifier: workspace:*
-        version: link:../../packages/auth
       '@tanstack/react-query':
         specifier: 5.104.3
         version: 5.104.3(react@19.3.1)
@@ -258,6 +252,9 @@ importers:
       '@mate/chat':
         specifier: workspace:*
         version: link:../../packages/chat
+      '@mate/control-plane':
+        specifier: workspace:*
+        version: link:../control-plane
       '@mate/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
@@ -313,12 +310,6 @@ importers:
       '@mate/testkit':
         specifier: workspace:*
         version: link:../testkit
-
-  packages/auth:
-    dependencies:
-      zod:
-        specifier: 4.6.5
-        version: 4.6.5
 
   packages/chat:
     dependencies:
@@ -6192,7 +6183,9 @@ snapshots:
       metro-runtime: 0.87.1
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.88.0': {}
 

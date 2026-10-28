@@ -1,14 +1,32 @@
 import { t, listText } from "../i18n";
 import type { AgentView, CatalogModel, NodeStatusResult } from "@mate/admin";
-import { router, Stack, useIsFocused } from "expo-router";
-import { useEffect, useRef } from "react";
+import { router, Stack } from "expo-router";
+import type { ReactNode } from "react";
 import { View } from "react-native";
-import { Avatar, Button, Caption, Empty, Field, Row, Screen, Section, Select } from "../ui";
+import {
+  Avatar,
+  Button,
+  Caption,
+  Copy,
+  Empty,
+  Field,
+  Loading,
+  Row,
+  Screen,
+  Section,
+  Select,
+} from "../ui";
 import { newAgentDraft, useAgentCreationDraft } from "./creation";
 import { ApiError } from "./client";
-import { useClient, useManagementAccess, useOperation, useResource } from "./session";
+import {
+  useCanNavigate,
+  useClient,
+  useManagementAccess,
+  useOperation,
+  useResource,
+} from "./session";
 import { settingsBody, SettingsFields } from "./settings";
-import { Copy, ErrorLine, Loading, Outcome } from "./ui";
+import { ErrorLine, Outcome } from "./ui";
 
 export const stateLabel: Record<AgentView["state"], string> = {
   open: t("management.running"),
@@ -17,6 +35,36 @@ export const stateLabel: Record<AgentView["state"], string> = {
   unreadable: t("management.unreadable"),
 };
 export type ReadableAgent = Exclude<AgentView, { state: "unreadable" }>;
+export function useAgent(agentId: string) {
+  const agents = useResource<AgentView[]>("/api/admin/agents", 5000);
+  return { agents, agent: agents.data?.find((agent) => agent.agentId === agentId) };
+}
+/** What a screen about one Agent shows while that Agent is loading, missing or unreadable. */
+export function AgentFallback({
+  agents,
+  agent,
+  children,
+}: ReturnType<typeof useAgent> & { children?: ReactNode }) {
+  return (
+    <>
+      <ErrorLine error={agents.error} />
+      <Loading loading={agents.loading && !agents.data} />
+      {agents.data && (
+        <Empty
+          title={agent ? t("management.cannot_read_agent") : t("management.agent_not_found")}
+          message={
+            agent
+              ? t("management.return_to_the_overview_to_see_the")
+              : t("management.it_may_have_been_deleted")
+          }
+        >
+          {children}
+        </Empty>
+      )}
+      <Button title={t("management.reload_agent")} onPress={agents.refresh} />
+    </>
+  );
+}
 export function AgentList() {
   const agents = useResource<AgentView[]>("/api/admin/agents", 5000);
   const ready = useManagementAccess().kind === "ready";
@@ -113,14 +161,10 @@ export function CreateAgent() {
   const nodes = useResource<NodeStatusResult[]>("/api/admin/nodes");
   const models = useResource<CatalogModel[]>("/api/admin/models");
   const operation = useOperation();
+  const canNavigate = useCanNavigate();
   const [draft, update] = useAgentCreationDraft();
-  const focused = useIsFocused();
-  const focus = useRef(focused);
-  useEffect(() => {
-    focus.current = focused;
-  }, [focused]);
   const { displayName, handle, nodeId, settings, attempt } = draft;
-  const busy = operation.busy || attempt.kind === "pending";
+  const busy = attempt.kind === "pending";
   const locked = attempt.kind !== "new";
   const node = nodeId || (nodes.data?.length === 1 ? nodes.data[0]?.nodeId : undefined);
   const submit = () => {
@@ -163,7 +207,7 @@ export function CreateAgent() {
         }
       }, "")
       .then((ok) => {
-        if (ok && focus.current && client.getSnapshot().kind === "ready") router.back();
+        if (ok && canNavigate()) router.back();
       });
   };
   const disabled =
@@ -244,7 +288,6 @@ export function CreateAgent() {
               <View style={{ padding: 16, gap: 20 }}>
                 <Field
                   label={t("settings.display_name")}
-                  testID="agent-display-name"
                   value={displayName}
                   onChangeText={(displayName) => {
                     operation.reset();
@@ -255,7 +298,6 @@ export function CreateAgent() {
                 />
                 <Field
                   label={t("management.handle_mention_name")}
-                  testID="agent-handle"
                   hint={t("management.handle_hint", { handle: handle || "handle" })}
                   value={handle}
                   onChangeText={(handle) => {

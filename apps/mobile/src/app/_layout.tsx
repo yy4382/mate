@@ -1,6 +1,5 @@
 import { t } from "../i18n";
 import { Session } from "../session";
-import { AgentCreationProvider } from "../admin/creation";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
 import { useColorScheme } from "react-native";
 import { StatusBar } from "expo-status-bar";
@@ -26,19 +25,17 @@ export default function RootLayout() {
       }}
     >
       <Session>
-        <AgentCreationProvider>
-          <StatusBar style="auto" />
-          <Stack
-            screenOptions={{
-              headerTintColor: colors.foreground,
-              headerShadowVisible: false,
-              contentStyle: { backgroundColor: colors.background },
-            }}
-          >
-            <Stack.Screen name="index" options={{ title: t("common.app_name") }} />
-            <Stack.Screen name="(signed-in)" options={{ headerShown: false }} />
-          </Stack>
-        </AgentCreationProvider>
+        <StatusBar style="auto" />
+        <Stack
+          screenOptions={{
+            headerTintColor: colors.foreground,
+            headerShadowVisible: false,
+            contentStyle: { backgroundColor: colors.background },
+          }}
+        >
+          <Stack.Screen name="index" options={{ title: t("common.app_name") }} />
+          <Stack.Screen name="(signed-in)" options={{ headerShown: false }} />
+        </Stack>
       </Session>
     </ThemeProvider>
   );

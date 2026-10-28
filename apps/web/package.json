@@ -19,12 +19,12 @@
     "react-dom": "19.3.1",
     "react-i18next": "17.1.9",
     "tailwind-merge": "3.7.0",
-    "tailwindcss": "4.3.3",
-    "@mate/auth": "workspace:*"
+    "tailwindcss": "4.3.3"
   },
   "devDependencies": {
     "@mate/admin": "workspace:*",
     "@mate/chat": "workspace:*",
+    "@mate/control-plane": "workspace:*",
     "@mate/testkit": "workspace:*",
     "@tailwindcss/vite": "4.3.3",
     "@types/react": "19.3.0",

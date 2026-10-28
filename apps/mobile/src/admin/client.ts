@@ -1,6 +1,6 @@
 import { t } from "../i18n";
 import type { Admin, AgentEvent, AgentView } from "@mate/admin";
-import { HumanView } from "@mate/auth";
+import { HumanView } from "@mate/control-plane/contracts";
 import { z } from "zod";
 import { createParser } from "eventsource-parser";
 import type { AuthState, MobileAuth } from "../auth";
@@ -200,7 +200,6 @@ export class ManagementClient {
   async saveProfile(displayName: string, handle: string): Promise<HumanView> {
     const previous = this.auth.getSnapshot();
     const human = HumanView.parse(await this.request("/api/me", "PATCH", { displayName, handle }));
-    this.check();
     if (previous.kind === "signed-in") this.auth.updateHuman(previous, human);
     return human;
   }

@@ -5,7 +5,7 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PairingToken } from "./client";
-import { useClient, useOperation, useResource } from "./session";
+import { useClient, useManagementAccess, useOperation, useResource } from "./session";
 import { ErrorLine, Outcome, dateText } from "./ui";
 import {
   Button,
@@ -27,6 +27,7 @@ export function Nodes({
   onOpenNode?: (id: NodeStatusResult["nodeId"]) => void;
 } = {}) {
   const client = useClient();
+  const ready = useManagementAccess().kind === "ready";
   const nodes = useResource<NodeStatusResult[]>("/api/admin/nodes", 3000);
   const operation = useOperation();
   const copy = useOperation();
@@ -56,7 +57,7 @@ export function Nodes({
   return (
     <Screen onRefresh={nodes.refresh} refreshing={nodes.loading}>
       <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button onPress={() => setPairing(true)}>
+        <Stack.Toolbar.Button hidden={!ready} onPress={() => setPairing(true)}>
           {t("management.pair")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>

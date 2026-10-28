@@ -1,4 +1,3 @@
-import { Role } from "@mate/auth";
 import { createHash, randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
@@ -6,13 +5,11 @@ import type { ChatApp } from "@mate/chat";
 import { AccountNames } from "@mate/chat";
 import type { Clock } from "@mate/clock";
 import { z } from "zod";
+import { Role } from "./contracts.ts";
 import { HttpError } from "./http.ts";
 
 /** How long a session lasts from login. It is not extended by use. */
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-/** What a human may do: an admin manages Agents, providers, nodes and other humans; a member only chats. */
-export { Role } from "@mate/auth";
 
 /** The chat account the first human is created under. Fixed, so a start that crashed half way converges on restart. */
 export const INITIAL_HUMAN = "human:initial";
@@ -99,7 +96,8 @@ class CheckQueue {
   }
 }
 
-export type LoginResult =
+/** How a login went: a new session, a wrong password, or turned away by the bounded check queue. */
+export type LoginOutcome =
   { status: "ok"; session: Session } | { status: "wrong" } | { status: "limited" };
 
 /** A human as the shell knows them: the role and whether they may still log in. Names live in the chat account. */
@@ -180,7 +178,7 @@ export class Humans {
    * run two at a time, the rest in arrival order; `limited` is for a check that found the line full or waited too
    * long, and it was not made.
    */
-  async logIn(externalId: string | undefined, password: string): Promise<LoginResult> {
+  async logIn(externalId: string | undefined, password: string): Promise<LoginOutcome> {
     const secret = externalId === undefined ? undefined : this.#secret(externalId);
     const human = secret?.active === 1 ? secret : undefined;
     const right = await this.#checks.run(() =>

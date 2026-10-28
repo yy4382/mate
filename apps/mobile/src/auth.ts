@@ -1,4 +1,4 @@
-import { HumanView, LoginResult, type LoginInput } from "@mate/auth";
+import { HumanView, LoginResult, type LoginInput } from "@mate/control-plane/contracts";
 import { z } from "zod";
 
 /** Why the login form is shown again; screens translate it. */

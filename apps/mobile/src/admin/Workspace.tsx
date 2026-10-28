@@ -1,11 +1,12 @@
 import { t } from "../i18n";
 import type { ReactNode } from "react";
-import type { AgentView, WorkspaceListing } from "@mate/admin";
+import type { WorkspaceListing } from "@mate/admin";
 import { router, Stack } from "expo-router";
-import { Button, Caption, Copy, Empty, Row, Screen, Section } from "../ui";
+import { Button, Caption, Copy, Empty, Loading, Row, Screen, Section } from "../ui";
+import { AgentFallback, useAgent } from "./Agents";
 import { ApiError } from "./client";
 import { useManagementAccess, useResource } from "./session";
-import { ErrorLine, Loading, bytesText } from "./ui";
+import { ErrorLine, bytesText } from "./ui";
 
 export function Workspace({
   agentId,
@@ -131,8 +132,7 @@ export function Workspace({
 }
 
 export function AgentWorkspace({ agentId, path }: { agentId: string; path: string }) {
-  const agents = useResource<AgentView[]>("/api/admin/agents", 5000);
-  const agent = agents.data?.find((item) => item.agentId === agentId);
+  const { agents, agent } = useAgent(agentId);
   return (
     <>
       <Stack.Screen
@@ -152,14 +152,7 @@ export function AgentWorkspace({ agentId, path }: { agentId: string; path: strin
         />
       ) : (
         <Screen>
-          <ErrorLine error={agents.error} />
-          <Loading loading={agents.loading && !agents.data} />
-          {agents.data && (
-            <Empty
-              title={agent ? t("management.cannot_read_agent") : t("management.agent_not_found")}
-            />
-          )}
-          <Button title={t("management.reload_agent")} onPress={agents.refresh} />
+          <AgentFallback agents={agents} agent={agent} />
         </Screen>
       )}
     </>

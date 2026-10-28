@@ -1,8 +1,9 @@
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { startControlPlane } from "../src/control-plane.ts";
-import { DAY_MS, environment, PASSWORD } from "./support.ts";
+import { ADMIN_HANDLE, DAY_MS, environment, PASSWORD } from "./support.ts";
 
 describe("11.1 the owner's login", () => {
   it("answers the API with 401 and sends a page to the login page with where it was going, until the owner logs in", async () => {
@@ -229,6 +230,43 @@ describe("11.1 the owner's login", () => {
     replayed.cookie = browser.cookie;
     expect((await replayed.get("/api/chat/unread")).status, "the old token is dead").toBe(401);
     expect((await other.get("/api/chat/unread")).status, "another session lives on").toBe(200);
+  });
+
+  it("refuses a request whose body finishes after its session logged out, and changes nothing", async () => {
+    const site = await environment().start();
+    const browser = site.browser();
+    await browser.logInAdmin();
+    const body = JSON.stringify({ displayName: "Late", handle: ADMIN_HANDLE });
+    const late = request(`${site.url}/api/me`, {
+      method: "PATCH",
+      headers: {
+        cookie: browser.cookie,
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        expect: "100-continue",
+      },
+    });
+    const status = new Promise<number>((resolve, reject) => {
+      late.on("response", (response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      late.on("error", reject);
+    });
+    // The server asks for the body only once it has taken the request in.
+    const taken = new Promise((resolve) => late.once("continue", resolve));
+    late.flushHeaders();
+    await taken;
+    late.write(body.slice(0, -1));
+    expect((await browser.post("/api/logout")).status).toBe(204);
+    late.end(body.slice(-1));
+
+    expect(await status, "the request completed after the logout").toBe(401);
+    const again = site.browser();
+    await again.logInAdmin();
+    expect(((await again.get("/api/me")).json as { displayName: string }).displayName).toBe(
+      ADMIN_HANDLE,
+    );
   });
 
   it("ends a session thirty days after login", async () => {

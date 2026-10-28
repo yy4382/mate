@@ -527,6 +527,7 @@
     "active_account": "有效账号",
     "permanently_deactivated": "已永久停用",
     "role_changed_previous_sessions_have_ended": "角色已更改，旧登录会话已结束。",
+    "password_reset_previous_sessions_have_ended": "密码已重置，旧登录会话已结束。",
     "permanently_deactivated_chat_messages_are_kept": "已永久停用，聊天消息保留。",
     "human_details": "人类详情",
     "human_account_not_found": "找不到这个人类账号",

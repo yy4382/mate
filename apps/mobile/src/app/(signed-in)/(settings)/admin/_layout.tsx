@@ -1,7 +1,7 @@
 import { t } from "../../../../i18n";
 import { router, Stack } from "expo-router";
 import { useHuman } from "../../../../admin/session";
-import { Button, Copy, Screen } from "../../../../admin/ui";
+import { Button, Copy, Screen } from "../../../../ui";
 import { useTheme } from "../../../../theme";
 
 export default function AdminLayout() {

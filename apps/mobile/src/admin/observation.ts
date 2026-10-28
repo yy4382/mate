@@ -28,17 +28,21 @@ export const initialObservation: Observation = {
 };
 const append = (entries: readonly Entry[], entry: Entry | undefined) =>
   entry && !entries.some((previous) => previous.id === entry.id) ? [...entries, entry] : entries;
-function callArgs(entries: readonly Entry[], id: string): unknown {
+export type ToolCall = Extract<Block, { type: "toolCall" }>;
+/** The recorded tool calls by call ID, keeping the first record of each. */
+export function toolCalls(entries: readonly Entry[]): Map<string, ToolCall> {
+  const calls = new Map<string, ToolCall>();
   for (const entry of entries)
     for (const message of entry.model ?? [])
       if (message.role === "assistant")
         for (const block of message.content)
-          if (block.type === "toolCall" && block.id === id) return block.arguments;
-  return undefined;
+          if (block.type === "toolCall" && !calls.has(block.id)) calls.set(block.id, block);
+  return calls;
 }
 function apply(state: Observation, event: AgentEvent): Observation {
   switch (event.type) {
-    case "snapshot":
+    case "snapshot": {
+      const calls = toolCalls(event.entries);
       return {
         ...initialObservation,
         entries: event.entries,
@@ -54,7 +58,7 @@ function apply(state: Observation, event: AgentEvent): Observation {
             tool.callId,
             {
               name: tool.name,
-              args: callArgs(event.entries, tool.callId),
+              args: calls.get(tool.callId)?.arguments,
               output: tool.output ?? "",
               status: tool.status,
             },
@@ -67,6 +71,7 @@ function apply(state: Observation, event: AgentEvent): Observation {
           ...event.compactions.map(() => t("observation.compacting_context")),
         ],
       };
+    }
     case "run_start":
       return { ...state, run: true };
     case "run_end":

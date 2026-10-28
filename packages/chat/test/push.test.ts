@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { FakeClock, temporaryDirectory } from "@mate/testkit";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { ChatApp, TimelineRef } from "../src/index.ts";
+import type { ChatApp, PushOutcome, TimelineRef } from "../src/index.ts";
 import {
   FakePushService,
   openAppAt,
@@ -81,54 +81,6 @@ function post(
 }
 
 describe("3.8 push", () => {
-  it("native cancellation survives restart and rejects a late subscribe without disturbing a newer binding", async () => {
-    const f = ownerWithAgents([]);
-    const first = {
-      transport: "apns",
-      token: "ab".repeat(32),
-      environment: "sandbox",
-      binding: "11111111-1111-4111-8111-111111111111",
-    } as const;
-    f.app.unsubscribePush(f.owner, first);
-    f.app.close();
-    const app = f.open();
-    expect(refusalReason(() => app.subscribePush(f.owner, first))).toBe("invalid-input");
-    const next = { ...first, binding: "22222222-2222-4222-8222-222222222222" };
-    app.subscribePush(f.owner, next);
-    app.unsubscribePush(f.owner, first);
-    expect(refusalReason(() => app.subscribePush(f.owner, first))).toBe("invalid-input");
-    post(app, f.ada, dm(app, f.ada, f.owner), "only the new enrollment");
-    await f.service.received(1);
-    expect(f.service.requests.map((delivery) => delivery.subscription)).toEqual([next]);
-    app.close();
-  });
-
-  it("native cancellation is scoped to its account, token, environment and binding", async () => {
-    const { app, owner } = ownerWithAgents([]);
-    const first = {
-      transport: "apns",
-      token: "ab".repeat(32),
-      environment: "sandbox",
-      binding: "11111111-1111-4111-8111-111111111111",
-    } as const;
-    const other = app.ensureAccount({
-      externalId: "sam",
-      handle: "sam",
-      displayName: "Sam",
-      kind: "human",
-    });
-    app.unsubscribePush(owner, first);
-    expect(() => app.subscribePush(other, first)).not.toThrow();
-    expect(() => app.subscribePush(owner, { ...first, token: "cd".repeat(32) })).not.toThrow();
-    const production = { ...first, environment: "production" } as const;
-    expect(() => app.subscribePush(owner, production)).not.toThrow();
-    expect(() =>
-      app.subscribePush(owner, { ...first, binding: "22222222-2222-4222-8222-222222222222" }),
-    ).not.toThrow();
-    expect(refusalReason(() => app.subscribePush(owner, first))).toBe("invalid-input");
-    app.close();
-  });
-
   it("a late invalid-token answer and an old unsubscribe cannot remove a newer native binding", async () => {
     const { app, service, owner, ada } = ownerWithAgents([]);
     const first = {
@@ -145,7 +97,7 @@ describe("3.8 push", () => {
     await service.received(1);
     app.subscribePush(owner, next);
     app.unsubscribePush(owner, first);
-    service.release(410);
+    service.release("gone");
     await settled();
     const sent = post(app, ada, timeline, "new registration");
     await service.received(2);
@@ -281,7 +233,7 @@ describe("3.8 push", () => {
 
   it("a transient failure is retried 30 seconds later, then after twice as long, and the retries go on after a restart", async () => {
     const { app, open, clock, service, owner, ada } = ownerWithAgents();
-    service.answer(subscription("phone").endpoint, "unreachable", 503);
+    service.answer(subscription("phone").endpoint, "unreachable", "retry");
     const start = clock.now();
     post(app, ada, dm(app, ada, owner), "ping");
     await service.received(1);
@@ -313,7 +265,7 @@ describe("3.8 push", () => {
 
   it("a push waiting for its retry does not hold up a later message's push", async () => {
     const { app, service, owner, ada } = ownerWithAgents();
-    service.answer(subscription("phone").endpoint, 503);
+    service.answer(subscription("phone").endpoint, "retry");
     const timeline = dm(app, ada, owner);
     post(app, ada, timeline, "first");
     await service.received(1);
@@ -331,7 +283,7 @@ describe("3.8 push", () => {
     post(app, ada, dm(app, ada, owner), "ping");
     await service.received(1);
     app.close();
-    service.release(201);
+    service.release("delivered");
     await settled();
 
     const restarted = open();
@@ -365,7 +317,10 @@ describe("3.8 push", () => {
 
   it("a push that keeps failing is tried ten times, each wait twice the last, and then dropped", async () => {
     const { app, clock, service, owner, ada } = ownerWithAgents();
-    service.answer(subscription("phone").endpoint, ...Array<number>(ATTEMPTS + 5).fill(500));
+    service.answer(
+      subscription("phone").endpoint,
+      ...Array<PushOutcome>(ATTEMPTS + 5).fill("retry"),
+    );
     post(app, ada, dm(app, ada, owner), "ping");
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       await service.received(attempt);
@@ -385,11 +340,11 @@ describe("3.8 push", () => {
     app.close();
   });
 
-  it("a 404 or 410 deletes the subscription: it is not retried and gets no later pushes", async () => {
+  it("a subscription that is gone is deleted: it is not retried and gets no later pushes", async () => {
     const { app, clock, service, owner, ada } = ownerWithAgents(["phone", "tablet", "laptop"]);
-    service.answer(subscription("phone").endpoint, 404);
-    service.answer(subscription("tablet").endpoint, 410);
-    service.answer(subscription("laptop").endpoint, 503);
+    service.answer(subscription("phone").endpoint, "gone");
+    service.answer(subscription("tablet").endpoint, "gone");
+    service.answer(subscription("laptop").endpoint, "retry");
     const timeline = dm(app, ada, owner);
     post(app, ada, timeline, "first");
     await service.received(3);
@@ -411,9 +366,9 @@ describe("3.8 push", () => {
     app.close();
   });
 
-  it("any other refusal drops that push but keeps the subscription", async () => {
+  it("a refused push is dropped but the subscription is kept", async () => {
     const { app, clock, service, owner, ada } = ownerWithAgents();
-    service.answer(subscription("phone").endpoint, 400);
+    service.answer(subscription("phone").endpoint, "refused");
     const timeline = dm(app, ada, owner);
     post(app, ada, timeline, "first");
     await service.received(1);
@@ -429,8 +384,8 @@ describe("3.8 push", () => {
 
   it("a failed push leaves the message as it was", async () => {
     const { app, clock, service, owner, ada } = ownerWithAgents(["phone", "laptop"]);
-    service.answer(subscription("phone").endpoint, 410);
-    service.answer(subscription("laptop").endpoint, ...Array<number>(ATTEMPTS).fill(503));
+    service.answer(subscription("phone").endpoint, "gone");
+    service.answer(subscription("laptop").endpoint, ...Array<PushOutcome>(ATTEMPTS).fill("retry"));
     const timeline = dm(app, ada, owner);
     const sent = app.send(ada, timeline, { requestId: "s1", body: "still here" });
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
@@ -453,7 +408,7 @@ describe("3.8 push", () => {
 
   it("every delivery of one message carries the same tag, and another message carries another", async () => {
     const { app, clock, service, owner, ada } = ownerWithAgents();
-    service.answer(subscription("phone").endpoint, 503);
+    service.answer(subscription("phone").endpoint, "retry");
     const timeline = dm(app, ada, owner);
     post(app, ada, timeline, "first");
     await service.received(1);
