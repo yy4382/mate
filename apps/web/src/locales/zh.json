@@ -334,7 +334,10 @@
     "retry_one": "模型请求失败，第 {{count, number}} 次重试：{{message}}",
     "retry_other": "模型请求失败，第 {{count, number}} 次重试：{{message}}",
     "thinking": "（思考）{{text}}",
-    "toolCall": "调用 {{name}} {{arguments}}"
+    "toolCall": "调用 {{name}} {{arguments}}",
+    "requestRetry": "正在重试模型请求：{{message}}",
+    "compacting": "正在压缩上下文…",
+    "compactionEnded": "上下文压缩已结束。"
   },
   "thinking": {
     "off": "关闭",

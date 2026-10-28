@@ -1,4 +1,5 @@
 import { t, locale } from "../i18n.ts";
+import { pairingCommand } from "@mate/admin/client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Link2, Pencil, Server } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -238,7 +239,7 @@ export function Nodes() {
               <p className="text-sm font-medium">{t("Nodes.runOnTheNodesMachine")}</p>
               <CopyBlock
                 label={t("Nodes.copyCommand")}
-                text={`mate node configure --control-plane ${location.origin} --pairing-token ${token.pairingToken}`}
+                text={pairingCommand(location.origin, token.pairingToken)}
               />
             </div>
           </div>
