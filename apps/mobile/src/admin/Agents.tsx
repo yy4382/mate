@@ -1,3 +1,4 @@
+import { t, listText } from "../i18n";
 import type { AgentView, CatalogModel, NodeStatusResult } from "@mate/admin";
 import { router, Stack, useIsFocused } from "expo-router";
 import { useEffect, useRef } from "react";
@@ -10,10 +11,10 @@ import { settingsBody, SettingsFields } from "./settings";
 import { Copy, ErrorLine, Loading, Outcome } from "./ui";
 
 export const stateLabel: Record<AgentView["state"], string> = {
-  open: "运行中",
-  paused: "已暂停",
-  closed: "已关闭",
-  unreadable: "无法读取",
+  open: t("management.running"),
+  paused: t("management.paused"),
+  closed: t("management.closed"),
+  unreadable: t("management.unreadable"),
 };
 export type ReadableAgent = Exclude<AgentView, { state: "unreadable" }>;
 export function AgentList() {
@@ -30,26 +31,34 @@ export function AgentList() {
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
           icon="plus"
-          accessibilityLabel="创建 Agent"
+          accessibilityLabel={t("management.create_agent")}
           hidden={!ready}
           onPress={create}
         >
-          创建 Agent
+          {t("management.create_agent")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Screen onRefresh={agents.refresh} refreshing={agents.loading}>
         <ErrorLine error={agents.error} />
-        {agents.error != null && <Button title="重新读取 Agent" onPress={agents.refresh} />}
+        {agents.error != null && (
+          <Button title={t("management.reload_agent")} onPress={agents.refresh} />
+        )}
         {attempt.kind !== "new" && (
-          <Section title={attempt.kind === "succeeded" ? "已创建" : "创建进度"}>
+          <Section
+            title={
+              attempt.kind === "succeeded"
+                ? t("management.created")
+                : t("management.creation_progress")
+            }
+          >
             <Row
               title={attempt.input.displayName}
               subtitle={
                 attempt.kind === "succeeded"
-                  ? "Agent 已创建"
+                  ? t("management.agent_created")
                   : attempt.kind === "pending"
-                    ? "正在创建，返回不会取消"
-                    : "创建结果尚未确认，继续原操作"
+                    ? t("management.creating_going_back_will_not_cancel_it")
+                    : t("management.creation_is_unconfirmed_continue_the_original_operation")
               }
               onPress={() =>
                 attempt.kind === "succeeded"
@@ -61,22 +70,31 @@ export function AgentList() {
         )}
         <Loading loading={agents.loading && !agents.data} />
         {agents.data?.length === 0 && !agents.loading && (
-          <Empty title="还没有 Agent" message="创建一个有自己上下文和工作区的 AI 同事。" />
+          <Empty
+            title={t("management.no_agents_yet")}
+            message={t("management.create_an_ai_colleague_with_its_own")}
+          />
         )}
         {!!agents.data?.length && (
           <Section>
             {agents.data.map((agent) => (
               <Row
                 key={agent.agentId}
-                leading={<Avatar name={agent.displayName ?? "Agent"} kind="agent" size={40} />}
+                leading={
+                  <Avatar name={agent.displayName ?? t("chat.agent")} kind="agent" size={40} />
+                }
                 title={agent.displayName ?? agent.agentId}
                 subtitle={
                   agent.state === "unreadable"
-                    ? "无法读取 · 查看问题与可用操作"
-                    : `@${agent.handle ?? "未知"} · ${agent.nodeName}`
+                    ? t("management.unreadable_view_the_problem_and_available_actions")
+                    : `@${agent.handle ?? t("management.unknown")} · ${agent.nodeName}`
                 }
                 value={stateLabel[agent.state]}
-                accessibilityLabel={`${agent.displayName ?? agent.agentId}，${stateLabel[agent.state]}${agent.handle ? `，@${agent.handle}` : ""}`}
+                accessibilityLabel={listText([
+                  agent.displayName ?? agent.agentId,
+                  stateLabel[agent.state],
+                  ...(agent.handle ? [`@${agent.handle}`] : []),
+                ])}
                 onPress={() =>
                   router.push({ pathname: "/agents/[id]", params: { id: agent.agentId } })
                 }
@@ -157,13 +175,17 @@ export function CreateAgent() {
     <>
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button hidden={!ready} disabled={disabled} onPress={submit}>
-          {busy ? "创建中…" : attempt.kind === "interrupted" ? "继续创建" : "创建"}
+          {busy
+            ? t("management.creating")
+            : attempt.kind === "interrupted"
+              ? t("management.continue_creation")
+              : t("management.create")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Screen>
         <Outcome operation={operation} />
         {attempt.kind === "succeeded" ? (
-          <Section title="Agent 已创建">
+          <Section title={t("management.agent_created")}>
             <Row
               title={attempt.input.displayName}
               subtitle={`@${attempt.input.handle}`}
@@ -171,14 +193,17 @@ export function CreateAgent() {
                 router.replace({ pathname: "/agents/[id]", params: { id: attempt.agentId } })
               }
             />
-            <Row title="创建另一个 Agent" onPress={() => update(newAgentDraft)} />
+            <Row
+              title={t("management.create_another_agent")}
+              onPress={() => update(newAgentDraft)}
+            />
           </Section>
         ) : (
           <>
             {attempt.kind === "interrupted" && (
-              <Section title="继续原来的创建">
+              <Section title={t("management.continue_the_original_creation")}>
                 <View style={{ padding: 16, gap: 8 }}>
-                  <Copy>输入和 Agent ID 已保留。继续时会核对原操作的结果。</Copy>
+                  <Copy>{t("management.your_input_and_agent_id_are_kept")}</Copy>
                   <Caption>{attempt.agentId}</Caption>
                 </View>
               </Section>
@@ -186,7 +211,7 @@ export function CreateAgent() {
             <ErrorLine error={nodes.error ?? models.error} />
             {(nodes.error != null || models.error != null) && (
               <Button
-                title="重新读取运行配置"
+                title={t("management.reload_runtime_configuration")}
                 onPress={() => {
                   nodes.refresh();
                   models.refresh();
@@ -195,27 +220,30 @@ export function CreateAgent() {
             )}
             <Loading loading={(nodes.loading && !nodes.data) || (models.loading && !models.data)} />
             {(nodes.data?.length === 0 || models.data?.length === 0) && (
-              <Section title="先准备运行环境" footer="完成配置后返回，继续填写这份草稿。">
+              <Section
+                title={t("management.prepare_the_runtime_environment_first")}
+                footer={t("management.return_after_setup_to_continue_this_draft")}
+              >
                 {nodes.data?.length === 0 && (
                   <Row
-                    title="配对 Node"
-                    subtitle="Agent 需要一个固定的主 Node"
+                    title={t("management.pair_node")}
+                    subtitle={t("management.the_agent_needs_a_fixed_home_node")}
                     onPress={() => router.push("/agents/prerequisites/nodes")}
                   />
                 )}
                 {models.data?.length === 0 && (
                   <Row
-                    title="配置模型提供商"
-                    subtitle="保存凭据后即可选择模型"
+                    title={t("management.configure_model_provider")}
+                    subtitle={t("management.save_credentials_to_select_a_model")}
                     onPress={() => router.push("/agents/prerequisites/providers")}
                   />
                 )}
               </Section>
             )}
-            <Section title="身份">
+            <Section title={t("management.identity")}>
               <View style={{ padding: 16, gap: 20 }}>
                 <Field
-                  label="显示名"
+                  label={t("settings.display_name")}
                   testID="agent-display-name"
                   value={displayName}
                   onChangeText={(displayName) => {
@@ -226,9 +254,9 @@ export function CreateAgent() {
                   maxLength={256}
                 />
                 <Field
-                  label="Handle · 提及名称"
+                  label={t("management.handle_mention_name")}
                   testID="agent-handle"
-                  hint={`提及时使用 @${handle || "handle"}，不能包含空格。`}
+                  hint={t("management.handle_hint", { handle: handle || "handle" })}
                   value={handle}
                   onChangeText={(handle) => {
                     operation.reset();
@@ -249,12 +277,12 @@ export function CreateAgent() {
               }}
               node={
                 <Select
-                  label="主 Node"
+                  label={t("management.home_node")}
                   value={node ?? ""}
                   disabled={locked}
                   options={(nodes.data ?? []).map((n) => ({
                     value: n.nodeId,
-                    label: `${n.name} · ${n.online ? "在线" : "离线"}`,
+                    label: `${n.name} · ${n.online ? t("management.online") : t("management.offline")}`,
                   }))}
                   onChange={(nodeId) => update((current) => ({ ...current, nodeId }))}
                 />

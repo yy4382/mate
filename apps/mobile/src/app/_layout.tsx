@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Session } from "../session";
 import { AgentCreationProvider } from "../admin/creation";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
@@ -8,6 +9,7 @@ import { NotificationIntegration } from "../notifications-root";
 import { useTheme } from "../theme";
 
 export default function RootLayout() {
+  const { t } = useTranslation();
   const colors = useTheme();
   const navigationTheme = useColorScheme() === "dark" ? DarkTheme : DefaultTheme;
 
@@ -38,7 +40,7 @@ export default function RootLayout() {
               contentStyle: { backgroundColor: colors.background },
             }}
           >
-            <Stack.Screen name="index" options={{ title: "Mate" }} />
+            <Stack.Screen name="index" options={{ title: t("common.app_name") }} />
             <Stack.Screen name="(signed-in)" options={{ headerShown: false }} />
           </Stack>
         </AgentCreationProvider>

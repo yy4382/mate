@@ -1,3 +1,4 @@
+import { t, noticeText } from "./i18n";
 import { HumanView, LoginResult, type LoginInput } from "@mate/auth";
 
 export type AuthState =
@@ -30,7 +31,7 @@ function serverAddress(input: string): string {
     url.search ||
     url.hash
   )
-    throw new Error("请输入 HTTPS 服务器地址，不含账号或路径。");
+    throw new Error(t("auth.enter_an_https_server_address_without_credentials"));
   return url.origin;
 }
 
@@ -86,7 +87,10 @@ export class MobileAuth {
         this.publish({ kind: "signed-out", server: this.preferences.server, message });
       }
     } catch {
-      this.publish({ kind: "server", message: "无法读取本机登录设置，请重新保存服务器地址。" });
+      this.publish({
+        kind: "server",
+        message: t("auth.could_not_read_local_signin_settings_save"),
+      });
     }
   }
 
@@ -148,7 +152,7 @@ export class MobileAuth {
               this.publish({
                 kind: "unavailable",
                 server,
-                message: "无法清理本机登录设置，请重试退出登录后再登录。",
+                message: t("auth.could_not_clear_local_signin_settings_try"),
               });
             return;
           }
@@ -156,8 +160,12 @@ export class MobileAuth {
             this.publish({
               kind: "signed-out",
               server,
-              message:
-                (input ? "Handle 或密码不对。" : "登录已失效，请重新登录。") + notificationMessage,
+              message: noticeText(
+                input
+                  ? t("auth.incorrect_handle_or_password")
+                  : t("auth.your_session_has_expired_sign_in_again"),
+                notificationMessage,
+              ),
             });
         } else if (input) {
           this.publish({
@@ -165,14 +173,14 @@ export class MobileAuth {
             server,
             message:
               error instanceof Refusal && error.status === 429
-                ? "尝试的人太多了，请稍后再试。"
-                : "无法完成登录，请检查网络和服务器后重试。",
+                ? t("auth.too_many_people_are_trying_try_again")
+                : t("auth.could_not_sign_in_check_your_network"),
           });
         } else {
           this.publish({
             kind: "unavailable",
             server,
-            message: "无法连接或验证服务器，尚未确认登录是否有效。请检查网络后重试。",
+            message: t("auth.could_not_connect_to_or_verify_the"),
           });
         }
       } finally {
@@ -191,7 +199,7 @@ export class MobileAuth {
     } catch {
       this.publish({
         kind: "server",
-        message: "请输入 HTTPS 服务器地址，例如 https://mate.example.com，不含账号或路径。",
+        message: t("auth.enter_an_https_server_address_such_as"),
       });
       return;
     }
@@ -245,15 +253,20 @@ export class MobileAuth {
       this.publish({
         kind: "signed-out",
         server,
-        message:
-          (revoked ? (revoke ? "已退出登录。" : "") : "已在本机退出；未能确认服务器撤销会话。") +
+        message: noticeText(
+          revoked
+            ? revoke
+              ? t("auth.signed_out")
+              : ""
+            : t("auth.signed_out_on_this_device_server_session"),
           notificationMessage,
+        ),
       });
     } catch {
       this.publish({
         kind: "unavailable",
         server,
-        message: "无法清理本机登录设置，请重试退出登录后再登录。",
+        message: t("auth.could_not_clear_local_signin_settings_try"),
       });
     }
   }

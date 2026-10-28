@@ -1,3 +1,4 @@
+import { t } from "../../../i18n";
 import { Stack } from "expo-router";
 import { useTheme } from "../../../theme";
 export const unstable_settings = { initialRouteName: "account" };
@@ -14,12 +15,15 @@ export default function SettingsLayout() {
         headerShadowVisible: false,
       }}
     >
-      <Stack.Screen name="account" options={{ title: "设置", headerLargeTitle: true }} />
-      <Stack.Screen name="connection" options={{ title: "账号与连接" }} />
-      <Stack.Screen name="profile" options={{ title: "个人资料" }} />
-      <Stack.Screen name="profile-edit" options={{ title: "编辑资料" }} />
-      <Stack.Screen name="password" options={{ title: "修改密码" }} />
-      <Stack.Screen name="notifications" options={{ title: "通知" }} />
+      <Stack.Screen
+        name="account"
+        options={{ title: t("management.settings"), headerLargeTitle: true }}
+      />
+      <Stack.Screen name="connection" options={{ title: t("settings.account_and_connection") }} />
+      <Stack.Screen name="profile" options={{ title: t("management.profile") }} />
+      <Stack.Screen name="profile-edit" options={{ title: t("settings.edit_profile") }} />
+      <Stack.Screen name="password" options={{ title: t("settings.change_password") }} />
+      <Stack.Screen name="notifications" options={{ title: t("settings.notifications") }} />
       <Stack.Screen name="admin" options={{ headerShown: false }} />
     </Stack>
   );

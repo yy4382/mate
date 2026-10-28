@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { HumanView, Role, type HumanView as Human } from "@mate/auth";
 import { randomUUID } from "expo-crypto";
 import { router, Stack, useLocalSearchParams } from "expo-router";
@@ -23,7 +24,7 @@ import {
   Sheet,
 } from "../ui";
 
-const roleLabel = { admin: "管理员", member: "普通人类" };
+const roleLabel = { admin: t("settings.administrator"), member: t("settings.human_member") };
 const passwordTooShort = (value: string) => new TextEncoder().encode(value).length < 12;
 
 function AddHuman({ visible, onClose, done }: { visible: boolean; onClose(): void; done(): void }) {
@@ -80,25 +81,29 @@ function AddHuman({ visible, onClose, done }: { visible: boolean; onClose(): voi
       });
   };
   return (
-    <Sheet title="添加人类" visible={visible} onClose={onClose}>
+    <Sheet title={t("management.add_human")} visible={visible} onClose={onClose}>
       <Card>
         <Field
-          label="显示名"
+          label={t("settings.display_name")}
           value={displayName}
           onChangeText={setDisplayName}
           editable={!locked}
         />
         <Field
-          label="Handle"
-          hint="用于登录和提及。"
+          label={t("settings.handle")}
+          hint={t("management.used_for_signing_in_and_mentions")}
           value={handle}
           onChangeText={setHandle}
           editable={!locked}
         />
         <Field
-          label="初始密码"
-          hint="至少 12 个 UTF-8 字节，之后可以自行修改。"
-          error={submitted && passwordTooShort(password) ? "初始密码至少 12 个 UTF-8 字节。" : ""}
+          label={t("management.initial_password")}
+          hint={t("management.at_least_12_utf8_bytes_they_can")}
+          error={
+            submitted && passwordTooShort(password)
+              ? t("management.the_initial_password_must_be_at_least")
+              : ""
+          }
           secureTextEntry
           textContentType="newPassword"
           value={password}
@@ -106,9 +111,9 @@ function AddHuman({ visible, onClose, done }: { visible: boolean; onClose(): voi
           editable={!locked}
         />
       </Card>
-      <Section title="权限">
+      <Section title={t("management.permissions")}>
         <Select
-          label="角色"
+          label={t("settings.role")}
           value={role}
           disabled={locked}
           options={[
@@ -118,15 +123,19 @@ function AddHuman({ visible, onClose, done }: { visible: boolean; onClose(): voi
           onChange={(v) => setRole(Role.parse(v))}
         />
       </Section>
-      <Caption>
-        管理员可管理 Agent、模型提供商、Node 和人类。普通人类可以聊天并修改自己的资料。
-      </Caption>
+      <Caption>{t("management.administrators_manage_agents_model_providers_nodes_and")}</Caption>
       {pending && !operation.busy && (
-        <Copy>尚未确认添加结果。继续会核对同一次添加，不会创建第二个人类。</Copy>
+        <Copy>{t("management.the_result_is_unconfirmed_continuing_checks_the")}</Copy>
       )}
       <Outcome operation={operation} />
       <Button
-        title={operation.busy ? "添加中…" : pending ? "继续添加" : "添加人类"}
+        title={
+          operation.busy
+            ? t("management.adding")
+            : pending
+              ? t("management.continue_adding")
+              : t("management.add_human")
+        }
         primary
         disabled={operation.busy || !displayName.trim() || !handle.trim() || !password}
         onPress={save}
@@ -142,21 +151,32 @@ export function Humans() {
   return (
     <Screen onRefresh={humans.refresh} refreshing={humans.loading}>
       <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button onPress={() => setAdding(true)}>添加</Stack.Toolbar.Button>
+        <Stack.Toolbar.Button onPress={() => setAdding(true)}>
+          {t("management.add")}
+        </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <ErrorLine error={humans.error} />
-      {humans.error != null && <Button title="重新读取" onPress={humans.refresh} />}
+      {humans.error != null && <Button title={t("management.reload")} onPress={humans.refresh} />}
       <Loading loading={humans.loading && !humans.data} />
       {humans.data &&
         [true, false].map((active) => {
           const group = (humans.data ?? []).filter((h) => h.active === active);
           return (
             group.length > 0 && (
-              <Section key={String(active)} title={active ? "有效账号" : "已永久停用"}>
+              <Section
+                key={String(active)}
+                title={
+                  active ? t("management.active_account") : t("management.permanently_deactivated")
+                }
+              >
                 {group.map((h) => (
                   <Row
                     key={h.accountId}
-                    title={`${h.displayName}${h.accountId === me?.accountId ? "（你）" : ""}`}
+                    title={
+                      h.accountId === me?.accountId
+                        ? t("common.you_name", { name: h.displayName })
+                        : h.displayName
+                    }
                     subtitle={`@${h.handle} · ${roleLabel[h.role]}`}
                     leading={<Avatar name={h.displayName} />}
                     onPress={() =>
@@ -197,7 +217,9 @@ export function HumanDetail() {
     void operation
       .run(
         () => client.request(`/api/humans/${id}/${action}`, "POST", body),
-        action === "role" ? "角色已更改，旧登录会话已结束。" : "已永久停用，聊天消息保留。",
+        action === "role"
+          ? t("management.role_changed_previous_sessions_have_ended")
+          : t("management.permanently_deactivated_chat_messages_are_kept"),
       )
       .then((ok) => {
         if (ok) {
@@ -209,32 +231,37 @@ export function HumanDetail() {
   };
   return (
     <Screen onRefresh={humans.refresh} refreshing={humans.loading}>
-      <Stack.Screen options={{ title: human?.displayName ?? "人类详情" }} />
+      <Stack.Screen options={{ title: human?.displayName ?? t("management.human_details") }} />
       <ErrorLine error={humans.error} />
-      {humans.error != null && <Button title="重新读取" onPress={humans.refresh} />}
+      {humans.error != null && <Button title={t("management.reload")} onPress={humans.refresh} />}
       <Loading loading={humans.loading && !humans.data} />
-      {humans.data && !human && <Empty title="找不到这个人类账号" />}
+      {humans.data && !human && <Empty title={t("management.human_account_not_found")} />}
       {human && (
         <>
           <Section>
             <Row
-              title={`${human.displayName}${isMe ? "（你）" : ""}`}
+              title={isMe ? t("common.you_name", { name: human.displayName }) : human.displayName}
               subtitle={`@${human.handle}`}
               leading={<Avatar name={human.displayName} size={48} />}
             />
-            <Row title="角色" value={roleLabel[human.role]} />
-            <Row title="账号状态" value={human.active ? "有效" : "已永久停用"} />
+            <Row title={t("settings.role")} value={roleLabel[human.role]} />
+            <Row
+              title={t("management.account_status")}
+              value={
+                human.active ? t("management.active") : t("management.permanently_deactivated")
+              }
+            />
           </Section>
           {human.active ? (
             <>
               {isMe && (
                 <Section>
-                  <Row title="个人资料" onPress={() => router.push("/profile")} />
+                  <Row title={t("management.profile")} onPress={() => router.push("/profile")} />
                 </Section>
               )}
-              <Section title="权限">
+              <Section title={t("management.permissions")}>
                 <Row
-                  title="更改角色"
+                  title={t("management.change_role")}
                   value={roleLabel[human.role]}
                   disabled={operation.busy}
                   onPress={() => {
@@ -244,9 +271,9 @@ export function HumanDetail() {
                 />
               </Section>
               {!isMe && (
-                <Section title="安全">
+                <Section title={t("management.security")}>
                   <Row
-                    title="重置密码"
+                    title={t("management.reset_password")}
                     disabled={operation.busy}
                     onPress={() => {
                       reset.reset();
@@ -258,48 +285,58 @@ export function HumanDetail() {
               {task !== "role" && <Outcome operation={operation} />}
               {!isMe && (
                 <ConfirmButton
-                  title="永久停用账号"
-                  question={`永久停用 ${human.displayName}？`}
-                  message={`@${human.handle} 的所有登录立即结束，之后不能再次登录。停用无法恢复，已发送的聊天消息保留。`}
-                  confirmLabel="永久停用"
+                  title={t("management.permanently_deactivate_account")}
+                  question={t("management.deactivate_question", { name: human.displayName })}
+                  message={t("management.deactivate_message", { handle: human.handle })}
+                  confirmLabel={t("management.permanently_deactivate")}
                   danger
                   disabled={operation.busy}
                   onConfirm={() => run("deactivate")}
                 />
               )}
-              <Sheet title="更改角色" visible={task === "role"} onClose={() => setTask(null)}>
+              <Sheet
+                title={t("management.change_role")}
+                visible={task === "role"}
+                onClose={() => setTask(null)}
+              >
                 <Section>
                   <Row title={human.displayName} subtitle={`@${human.handle}`} />
-                  <Row title="当前角色" value={roleLabel[human.role]} />
-                  <Row title="更改为" value={roleLabel[other]} />
+                  <Row title={t("management.current_role")} value={roleLabel[human.role]} />
+                  <Row title={t("management.change_to")} value={roleLabel[other]} />
                 </Section>
                 <Copy>
                   {isMe
-                    ? "你的所有登录会话将结束，需要重新登录。"
-                    : "此人的所有登录会话将结束，需要重新登录。"}
+                    ? t("management.all_your_sessions_will_end_you_will")
+                    : t("management.all_this_persons_sessions_will_end_they")}
                 </Copy>
-                <Caption>必须至少保留一个有效的管理员。</Caption>
+                <Caption>{t("management.at_least_one_active_administrator_must_remain")}</Caption>
                 <Outcome operation={operation} />
                 <Button
-                  title={`设为${roleLabel[other]}`}
+                  title={t("management.set_role", { role: roleLabel[other] })}
                   primary
                   disabled={operation.busy}
                   onPress={() => run("role", { role: other })}
                 />
-                <Button title="取消" disabled={operation.busy} onPress={() => setTask(null)} />
+                <Button
+                  title={t("common.cancel")}
+                  disabled={operation.busy}
+                  onPress={() => setTask(null)}
+                />
               </Sheet>
               <Sheet
-                title={`重置 ${human.displayName} 的密码`}
+                title={t("management.reset_password_for", { name: human.displayName })}
                 visible={task === "password"}
                 onClose={() => setTask(null)}
               >
-                <Caption>@{human.handle} 的所有旧登录会话会退出。</Caption>
+                <Caption>{t("management.reset_sessions", { handle: human.handle })}</Caption>
                 <Card>
                   <Field
-                    label="新密码"
-                    hint="至少 12 个 UTF-8 字节。"
+                    label={t("settings.new_password")}
+                    hint={t("management.at_least_12_utf8_bytes")}
                     error={
-                      submitted && passwordTooShort(password) ? "新密码至少 12 个 UTF-8 字节。" : ""
+                      submitted && passwordTooShort(password)
+                        ? t("settings.the_new_password_must_be_at_least")
+                        : ""
                     }
                     secureTextEntry
                     textContentType="newPassword"
@@ -313,7 +350,7 @@ export function HumanDetail() {
                   <Outcome operation={reset} />
                 </Card>
                 <Button
-                  title={reset.busy ? "重置中…" : "重置密码"}
+                  title={reset.busy ? t("management.resetting") : t("management.reset_password")}
                   primary
                   disabled={reset.busy || !password}
                   onPress={() => {
@@ -336,7 +373,7 @@ export function HumanDetail() {
               </Sheet>
             </>
           ) : (
-            <Caption>这个账号不能再次登录。已发送的聊天消息仍然保留。</Caption>
+            <Caption>{t("management.this_account_will_no_longer_be_able")}</Caption>
           )}
         </>
       )}

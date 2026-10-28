@@ -1,3 +1,4 @@
+import { t } from "../../../i18n";
 import { router } from "expo-router";
 import { useHuman, useClient } from "../../../admin/session";
 import { Avatar, Row, Screen, Section } from "../../../ui";
@@ -11,26 +12,26 @@ export default function SettingsScreen() {
       <Section>
         <Row
           title={human.displayName}
-          subtitle={`@${human.handle} · ${human.role === "admin" ? "管理员" : "普通人类"}`}
+          subtitle={`@${human.handle} · ${human.role === "admin" ? t("settings.administrator") : t("settings.human_member")}`}
           leading={<Avatar name={human.displayName} size={48} />}
           onPress={() => router.push("/profile")}
         />
       </Section>
       <Section>
-        <Row title="通知" onPress={() => router.push("/notifications")} />
+        <Row title={t("settings.notifications")} onPress={() => router.push("/notifications")} />
       </Section>
       {human.role === "admin" && (
-        <Section title="管理">
+        <Section title={t("management.manage")}>
           <Row
-            title="管理 Mate"
-            subtitle="模型提供商、Node、人类"
+            title={t("management.manage_mate")}
+            subtitle={t("settings.model_providers_nodes_and_humans")}
             onPress={() => router.push("/admin")}
           />
         </Section>
       )}
-      <Section title="连接">
+      <Section title={t("management.connection")}>
         <Row
-          title="账号与连接"
+          title={t("settings.account_and_connection")}
           subtitle={new URL(access.session.server).host}
           onPress={() => router.push("/connection")}
         />

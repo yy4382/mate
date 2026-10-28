@@ -1,3 +1,4 @@
+import { t, listText } from "./i18n";
 import { Linking, Text, View } from "react-native";
 import { EnrichedMarkdownText } from "react-native-enriched-markdown";
 import type { AccountView } from "@mate/chat/contracts";
@@ -67,27 +68,28 @@ export function MessageBody({
           },
         }}
         selectionMenuConfig={{
-          copy: { label: "复制" },
-          copyAsMarkdown: { label: "复制 Markdown" },
+          copy: { label: t("chat.copy") },
+          copyAsMarkdown: { label: t("chat.copy_markdown") },
         }}
         accessibilityLabels={{
           list: {
-            bulletPoint: "列表项",
-            nestedBulletPoint: "嵌套列表项",
-            orderedItem: "第 {n} 项",
-            nestedOrderedItem: "嵌套第 {n} 项",
+            bulletPoint: t("chat.list_item"),
+            nestedBulletPoint: t("chat.nested_list_item"),
+            orderedItem: t("chat.item_n"),
+            nestedOrderedItem: t("chat.nested_item_n"),
           },
-          blockquote: { quote: "引用", nestedQuote: "嵌套引用" },
-          table: { row: "第 {n} 行：{content}" },
-          rotor: { headings: "标题", links: "链接", images: "图片" },
+          blockquote: { quote: t("chat.quote"), nestedQuote: t("chat.nested_quote") },
+          table: { row: t("chat.row_n_content") },
+          rotor: { headings: t("chat.headings"), links: t("chat.links"), images: t("chat.images") },
         }}
       />
       {mentions.length > 0 && (
         <Text style={{ color: c.accent, fontSize: 15 }}>
-          提及{" "}
-          {mentions
-            .map((id) => `@${accounts.find((a) => a.accountId === id)?.handle ?? id}`)
-            .join("、")}
+          {t("chat.mentions_list", {
+            names: listText(
+              mentions.map((id) => `@${accounts.find((a) => a.accountId === id)?.handle ?? id}`),
+            ),
+          })}
         </Text>
       )}
     </View>

@@ -1,3 +1,4 @@
+import { t } from "../../i18n";
 import { Redirect, usePathname } from "expo-router";
 import { useSyncExternalStore } from "react";
 import { StyleSheet, Text, View } from "react-native";
@@ -17,7 +18,7 @@ export default function SignedInLayout() {
     if (state.kind !== "signed-in") return <Redirect href="/" />;
     return (
       <View style={{ flex: 1, padding: 16 }}>
-        <Text style={{ color: c.foreground, fontSize: 17 }}>正在加载聊天…</Text>
+        <Text style={{ color: c.foreground, fontSize: 17 }}>{t("common.loading_chats")}</Text>
       </View>
     );
   }
@@ -50,7 +51,7 @@ function Tabs() {
   return (
     <NativeTabs tintColor={c.accent} hidden={!["/chat", "/agents", "/account"].includes(pathname)}>
       <NativeTabs.Trigger name="(chat)">
-        <NativeTabs.Trigger.Label>聊天</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Label>{t("chat.chat")}</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
           sf={{
             default: "bubble.left.and.bubble.right",
@@ -59,11 +60,11 @@ function Tabs() {
         />
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="(agents)" hidden={human?.role !== "admin"}>
-        <NativeTabs.Trigger.Label>Agent</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Label>{t("chat.agent")}</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="person.2" />
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="(settings)">
-        <NativeTabs.Trigger.Label>设置</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Label>{t("management.settings")}</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf={{ default: "gearshape", selected: "gearshape.fill" }} />
       </NativeTabs.Trigger>
     </NativeTabs>

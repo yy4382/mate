@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
@@ -285,7 +286,7 @@ export function Avatar({
     kind === "public"
       ? "#"
       : kind === "private"
-        ? "私"
+        ? t("common.private")
         : kind === "thread"
           ? "↳"
           : name.slice(0, 1).toLocaleUpperCase();
@@ -420,7 +421,7 @@ export function Sheet({
               {title}
             </Text>
           </View>
-          <Button title="关闭" onPress={onClose} />
+          <Button title={t("common.close")} onPress={onClose} />
         </View>
         {scroll ? (
           <KeyboardAwareScrollView
@@ -460,7 +461,7 @@ export function Select({
     <>
       <Row
         title={label}
-        value={options.find((o) => o.value === value)?.label ?? "请选择"}
+        value={options.find((o) => o.value === value)?.label ?? t("common.choose_an_option")}
         onPress={() => setOpen(true)}
         disabled={disabled}
       />
@@ -468,7 +469,7 @@ export function Select({
         {options.length > 8 && (
           <View style={{ padding: 16 }}>
             <Field
-              label="搜索选项"
+              label={t("common.search_options")}
               value={query}
               onChangeText={setQuery}
               clearButtonMode="while-editing"
@@ -491,9 +492,14 @@ export function Select({
               }}
             />
           )}
-          ListEmptyComponent={<Empty title="没有匹配选项" message="换一个关键词试试。" />}
+          ListEmptyComponent={
+            <Empty
+              title={t("common.no_matching_options")}
+              message={t("common.try_another_keyword")}
+            />
+          }
         />
-        <Button title="取消选择" onPress={() => setOpen(false)} />
+        <Button title={t("common.cancel_selection")} onPress={() => setOpen(false)} />
       </Sheet>
     </>
   );
@@ -531,16 +537,16 @@ export function ConfirmButton({
             onConfirm();
           }}
         />
-        <Button title="取消" onPress={() => setOpen(false)} />
+        <Button title={t("common.cancel")} onPress={() => setOpen(false)} />
       </Sheet>
     </>
   );
 }
 export function Loading({ loading, empty }: { loading: boolean; empty?: boolean }) {
   return loading ? (
-    <ActivityIndicator accessibilityLabel="正在读取" />
+    <ActivityIndicator accessibilityLabel={t("common.loading")} />
   ) : empty ? (
-    <Copy muted>暂无内容。</Copy>
+    <Copy muted>{t("common.no_content_yet")}</Copy>
   ) : null;
 }
 export const styles = StyleSheet.create({
@@ -560,11 +566,13 @@ export const styles = StyleSheet.create({
 
 export function Segmented<T extends string>({
   options,
+  labels,
   value,
   onChange,
   disabled = false,
 }: {
   options: readonly T[];
+  labels: Record<T, string>;
   value: T;
   onChange(value: NoInfer<T>): void;
   disabled?: boolean;
@@ -607,7 +615,7 @@ export function Segmented<T extends string>({
               fontWeight: option === value ? "600" : "400",
             }}
           >
-            {option}
+            {labels[option]}
           </Text>
         </Pressable>
       ))}

@@ -1,3 +1,4 @@
+import en from "../src/locales/en.json";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -599,7 +600,7 @@ describe("native chat public interface", () => {
     const reopened = f.chat.getSnapshot().operations.get(`task-create/${message.messageId}`);
     expect(reopened).toMatchObject({ status: "failed", input: { kind: "task-create", ...input } });
     await expect(f.chat.task({ ...input, title: "不能替换未确认操作" })).rejects.toThrow(
-      "上次操作尚未确认",
+      en.chat.the_previous_operation_is_unconfirmed_retry_it,
     );
     const result = await f.chat.task(input);
     expect(result.status).toBe("applied");
@@ -660,7 +661,7 @@ describe("native chat public interface", () => {
     expect(f.chat.getSnapshot().operations.size).toBe(1);
     f.chat.close();
     expect(f.chat.getSnapshot().operations.size).toBe(0);
-    await expect(f.chat.create(input)).rejects.toThrow("登录已结束");
+    await expect(f.chat.create(input)).rejects.toThrow(en.chat.your_session_has_ended);
     expect(f.operationRequests).toHaveLength(1);
   });
 });

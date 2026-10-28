@@ -1,3 +1,4 @@
+import { t, listText } from "./i18n";
 import { createParser } from "eventsource-parser";
 import { systemClock, type Clock } from "@mate/clock";
 import {
@@ -90,16 +91,16 @@ class Refusal extends Error {
   }
 }
 const refusals: Record<string, string> = {
-  "not-member": "请先加入频道。",
-  archived: "频道已归档，只能阅读。",
-  "invalid-input": "请检查输入内容。",
-  "handle-taken": "这个名称已被使用。",
-  "request-conflict": "请求内容已改变，请取消后重新操作。",
-  "not-found": "找不到这个会话或消息。",
-  "inactive-account": "这个账号已停用。",
+  "not-member": t("chat.join_the_channel_first"),
+  archived: t("chat.this_channel_is_archived_and_can_only"),
+  "invalid-input": t("chat.check_your_input"),
+  "handle-taken": t("chat.this_name_is_already_in_use"),
+  "request-conflict": t("chat.the_request_has_changed_cancel_and_try"),
+  "not-found": t("chat.this_conversation_or_message_could_not_be"),
+  "inactive-account": t("chat.this_account_has_been_deactivated"),
 };
 const errorText = (error: unknown) =>
-  error instanceof Refusal ? error.message : "无法连接服务器，请检查网络后重试。";
+  error instanceof Refusal ? error.message : t("chat.could_not_connect_to_the_server_check");
 const merge = (old: readonly Entry[], entries: readonly Entry[]) =>
   [...new Map([...old, ...entries].map((e) => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
 
@@ -181,7 +182,7 @@ export class MobileChat {
     if (response.ok) return;
     if (response.status === 401) {
       this.platform.expired();
-      throw new Refusal(401, "登录已失效，请重新登录。");
+      throw new Refusal(401, t("auth.your_session_has_expired_sign_in_again"));
     }
     const error = z
       .object({ error: z.string() })
@@ -189,8 +190,8 @@ export class MobileChat {
     throw new Refusal(
       response.status,
       error.success
-        ? (refusals[error.data.error] ?? "操作未完成，请检查权限和输入后重试。")
-        : "服务器暂时无法处理，请重试。",
+        ? (refusals[error.data.error] ?? t("chat.the_operation_did_not_finish_check_permissions"))
+        : t("chat.the_server_cannot_process_this_right_now"),
     );
   }
   start(): void {
@@ -454,11 +455,12 @@ export class MobileChat {
     input: OperationInput,
     action: (requestId: string) => Promise<T>,
   ): Promise<T> {
-    if (this.lifetime.signal.aborted) throw new Error("登录已结束。");
+    if (this.lifetime.signal.aborted) throw new Error(t("chat.your_session_has_ended"));
     const old = this.state.operations.get(key);
-    if (old?.status === "sending") throw new Error("操作正在进行，请稍候。");
+    if (old?.status === "sending")
+      throw new Error(t("chat.an_operation_is_in_progress_please_wait"));
     if (old && JSON.stringify(old.input) !== JSON.stringify(input))
-      throw new Error("上次操作尚未确认，请先重试。");
+      throw new Error(t("chat.the_previous_operation_is_unconfirmed_retry_it"));
     const operation: PendingOperation = {
       input,
       requestId: old?.requestId ?? this.platform.requestId(),
@@ -482,7 +484,7 @@ export class MobileChat {
         update({
           ...operation,
           status: "failed",
-          error: error instanceof Error ? error.message : "操作失败，请重试。",
+          error: error instanceof Error ? error.message : t("chat.the_operation_failed_retry"),
         });
       throw error;
     }
@@ -601,9 +603,9 @@ export class MobileChat {
           throw new Refusal(
             409,
             {
-              claimed: "任务已被认领。",
-              "not-owner": "任务已转交给其他人。",
-              completed: "任务已完成。",
+              claimed: t("chat.this_task_has_been_claimed"),
+              "not-owner": t("chat.this_task_has_been_transferred_to_someone"),
+              completed: t("chat.this_task_is_complete"),
             }[result.reason],
           );
         return result;
@@ -621,9 +623,8 @@ export function conversationLabel(
   me: number,
 ) {
   return conversation.kind === "dm"
-    ? conversation.members
-        .filter((id) => id !== me)
-        .map((id) => accountName(accounts, id))
-        .join("、") || "（空私信）"
+    ? listText(
+        conversation.members.filter((id) => id !== me).map((id) => accountName(accounts, id)),
+      ) || t("chat.empty_direct_message")
     : (conversation.name ?? "");
 }

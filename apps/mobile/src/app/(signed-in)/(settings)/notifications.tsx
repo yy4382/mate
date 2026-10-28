@@ -1,3 +1,4 @@
+import { t } from "../../../i18n";
 import { useState, useSyncExternalStore } from "react";
 import { Linking, View } from "react-native";
 import { notifications } from "../../../notifications-native";
@@ -8,39 +9,39 @@ import type { NotificationState } from "../../../notifications";
 
 const summaries = {
   "signed-out": {
-    title: "请先登录",
-    description: "登录后可以为当前账号设置通知。",
+    title: t("settings.sign_in_first_2"),
+    description: t("settings.sign_in_to_configure_notifications_for_this"),
     action: "",
     run: () => {},
   },
   checking: {
-    title: "正在检查通知",
-    description: "正在确认当前接收状态，请稍候。",
+    title: t("settings.checking_notifications_2"),
+    description: t("settings.checking_the_current_delivery_status_please_wait"),
     action: "",
     run: () => {},
   },
   disabled: {
-    title: "通知已关闭",
-    description: "开启后接收发给你的私信和提及，不显示消息正文。",
-    action: "开启通知",
+    title: t("settings.notifications_off"),
+    description: t("settings.enable_to_receive_your_direct_messages_and"),
+    action: t("settings.enable_notifications"),
     run: () => void notifications.enable(),
   },
   enabled: {
-    title: "通知已开启",
-    description: "已向服务器登记，接收发给你的私信和提及。",
-    action: "关闭通知",
+    title: t("settings.notifications_on"),
+    description: t("settings.registered_with_the_server_to_receive_your"),
+    action: t("settings.disable_notifications"),
     run: () => void notifications.disable(),
   },
   denied: {
-    title: "系统通知已关闭",
-    description: "在 iOS 设置中允许通知，再返回这里检查。",
-    action: "打开 iOS 设置",
+    title: t("settings.system_notifications_off"),
+    description: t("settings.allow_notifications_in_ios_settings_then_return"),
+    action: t("settings.open_ios_settings"),
     run: () => {},
   },
   unavailable: {
-    title: "远程通知暂不可用",
-    description: "暂时无法完成通知设置，请检查接收条件后重试。",
-    action: "重新检查",
+    title: t("settings.remote_notifications_unavailable"),
+    description: t("settings.could_not_configure_notifications_right_now_check"),
+    action: t("settings.check_again"),
     run: () => void notifications.refresh(),
   },
 } satisfies Record<
@@ -48,19 +49,23 @@ const summaries = {
   { title: string; description: string; action: string; run(): void }
 >;
 const permissionLabel = {
-  unknown: "待检查",
-  undetermined: "尚未允许",
-  denied: "已关闭",
-  allowed: "已允许",
-  quiet: "安静送达",
+  unknown: t("settings.not_checked"),
+  undetermined: t("settings.not_allowed_yet"),
+  denied: t("management.closed"),
+  allowed: t("settings.allowed"),
+  quiet: t("settings.deliver_quietly"),
 };
 const serverLabel = {
-  unknown: "待检查",
-  available: "可用",
-  unconfigured: "未配置",
-  mismatch: "配置不匹配",
+  unknown: t("settings.not_checked"),
+  available: t("settings.available"),
+  unconfigured: t("settings.not_configured"),
+  mismatch: t("settings.configuration_mismatch"),
 };
-const registrationLabel = { none: "未登记", unconfirmed: "待确认", registered: "已完成" };
+const registrationLabel = {
+  none: t("settings.not_registered"),
+  unconfirmed: t("settings.unconfirmed"),
+  registered: t("chat.completed"),
+};
 
 export default function NotificationSettings() {
   const state = useSyncExternalStore(notifications.subscribe, notifications.getSnapshot);
@@ -72,9 +77,9 @@ export default function NotificationSettings() {
   const openSettings = () => void settings.run(() => Linking.openSettings(), "");
   const description =
     state.kind === "unavailable" && state.server === "unconfigured"
-      ? "服务器尚未配置 Apple 推送，当前无法接收通知。"
+      ? t("settings.apple_push_is_not_configured_on_the")
       : state.kind === "unavailable" && state.server === "mismatch"
-        ? "服务器推送配置与此 app 不一致。请联系管理员。"
+        ? t("settings.the_servers_push_configuration_does_not_match")
         : summary.description;
   return (
     <Screen>
@@ -82,7 +87,9 @@ export default function NotificationSettings() {
         <Heading>{summary.title}</Heading>
         <Copy muted>{description}</Copy>
         {state.pendingCancellations > 0 && (
-          <Caption>旧通知登记尚待取消确认，详情中可查看。</Caption>
+          <Caption>
+            {t("settings.an_old_notification_registration_is_awaiting_cancellation")}
+          </Caption>
         )}
       </View>
       {summary.action !== "" && (
@@ -93,57 +100,79 @@ export default function NotificationSettings() {
         />
       )}
       <Outcome operation={settings} />
-      <Section title="更多">
+      <Section title={t("chat.more")}>
         <Row
-          title="通知详情"
-          subtitle="接收条件、通知范围与账号"
+          title={t("settings.notification_details")}
+          subtitle={t("settings.delivery_conditions_notification_scope_and_account")}
           onPress={() => setDetails(true)}
         />
-        {state.kind !== "denied" && <Row title="打开 iOS 设置" onPress={openSettings} />}
+        {state.kind !== "denied" && (
+          <Row title={t("settings.open_ios_settings")} onPress={openSettings} />
+        )}
       </Section>
-      <Sheet title="通知详情" visible={details} onClose={() => setDetails(false)}>
+      <Sheet
+        title={t("settings.notification_details")}
+        visible={details}
+        onClose={() => setDetails(false)}
+      >
         <Section
-          title="当前接收条件"
-          footer="系统允许通知、服务器推送可用且本机登记完成后，才表示接收已开启。"
+          title={t("settings.current_delivery_conditions")}
+          footer={t("settings.delivery_is_enabled_only_when_the_system")}
         >
-          <Row title="系统权限" value={permissionLabel[state.permission]} />
-          <Row title="服务器推送" value={serverLabel[state.server]} />
-          <Row title="本机登记" value={registrationLabel[state.registration]} />
+          <Row title={t("settings.system_permission")} value={permissionLabel[state.permission]} />
+          <Row title={t("settings.server_push")} value={serverLabel[state.server]} />
+          <Row
+            title={t("settings.local_registration")}
+            value={registrationLabel[state.registration]}
+          />
         </Section>
         <Copy muted>{state.message}</Copy>
-        <Section title="当前账号">
-          <Row title="服务器" subtitle={client.server} />
-          <Row title="人类账号" value={human ? `@${human.handle}` : "待验证"} />
-        </Section>
-        <Section title="通知内容">
-          <Row title="私信与提及" subtitle="不显示消息正文；点击进入对应会话或讨论串。" />
-          <Row title="专注模式" subtitle="iOS 的专注模式和通知设置可能影响提示。" />
-        </Section>
-        <Section
-          title="退出与更换服务器"
-          footer="离线时无法保证旧服务器立即停止发送。旧通知不能打开其他账号或服务器的会话。"
-        >
+        <Section title={t("settings.current_account")}>
+          <Row title={t("settings.server")} subtitle={client.server} />
           <Row
-            title="待取消的旧登记"
-            value={state.pendingCancellations ? `${state.pendingCancellations} 项待确认` : "无"}
+            title={t("settings.human_account")}
+            value={human ? `@${human.handle}` : t("settings.awaiting_verification")}
+          />
+        </Section>
+        <Section title={t("settings.notification_content")}>
+          <Row
+            title={t("settings.direct_messages_and_mentions")}
+            subtitle={t("settings.message_bodies_are_hidden_tap_to_open")}
           />
           <Row
-            title="本机通知清理"
+            title={t("settings.focus_mode")}
+            subtitle={t("settings.ios_focus_and_notification_settings_may_affect")}
+          />
+        </Section>
+        <Section
+          title={t("settings.signing_out_and_switching_servers")}
+          footer={t("settings.while_offline_the_old_server_may_keep")}
+        >
+          <Row
+            title={t("settings.old_registrations_awaiting_cancellation")}
+            value={
+              state.pendingCancellations
+                ? t("settings.pending_cancellations", { count: state.pendingCancellations })
+                : t("observation.none")
+            }
+          />
+          <Row
+            title={t("settings.local_notification_cleanup")}
             value={
               state.localCleanup === "unknown"
-                ? "尚未执行"
+                ? t("settings.not_performed_yet")
                 : state.localCleanup === "complete"
-                  ? "已完成"
-                  : "未确认"
+                  ? t("chat.completed")
+                  : t("settings.unconfirmed")
             }
           />
         </Section>
         <Button
-          title="重新检查"
+          title={t("settings.check_again")}
           disabled={state.kind === "checking" || state.kind === "signed-out"}
           onPress={() => void notifications.refresh()}
         />
-        <Button title="打开 iOS 设置" onPress={openSettings} />
+        <Button title={t("settings.open_ios_settings")} onPress={openSettings} />
       </Sheet>
     </Screen>
   );

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { AgentEvent, SnapshotEvent } from "@mate/admin";
 
 export type Entry = SnapshotEvent["entries"][number];
@@ -60,8 +61,10 @@ function apply(state: Observation, event: AgentEvent): Observation {
           ]),
         ),
         notes: [
-          ...(event.generation?.retry ? [`请求重试：${event.generation.retry.error}`] : []),
-          ...event.compactions.map(() => "正在压缩上下文。"),
+          ...(event.generation?.retry
+            ? [t("observation.request_retry", { error: event.generation.retry.error })]
+            : []),
+          ...event.compactions.map(() => t("observation.compacting_context")),
         ],
       };
     case "run_start":
@@ -151,14 +154,23 @@ function apply(state: Observation, event: AgentEvent): Observation {
     case "auto_retry_start":
       return {
         ...state,
-        notes: [...state.notes, `模型请求重试 ${event.attempt}：${event.errorMessage}`],
+        notes: [
+          ...state.notes,
+          t("observation.model_retry", { attempt: event.attempt, error: event.errorMessage }),
+        ],
       };
     case "task_failed":
-      return { ...state, notes: [...state.notes, `${event.kind} 失败：${event.message}`] };
+      return {
+        ...state,
+        notes: [
+          ...state.notes,
+          t("observation.operation_failed", { kind: event.kind, error: event.message }),
+        ],
+      };
     case "compaction_start":
-      return { ...state, notes: [...state.notes, "正在压缩上下文。"] };
+      return { ...state, notes: [...state.notes, t("observation.compacting_context")] };
     case "compaction_end":
-      return { ...state, notes: [...state.notes, "上下文压缩已结束。"] };
+      return { ...state, notes: [...state.notes, t("observation.context_compaction_ended")] };
     default:
       return state;
   }
