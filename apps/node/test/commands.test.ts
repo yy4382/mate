@@ -74,7 +74,7 @@ describe("node commands (MODULE_TESTS 8.1)", () => {
 
     const ok = await node.run(agentId, "bash", { command: "echo fine" });
     expect(ok.isError).toBe(false);
-    expect(ok.content[0]?.text.trimEnd()).toBe("fine");
+    expect(textOf(ok).trimEnd()).toBe("fine");
 
     const failed = await node.run(agentId, "bash", { command: "echo partial; exit 3" });
     expect(failed.isError).toBe(true);

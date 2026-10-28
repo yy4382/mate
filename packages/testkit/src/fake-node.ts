@@ -25,7 +25,6 @@ export interface FakeNodeOptions {
   /** Omitted for an older node that does not report system information. */
   system?: NodeSystem;
   workspaceVisits?: true;
-  shellContext?: boolean;
   onRunTool?: (msg: GatewayRunTool) => Promise<{
     outputs: string[];
     result: ToolResult;
@@ -106,7 +105,6 @@ export class FakeNode {
         nodeId: this.#options.nodeId,
         signature: sig,
         ...(this.#options.workspaceVisits === true ? { workspaceVisits: true } : {}),
-        ...(this.#options.shellContext === false ? {} : { shellContext: true }),
       };
       const system = this.#options.system;
       this.#ws?.send(JSON.stringify(system === undefined ? message : { ...message, system }));
@@ -130,7 +128,6 @@ export class FakeNode {
           signature: this.#options.sign(challenge),
           pairingToken,
           ...(this.#options.workspaceVisits === true ? { workspaceVisits: true } : {}),
-          ...(this.#options.shellContext === false ? {} : { shellContext: true }),
         };
         const system = this.#options.system;
         this.#ws?.send(JSON.stringify(system === undefined ? message : { ...message, system }));

@@ -1,39 +1,34 @@
+import { statSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { basename, isAbsolute } from "node:path";
-import type { BashArguments, ConversationRole, ToolResult } from "@mate/node-protocol";
+import { basename, join } from "node:path";
+import type { BashArguments, ToolResult } from "@mate/node-protocol";
 import { Commands } from "./commands.ts";
 import {
   commandReplay,
-  restoreSource,
+  snapshotSource,
   startupCapture,
   type AccountShell,
-} from "./shell-baseline.ts";
+} from "./shell-snapshot.ts";
 
-type Baseline = { ok: true; shell: AccountShell; source: Buffer } | { ok: false; reason: string };
-
-type CommandEnvironment = {
-  baseline: Promise<Baseline>;
-  initialization: AbortController;
-  callers: Set<symbol>;
-  mainDirectory: string;
-  publisher: symbol | undefined;
-  initializedNotice: boolean;
-};
+type Snapshot = { ok: true; shell: AccountShell; path: string } | { ok: false; reason: string };
 
 type ShellCall = {
-  agentId: string;
+  /** Whose remembered directory the call starts from and, in the foreground, updates. */
+  session: string;
   workspace: string;
-  role: ConversationRole;
   arguments: BashArguments;
 };
 
-/** One immutable startup baseline and one remembered main directory per Agent for this node's lifetime. */
+/** One startup snapshot per node process, and the directory each conversation's last foreground command ended in. */
 export class Shells {
   readonly #commands: Commands;
-  readonly #agents = new Map<string, CommandEnvironment>();
+  readonly #snapshotPath: string;
+  #snapshot: Promise<Snapshot> | undefined;
+  readonly #directories = new Map<string, string>();
 
-  constructor(commands: Commands) {
+  constructor(commands: Commands, dataDirectory: string) {
     this.#commands = commands;
+    this.#snapshotPath = join(dataDirectory, "shell-snapshot");
   }
 
   async run(
@@ -41,141 +36,106 @@ export class Shells {
     output: (chunk: string) => void,
     signal: AbortSignal,
   ): Promise<ToolResult> {
-    if (signal.aborted) return stopped();
-    if (call.arguments.workdir !== undefined && !isAbsolute(call.arguments.workdir)) {
-      return failure("Invalid bash arguments: workdir must be an absolute directory path.");
-    }
-    let environment = this.#agents.get(call.agentId);
-    if (environment === undefined) {
-      const initialization = new AbortController();
-      environment = {
-        baseline: this.#initialize(call.workspace, initialization.signal),
-        initialization,
-        callers: new Set(),
-        mainDirectory: call.workspace,
-        publisher: undefined,
-        initializedNotice: true,
-      };
-      this.#agents.set(call.agentId, environment);
-    }
-    const token = Symbol();
-    environment.callers.add(token);
-    const publishes =
-      call.role === "main" && !call.arguments.background && environment.publisher === undefined;
-    if (publishes) environment.publisher = token;
-    const directory =
-      call.arguments.workdir ??
-      (call.role === "assistant" ? call.workspace : environment.mainDirectory);
-    const aborted = Promise.withResolvers<undefined>();
-    const onAbort = () => {
-      environment.callers.delete(token);
-      if (environment.callers.size === 0) environment.initialization.abort();
-      aborted.resolve(undefined);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      const baseline = await Promise.race([environment.baseline, aborted.promise]);
-      if (signal.aborted || baseline === undefined) return stopped();
-      if (!baseline.ok)
-        return failure(
-          `Shell initialization failed: ${baseline.reason}. Restart the node after correcting its shell startup configuration.`,
-        );
-      const initialized = environment.initializedNotice;
-      environment.initializedNotice = false;
-      const outcome = await this.#commands.run(
-        {
-          command: call.arguments.command,
-          directory,
-          // No inherited exports or startup hooks can replace the captured baseline on a later call.
-          env: {},
-          timeoutSeconds: call.arguments.timeout,
-          launch: commandReplay(baseline.shell, baseline.source, call.arguments.command),
-        },
-        output,
-        signal,
+    // The capture ignores its callers' signals, so a stopped first call cannot leave a failed snapshot behind.
+    this.#snapshot ??= this.#capture();
+    const snapshot = await Promise.race([this.#snapshot, aborted(signal)]);
+    if (snapshot === undefined) return stopped();
+    if (!snapshot.ok)
+      return failure(
+        `Shell initialization failed: ${snapshot.reason}. Restart the node after correcting its shell startup configuration.`,
       );
-      const record = outcome.metadata?.toString("utf8");
-      const finalDirectory = record?.endsWith("\n\0") ? record.slice(0, -2) : undefined;
-      const accepted =
-        outcome.ending.kind === "exited" &&
-        !signal.aborted &&
-        finalDirectory !== undefined &&
-        isAbsolute(finalDirectory);
-      const remarks: string[] = [];
-      if (accepted) {
-        const changed = finalDirectory !== (publishes ? environment.mainDirectory : directory);
-        if (publishes) environment.mainDirectory = finalDirectory;
-        if (changed) {
-          remarks.push(
-            publishes
-              ? `[Working directory: ${finalDirectory}]`
-              : `[This command's final directory: ${finalDirectory}. The main working directory remains unchanged.]`,
-          );
-        }
-      } else {
-        remarks.push(
-          `[No working directory update was recorded. The main working directory remains ${environment.mainDirectory}.]`,
-        );
-      }
-      if (initialized)
-        remarks.push(
-          `[Initialized a new command environment at ${call.workspace}. Startup configuration is kept until the node restarts.]`,
-        );
-      return {
-        ...outcome.result,
-        content: [
-          ...outcome.result.content,
-          ...remarks.map((text) => ({ type: "text" as const, text: `\n${text}` })),
-        ],
-      };
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-      environment.callers.delete(token);
-      if (environment.publisher === token) environment.publisher = undefined;
+    const notes: string[] = [];
+    let directory = this.#directories.get(call.session) ?? call.workspace;
+    if (!isDirectory(directory)) {
+      notes.push(`[${directory} no longer exists; started in ${call.workspace}]`);
+      directory = call.workspace;
     }
+    const outcome = await this.#commands.run(
+      {
+        command: call.arguments.command,
+        directory,
+        // An empty environment keeps BASH_ENV, ENV and exported functions from bypassing the snapshot.
+        env: {},
+        timeoutSeconds: call.arguments.timeout,
+        launch: commandReplay(snapshot.shell, snapshot.path, call.arguments.command),
+      },
+      output,
+      signal,
+    );
+    const record = outcome.metadata?.toString("utf8");
+    const final = record?.endsWith("\n\0") ? record.slice(0, -2) : undefined;
+    if (final !== undefined && !call.arguments.background) {
+      this.#directories.set(call.session, final);
+      if (final !== directory) notes.push(`[Working directory: ${final}]`);
+    }
+    return notes.length === 0
+      ? outcome.result
+      : {
+          ...outcome.result,
+          content: [
+            ...outcome.result.content,
+            ...notes.map((text) => ({ type: "text" as const, text: `\n${text}` })),
+          ],
+        };
   }
 
-  shutdown(): void {
-    for (const environment of this.#agents.values()) environment.initialization.abort();
-  }
-
-  async #initialize(workspace: string, signal: AbortSignal): Promise<Baseline> {
+  async #capture(): Promise<Snapshot> {
     try {
-      const executable = userInfo().shell;
-      const family = executable === null ? undefined : basename(executable);
-      if (executable === null || (family !== "bash" && family !== "zsh")) {
-        return {
-          ok: false,
-          reason: `the node account's configured shell ${executable ?? "(unknown)"} is unsupported; Bash or zsh is required`,
-        };
-      }
-      const shell: AccountShell = { executable, family };
-      const outcome = await this.#commands.run(
-        {
-          command: "",
-          directory: workspace,
-          env: { ...process.env, HOME: homedir(), PWD: workspace },
-          timeoutSeconds: 30,
-          launch: startupCapture(shell),
-        },
-        () => {},
-        signal,
-      );
-      if (
-        outcome.ending.kind !== "exited" ||
-        outcome.ending.code !== 0 ||
-        outcome.metadata === undefined ||
-        signal.aborted
-      ) {
-        return {
-          ok: false,
-          reason: `startup did not produce a complete baseline within 30 seconds and 4 MiB (${outcome.result.content.map((part) => part.text).join("")})`,
-        };
-      }
-      return { ok: true, shell, source: restoreSource(shell, outcome.metadata) };
+      return await this.#captureOrThrow();
     } catch (error) {
       return { ok: false, reason: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  async #captureOrThrow(): Promise<Snapshot> {
+    const executable = userInfo().shell;
+    const family = executable === null ? undefined : basename(executable);
+    if (executable === null || (family !== "bash" && family !== "zsh")) {
+      return {
+        ok: false,
+        reason: `the node account's configured shell ${executable ?? "(unknown)"} is unsupported; Bash or zsh is required`,
+      };
+    }
+    const shell: AccountShell = { executable, family };
+    const home = homedir();
+    const outcome = await this.#commands.run(
+      {
+        command: "",
+        directory: home,
+        env: { ...process.env, HOME: home, PWD: home },
+        timeoutSeconds: 30,
+        launch: startupCapture(shell),
+      },
+      () => {},
+      new AbortController().signal,
+    );
+    if (
+      outcome.ending.kind !== "exited" ||
+      outcome.ending.code !== 0 ||
+      outcome.metadata === undefined
+    ) {
+      return {
+        ok: false,
+        reason: `startup did not produce a complete snapshot within 30 seconds and 4 MiB (${outcome.result.content.map((part) => part.text).join("")})`,
+      };
+    }
+    writeFileSync(this.#snapshotPath, snapshotSource(shell, outcome.metadata), { mode: 0o600 });
+    return { ok: true, shell, path: this.#snapshotPath };
+  }
+}
+
+function aborted(signal: AbortSignal): Promise<undefined> {
+  return new Promise((resolve) => {
+    if (signal.aborted) resolve(undefined);
+    signal.addEventListener("abort", () => resolve(undefined), { once: true });
+  });
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
   }
 }
 

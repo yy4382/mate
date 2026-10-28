@@ -302,17 +302,14 @@ Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准
 **工作区**（workspace）
 Agent 在某个 node 上的工作目录，路径为该 node 的 `<工作区根>/<agentId>`。每个已授权 node 上各有独立工作区，文件不跨 node 同步。主工作区在创建 Agent 时初始化目录与 MEMORY.md，执行时缺少目录就报错；访问工作区在授权或首次在线调用时准备，不初始化 MEMORY.md，已有文件保持原样。
 
+**启动快照**（startup snapshot）
+Linux/macOS node 每个进程捕获一次的账号 Bash/zsh 交互启动结果（选项、变量、函数、别名），存在数据目录，每条命令先 `source` 它。见 [ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)。
+
+**命令目录**（command directory）
+node 在内存里按 Agent 和对话记住的目录：该对话下一条命令从这里开始，前台命令结束时更新，后台命令不更新。初始为工作区，node 重启清空。文件工具不受它影响。
+
 **命令进程组**（command process group）
 node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Windows 活 shell 的进程树，追踪与停止的范围见 [ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)。
-
-**命令环境**（command environment）
-Linux/macOS node 在内存中为每个 Agent 保留的启动基线和主命令目录。主对话和助手共用基线，每次执行仍是新进程；node 重启清空，重连不清空。
-
-**启动基线**（startup baseline）
-首次调用时通过宿主账号 Bash/zsh 的交互式非登录启动规则捕获的普通配置，包括环境、变量和数组、函数、别名及配置选项。后续调用恢复同一份基线，不继承前一条命令的修改。失败的初始化也保留到 node 重启，避免重复启动副作用。
-
-**主命令目录**（main working directory）
-每个 Agent 在每个 node 上记住的物理目录，初始为工作区。只有获得更新权的主对话前台调用可发布最终目录；同期其他调用、后台和助手不发布。文件工具的根仍为工作区。
 
 **身份拒绝**（gateway.refused）
 网关对 node 说"你是谁"不被接受：身份不认识（`unknown_identity`）、签名或公钥无效、配对令牌被拒。除了"不认识"而 node 手里有配对令牌的情况，node 收到后退出，不重试。

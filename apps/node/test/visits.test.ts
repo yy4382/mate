@@ -76,7 +76,7 @@ describe("node visits (MODULE_TESTS 8)", () => {
       "visit",
     );
     expect(command.isError, textOf(command)).toBe(false);
-    expect(command.content[0]?.text.trim()).toBe("first\nupdated");
+    expect(textOf(command).trim()).toBe("first\nupdated");
 
     const outside = temporaryDirectory();
     const secret = join(outside, "secret.txt");

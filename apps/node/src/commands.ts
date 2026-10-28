@@ -19,7 +19,7 @@ export type CommandRequest = {
 };
 
 /** How a command ended, as the shell process reports it, or why it never ran. */
-export type Ending =
+type Ending =
   | { kind: "exited"; code: number }
   | { kind: "signaled"; signal: string }
   | { kind: "timed-out" }
@@ -68,7 +68,6 @@ export class Commands {
         failures.push(stopped.reason);
         group.child.stdout.destroy();
         group.child.stderr.destroy();
-        group.input?.destroy();
         group.metadata?.destroy();
         group.child.unref();
       }
@@ -117,7 +116,6 @@ export class Commands {
     }
     if (shell.pid === undefined) {
       const ending = await exit;
-      group.input?.destroy();
       group.metadata?.destroy();
       return { ending, pipesHeld: false, background: "finished" };
     }
@@ -180,7 +178,6 @@ export class Commands {
     const pipesHeld = open > 0;
     shell.stdout.destroy();
     shell.stderr.destroy();
-    group.input?.destroy();
     group.metadata?.destroy();
     const background = group.background();
     if (background !== "running") this.#groups.delete(group);

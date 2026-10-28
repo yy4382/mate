@@ -48,9 +48,11 @@ describe("background commands", () => {
 
     const input = await runtime.submit("build it", { requestId: "m1" });
     const build = await agent.workspace.nextCall();
-    expect(build.request.conversationRole).toBe("main");
     const ls = await agent.workspace.nextCall();
     expect(ls.request.arguments["command"], "a second command ran beside the first").toBe("ls");
+    expect(build.request.conversationId, "both share the conversation's directory").toBe(
+      ls.request.conversationId,
+    );
     ls.resolve(text("Makefile"));
 
     expect(await input.settled(), "the run ended while the command still runs").toBe("done");
@@ -345,7 +347,6 @@ describe("background commands", () => {
     await runtime.submit("get it built", { requestId: "m1" });
     const build = await agent.workspace.nextCall();
     await primaryRead.promise;
-    expect(build.request.conversationRole).toBe("assistant");
     expect(build.signal.aborted, "the assistant's command still runs").toBe(false);
     build.resolve(text("built"));
     await assistantDone.promise;

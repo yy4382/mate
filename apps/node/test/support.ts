@@ -41,7 +41,7 @@ export type NodeProcess = {
     args: Record<string, JsonValue>,
     onOutput?: (chunk: string) => void,
     access?: NodeAccess,
-    conversationRole?: "main" | "assistant",
+    conversationId?: number,
   ): Promise<ToolResult>;
 };
 
@@ -110,8 +110,8 @@ export async function startNodeProcess(options: StartOptions = {}): Promise<Node
       if (prepared.isError) throw new Error(prepared.content[0]?.text);
       return { agentId, workspace: join(workspacesRoot, agentId) };
     },
-    run: (agentId, tool, args, onOutput, access, conversationRole) =>
-      node.gateway.runTool(randomUUID(), agentId, tool, args, onOutput, access, conversationRole),
+    run: (agentId, tool, args, onOutput, access, conversationId) =>
+      node.gateway.runTool(randomUUID(), agentId, tool, args, onOutput, access, conversationId),
   };
   return node;
 }

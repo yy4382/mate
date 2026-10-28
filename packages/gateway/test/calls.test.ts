@@ -5,113 +5,8 @@ import { FakeNode } from "@mate/testkit";
 import { deferred, eventually, never, startGateway, text, toolResult, within } from "./support.ts";
 
 describe("node gateway tool calls (MODULE_TESTS 7)", () => {
-  it.each(["linux", "darwin", undefined])(
-    "requires a shell-context upgrade from a legacy %s peer while preserving file tools",
-    async (platform) => {
-      const under = await startGateway();
-      const calls: GatewayRunTool[] = [];
-      const node = await under.pairedNode({
-        shellContext: false,
-        ...(platform === undefined
-          ? {}
-          : {
-              system: {
-                platform,
-                arch: "x64",
-                hostname: "legacy",
-                osRelease: "test",
-                version: "old",
-              },
-            }),
-        onRunTool: async (call) => {
-          calls.push(call);
-          return { outputs: [], result: toolResult("file read") };
-        },
-      });
-      const command = await under.gateway.runTool(
-        node.nodeId,
-        "agent-1",
-        { access: "home", tool: "bash", arguments: { command: "pwd" } },
-        () => {},
-        never,
-      );
-      expect(command.isError).toBe(true);
-      expect(text(command)).toContain("upgraded");
-      expect(calls).toEqual([]);
-      const file = await under.gateway.runTool(
-        node.nodeId,
-        "agent-1",
-        { access: "home", tool: "read", arguments: { path: "notes.txt" } },
-        () => {},
-        never,
-      );
-      expect(file).toEqual(toolResult("file read"));
-    },
-  );
-
-  it("keeps known Windows execution and requires current-connection evidence after reconnect", async () => {
-    const under = await startGateway();
-    const node = await under.pairedNode({
-      shellContext: false,
-      system: {
-        platform: "win32",
-        arch: "x64",
-        hostname: "windows",
-        osRelease: "test",
-        version: "old",
-      },
-      onRunTool: async () => ({ outputs: [], result: toolResult("Windows ran") }),
-    });
-    const run = () =>
-      under.gateway.runTool(
-        node.nodeId,
-        "agent-1",
-        { access: "home", tool: "bash", arguments: { command: "pwd" } },
-        () => {},
-        never,
-      );
-    expect(await run()).toEqual(toolResult("Windows ran"));
-    const unknown = new FakeNode({
-      gatewayUrl: under.url,
-      nodeId: node.nodeId,
-      publicKey: node.publicKey,
-      sign: node.sign,
-      shellContext: false,
-    });
-    onTestFinished(() => unknown.terminate());
-    await unknown.connect();
-    expect(under.gateway.status(node.nodeId).system?.platform).toBe("win32");
-    expect(text(await run())).toContain("upgraded");
-  });
-
-  it("forgets shell-context capability when a capable POSIX peer reconnects without it", async () => {
-    const under = await startGateway();
-    const node = await under.pairedNode({
-      onRunTool: async () => ({ outputs: [], result: toolResult("ran") }),
-    });
-    const run = () =>
-      under.gateway.runTool(
-        node.nodeId,
-        "agent-1",
-        { access: "home", tool: "bash", arguments: { command: "pwd" } },
-        () => {},
-        never,
-      );
-    expect(await run()).toEqual(toolResult("ran"));
-    const legacy = new FakeNode({
-      gatewayUrl: under.url,
-      nodeId: node.nodeId,
-      publicKey: node.publicKey,
-      sign: node.sign,
-      shellContext: false,
-    });
-    onTestFinished(() => legacy.terminate());
-    await legacy.connect();
-    expect(text(await run())).toContain("upgraded");
-  });
-
   it.each(["home", "visit"] as const)(
-    "sends %s access unchanged over the WebSocket",
+    "sends %s access and the calling conversation unchanged over the WebSocket",
     async (access) => {
       const under = await startGateway();
       const arrived: GatewayRunTool[] = [];
@@ -124,7 +19,7 @@ describe("node gateway tool calls (MODULE_TESTS 7)", () => {
       });
       const request = {
         access,
-        conversationRole: "assistant" as const,
+        conversationId: 1,
         tool: "bash" as const,
         arguments: { command: "echo hello" },
       };

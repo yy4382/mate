@@ -129,7 +129,6 @@ export function connect(
             signature: signChallenge(options.identity, nonce),
             system: nodeSystem(),
             workspaceVisits: true,
-            ...(process.platform === "win32" ? {} : { shellContext: true as const }),
           });
           return;
         case "gateway.refused":
@@ -147,7 +146,6 @@ export function connect(
               pairingToken: options.pairingToken,
               system: nodeSystem(),
               workspaceVisits: true,
-              ...(process.platform === "win32" ? {} : { shellContext: true as const }),
             });
             return;
           }

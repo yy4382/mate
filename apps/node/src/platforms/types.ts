@@ -1,5 +1,5 @@
 import type { ChildProcessByStdio } from "node:child_process";
-import type { Readable, Writable } from "node:stream";
+import type { Readable } from "node:stream";
 
 export type PlatformId = "linux" | "darwin" | "win32";
 export type Ownership = "absent" | "mate" | "foreign";
@@ -24,7 +24,6 @@ export type Background = "running" | "finished";
 
 export type CommandProcess = {
   child: ChildProcessByStdio<null, Readable, Readable>;
-  input?: Writable;
   metadata?: Readable;
   kill(): { ok: true } | { ok: false; reason: string };
   background(): Background;
@@ -37,7 +36,6 @@ export type ShellRequest = {
   launch?: {
     executable: string;
     args: string[];
-    input?: Buffer;
     metadata: { frames: number; maxBytes: number };
   };
 };

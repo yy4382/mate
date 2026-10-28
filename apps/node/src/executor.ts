@@ -20,10 +20,10 @@ export class Executor {
   readonly #commands: Commands;
   readonly #shells: Shells;
 
-  constructor(workspacesRoot: string, clock: Clock) {
+  constructor(workspacesRoot: string, dataDirectory: string, clock: Clock) {
     this.#root = workspacesRoot;
     this.#commands = new Commands(clock);
-    this.#shells = new Shells(this.#commands);
+    this.#shells = new Shells(this.#commands, dataDirectory);
   }
 
   /** Run one tool call to its end. `signal` stops it: the Agent was stopped or nobody waits for the result any more. */
@@ -47,16 +47,13 @@ export class Executor {
     if (process.platform !== "win32")
       return this.#shells.run(
         {
-          agentId: call.agentId,
+          session: `${call.agentId}/${call.conversationId ?? ""}`,
           workspace: directory,
-          role: call.conversationRole,
           arguments: args.arguments,
         },
         onOutput,
         signal,
       );
-    if (args.arguments.workdir !== undefined)
-      return failure("The workdir argument is unavailable on Windows nodes.");
     const env = { ...process.env, PWD: directory, HOME: directory };
     const outcome = await this.#commands.run(
       {
@@ -102,7 +99,6 @@ export class Executor {
 
   /** Kill every process group the node started. */
   shutdown(): void {
-    this.#shells.shutdown();
     this.#commands.killAll();
   }
 }

@@ -10,7 +10,6 @@ import {
   type NodeSystem,
   type ToolName,
   type ToolResult,
-  type ConversationRole,
 } from "@mate/node-protocol";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
@@ -51,7 +50,7 @@ export interface RunToolRequest {
   tool: ToolName;
   arguments: Record<string, JsonValue>;
   access: NodeAccess;
-  conversationRole?: ConversationRole;
+  conversationId?: number;
 }
 
 export interface NodeGateway {
@@ -143,7 +142,7 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
     async runTool(
       nodeId,
       agentId,
-      { tool, arguments: args, access, conversationRole = "main" },
+      { tool, arguments: args, access, conversationId },
       onOutput,
       signal,
     ) {
@@ -153,25 +152,13 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
         requestId: randomUUID(),
         agentId,
         access,
-        conversationRole,
+        conversationId,
         tool,
         arguments: args,
       });
       const ws = ctx.connected.get(nodeId);
       if (ws === undefined) return offlineResult();
       if (signal.aborted) return stoppedResult();
-      const session = ctx.sessions.get(ws);
-      if (tool === "bash" && session?.shellContext !== true && session?.platform !== "win32") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "This node must be upgraded before bash can run with shell-context support. File tools remain available.",
-            },
-          ],
-          isError: true,
-        };
-      }
       if (access === "visit" && !ctx.sessions.get(ws)?.workspaceVisits)
         return workspaceVisitUnsupported();
 

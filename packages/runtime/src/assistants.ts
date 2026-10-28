@@ -1,6 +1,4 @@
 import { Type } from "@earendil-works/pi-ai";
-import type { Context } from "@earendil-works/chord";
-import type { ConversationRole } from "@mate/node-protocol";
 import {
   AssistantEntry,
   LiveDoc,
@@ -12,7 +10,6 @@ import {
   section,
   type ConversationId,
   type EntryId,
-  type DocumentReader,
   type Extension,
   type Tx,
 } from "@earendil-works/pi-durable";
@@ -47,15 +44,6 @@ const AssistantIdentityDoc = defineDoc<{
   fork: "initial",
   initial: () => ({ assistant: null }),
 });
-
-export async function conversationRole(
-  read: Pick<DocumentReader, "snapshot">,
-  conversationId: ConversationId,
-  context: Context,
-): Promise<ConversationRole> {
-  const identity = await read.snapshot(AssistantIdentityDoc, conversationId, context);
-  return identity?.assistant == null ? "main" : "assistant";
-}
 
 /**
  * An assistant's conversation must outlive the primary conversation's runs, so it is owned by an anchor: a background

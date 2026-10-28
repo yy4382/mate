@@ -120,7 +120,7 @@ describe("Agents work together", () => {
         ]);
       })
       .step("answer", (request) => {
-        expect(output(request, work[0]).split("\n")[0]).toBe("built");
+        expect(output(request, work[0]).trim()).toBe("built");
         request.text("artifact.txt says: built");
       });
     system.provider

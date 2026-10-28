@@ -69,7 +69,7 @@ export function startupCapture(shell: AccountShell) {
   };
 }
 
-export function restoreSource(shell: AccountShell, metadata: Buffer): Buffer {
+export function snapshotSource(shell: AccountShell, metadata: Buffer): string {
   const parts = metadata.toString("utf8").split("\0");
   const options = (parts[0] ?? "")
     .split("\n")
@@ -89,22 +89,18 @@ export function restoreSource(shell: AccountShell, metadata: Buffer): Buffer {
       : 'builtin typeset +x "$__mate_name"; builtin unset -v "$__mate_name"',
   );
   // Bash set +o posix can reset shopt flags. Zsh modules need their search path before reset.
-  return Buffer.from(
-    shell.family === "bash"
-      ? `${reset}\n${parts[2]}\n${options}\n${parts[1]}\n`
-      : `${parts[1]}\n${reset}\n${parts[2]}\n${options}\n`,
-  );
+  return shell.family === "bash"
+    ? `${reset}\n${parts[2]}\n${options}\n${parts[1]}\n`
+    : `${parts[1]}\n${reset}\n${parts[2]}\n${options}\n`;
 }
 
-export function commandReplay(shell: AccountShell, source: Buffer, command: string) {
-  // Bash must enable extglob before eval parses the captured function bodies.
+export function commandReplay(shell: AccountShell, snapshot: string, command: string) {
+  // Bash must enable extglob before it parses the snapshot's function bodies.
   const wrapper = String.raw`
-IFS= builtin read -r -d '' __mate_restore <&4 || :
 builtin set -e
 ${shell.family === "bash" ? "builtin shopt -s extglob" : ""}
-builtin eval "$__mate_restore"
-builtin unset __mate_restore
-builtin eval "$1"
+builtin . "$1"
+builtin eval "$2" 3>&-
 __mate_status=$?
 builtin pwd -P >&3 && builtin printf '\0' >&3
 builtin exit "$__mate_status"
@@ -116,9 +112,9 @@ builtin exit "$__mate_status"
       "-c",
       wrapper,
       shell.executable,
+      snapshot,
       command,
     ],
-    input: source,
     metadata: { frames: 1, maxBytes: 64 * 1024 },
   };
 }

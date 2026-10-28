@@ -230,7 +230,7 @@ interface ChatApp {
 
 **助手投递：** 进入工作助手对话的输入只有一条路：**投递**，也就是主对话里的一个 Durable 后台任务。它把输入（带 `requestId`）提交给目标对话；目标是助手时，再等助手的回答，把它作为 `[assistant <名字> answered] <回答>` 以 `followUp` 方式提交给主对话（`requestId = assistant-report:<投递任务 ID>`）。每一步都有检查点，所以重启后助手只收到一次输入，主对话只收到一次汇报；一次回答同时答了几条输入时，只汇报一次。主对话的 `send`、`spawn` 和助手自己的后台命令结束都走投递，所以助手的每个回答都会回到主对话，不管输入从哪来。`send`、`spawn` 以 `steer` 提交（`send` 带 `followUp: true` 时以 `followUp`），后台命令的汇报以 `steer` 提交。
 
-**后台命令输入**仍是版本 1 的平铺参数，`node` 和 `workdir` 可选；旧记录没有这些字段时按主 node 和默认命令目录处理。显式指定 node 的命令在结束或中断汇报的第一行标出目标。主对话或工作助手的角色在执行时从所属对话的 `AssistantIdentityDoc` 读取，不存进任务输入，也不接受模型传入。
+**后台命令输入**仍是版本 1 的平铺参数，只新增可选的 `node`；旧记录没有该字段时按主 node 处理。显式指定 node 的命令在结束或中断汇报的第一行标出目标。
 
 所有工具都直接暴露给模型，不经过"先列出工具、再调用"的元工具。
 
@@ -374,7 +374,7 @@ interface AgentManager {
 
 - **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于本次执行目录的 `NodeExecutionEnv`（**工作区环境**）上：所有调用的根都是该 node 上的 Agent 工作区。参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
 
-- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 使用账号配置的 Bash/zsh 和下述命令环境，Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及 POSIX 后台进程仍在运行。PowerShell 在最后一条命令失败时保留原生程序的非零退出码；后续命令成功后不沿用之前的失败码。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`、绝对 `workdir`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
+- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 是 node 账号配置的 Bash 或 zsh（见下面的**命令目录与启动快照**），Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及 POSIX 后台进程仍在运行。PowerShell 在最后一条命令失败时保留原生程序的非零退出码；后续命令成功后不沿用之前的失败码。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
 
 **接口（给管理模块）：**
 
@@ -384,7 +384,7 @@ type NodeAccess = "home" | "visit" // 主 node 或获准访问的非主 node，�
 interface NodeGateway {
   // 转发一次工具调用，把输出流式交给 onOutput，最后返回结果。从不重发，也没有自己的期限：调用在 node 回答、连接断开
   // 或 signal 中止时结束。中止 signal 时网关让 node 停掉这一次调用，并立即以"已停止"结束它
-  runTool(nodeId, agentId, { access, conversationRole, tool, arguments }, onOutput, signal): ToolResult
+  runTool(nodeId, agentId, { access, conversationId?, tool, arguments }, onOutput, signal): ToolResult
   prepareWorkspace(nodeId, agentId, access = "home"): ToolResult // home 创建目录和缺失的 MEMORY.md；visit 准备工作区，不初始化 MEMORY.md。可重复，离线返回错误
   status(nodeId): NodeStatusResult
   nodes(): NodeStatusResult[] // 所有已配对 node，给管理界面用
@@ -418,17 +418,19 @@ type NodeStatusResult = {
 9. **一个 node 一条连接，调用绑定在连接上。** 同一个 node 新认证的连接关闭旧连接。每个工具调用只接受发出它的那条连接送回的输出和结果；连接结束时，它带着的调用以"结果未知"结束并被忘掉，之后谁送来它的结果都不会交给调用方。
 10. **违规的连接立即结束。** 未认证的连接最多 32 条，超出的直接关闭；单条消息按收到的序列化帧计不超过 1 MiB，超出的由 WebSocket 层关闭；无法解析、不认识的消息、认证前发别的消息、重复认证，网关回一个 `gateway.error` 后关闭连接，并且从这一刻起不再读取这条连接送来的任何东西，node 立即离线。心跳超时（TCP 没断但收不到数据也算）同样结束连接。
 
-**命令环境由 node 持有。** Linux/macOS 上，每个 Agent 在每个 node 的首次 Bash 调用以宿主账号配置的 Bash 或 zsh 做交互式、非登录初始化，遵守 Bash rc 和 zsh ZDOTDIR 规则；不支持其他账号 shell 时明确失败，不替换为 `/bin/sh`。HOME 是 node 用户的主目录，初始 cwd 是 `<工作区根>/<agentId>`，即使 rc 改过目录也如此。node 将导出环境、普通变量和数组、只读自定义值、函数、别名和配置选项保存为不可变的**启动基线**。每次命令用新的非交互进程恢复基线；交互、作业控制、终端编辑和启动文件加载选项由执行器控制，不恢复进程资源或描述符。后续调用不继承上一条命令的 export、source、函数或选项修改。基线只在内存中，通过私有管道传入命令，不写磁盘、不放 argv 或环境变量；每次命令进程以空环境启动后恢复基线，避免重新导入 BASH_ENV、ENV 或导出函数。zsh 的强制系统 zshenv 仍由解释器执行。启动输出与命令输出分开，初始化限 30 秒、4 MiB；失败保留到 node 重启，避免重复 rc 副作用。并发调用共享初始化，停止一个等待者不影响其他等待者；全部停止或 node 关闭时通过同一 Commands 生命周期清理初始化进程。
+**工作区决定文件工具的根。** `read`、`write`、`edit` 的相对路径以 `<工作区根>/<agentId>` 为根，绝对路径必须位于该目录内。各 node 的文件独立，不同步。`MEMORY.md` 只由主 node 初始化，作为 Agent 自己维护和读取的记忆入口约定；runtime 恢复 SQLite 中的对话，不自动读取该文件。远端工作区提供独立执行目录，Agent 可以自行在其中创建任何允许的文件。
 
-**主命令目录**只属于该 node 内存里的 Agent。主对话前台调用在没有发布者时取得目录更新权，直到调用结束；同期其他调用永久隔离，不因发布者先结束而获得更新权。主对话后台调用从当时记住的目录开始，助手的前后台调用每次从工作区开始，两者都不发布目录。绝对 `workdir` 可覆盖一次调用的起点，有更新权的调用也会保存其最终目录。目录不存在时明确报错，不退回工作区；工作区仍在时可用 `workdir` 恢复，缺失主工作区的准备要求不被绕过。Bash 可进入宿主账号有权访问的工作区外目录。
+**命令目录与启动快照（Linux/macOS）。** 命令在 node 账号的 Bash 或 zsh 里执行，HOME 是账号的主目录，这样 Agent 用到的是人在终端里用的同一套 PATH、函数和别名。账号 shell 不是两者之一时 `bash` 明确失败，不退回 `/bin/sh`。
 
-命令用独立 argv 传给同一 shell 的 `eval`，正常返回后保存状态，向私有元数据管道写 `pwd -P` 的换行加 NUL，最后以原状态退出。不装 EXIT trap。只接受完整、有界的物理目录记录，去掉恰好一个末尾换行，保留路径内的空白和换行；无需等待元数据 EOF。shell 正常退出且调用未中止时才发布，非零退出也可发布。`exit`、`exec`、errexit 提前退出、信号、超时、停止或缺失记录都保留旧目录和真实结果，不重做命令。普通输出重定向或截断不影响记录；描述符不是防同账号恶意写入的安全边界；`__mate_` 前缀和记录描述符保留给执行器。目录改变时结果说明最终目录，隔离调用说明主目录未变，未能记录时说明沿用旧目录。首次执行结果附初始化说明，不声称恢复了旧状态。
+- **启动快照**：node 进程收到第一个 `bash` 调用时，在主目录以交互、非登录方式启动一次账号 shell，把它的选项、变量、函数和别名经私有描述符 3 写出，存为数据目录里的 `shell-snapshot`。每条命令用新的非交互进程、空环境（防止 `BASH_ENV`、`ENV` 和导出函数绕过快照）`source` 这个文件，再 `eval` 命令。用文件而不是管道：zsh `eval` 一份 200KB 的字符串要近 1 秒，`source` 只要 10ms。捕获不跟随调用方的停止信号，最多 30 秒、4 MiB；结果（包括失败）保留到 node 重启，免得一个卡住的 rc 让每条命令都等 30 秒。改了启动文件要重启 node 才生效。
+- **命令目录**：node 在内存里按 `agentId` 和对话（`conversationId`，runtime 从 Durable 的对话取得，不由模型传入）记住目录，初始为工作区。命令正常走完后把 `pwd -P` 写到描述符 3；命令本身看不到这个描述符。前台调用把它存为该对话的目录，变化时在结果末尾写明；后台调用从记住的目录开始，但不改它。同时进行的前台调用都从当时记住的目录开始，最后结束的那个决定结果。`exit`、`exec`、信号或超时让 shell 没走到最后时，目录不变。记住的目录不在了就从工作区开始，并在结果里说明。node 重连不清空它，node 重启清空。
+- 每个对话各自记住目录，所以工作助手的 `cd` 不影响主对话，反之亦然。
 
-node 重连、控制面重启、对话压缩、run 结束和 Agent 暂停恢复都不清空上述内存；只有 node 进程重启重新从工作区初始化并读取新的启动文件。Windows 保留无 profile 的 PowerShell 5.1 路径，每次 cwd、HOME、`$HOME` 都是工作区，不支持 `workdir` 和目录记忆。`read`、`write`、`edit` 和浏览始终以工作区为根，不随 shell 的 cd 改变，绝对路径必须位于工作区内。各 node 的文件独立，不同步。`MEMORY.md` 只由主 node 初始化，作为 Agent 自己维护和读取的记忆入口约定；runtime 恢复 SQLite 中的对话，不自动读取该文件。
+Windows 不变：PowerShell 5.1 不加载 profile，每次都在工作区执行，`HOME`、`PWD` 和 `$HOME` 也是工作区。
 
 管理模块用 `home` 和 `visit` 区分主 node 与获准访问的非主 node，并将该关系交给网关与 node；runtime 和 node 都不判断授权。两种关系共用执行目录规则，准备时仅主工作区初始化 MEMORY.md，远端准备不初始化它。
 
-**升级顺序。** 控制面先于 node 升级，node 不得比控制面新。新版 node 在认证和配对时声明 `workspaceVisits: true`，网关只在当前认证连接上保存该声明，不落库，也不从历史系统版本推断。缺少访问声明的连接仍可执行原有主 node 文件操作；网关拒绝向它发送 `visit` 的准备和工具调用，提示升级目标 node，既不让旧 node 初始化远端 `MEMORY.md`，也不让它在账号主目录执行。新连接替代旧连接时声明随连接替换。准备消息的 `access` 缺省为 `home`，保留旧主 node 调用的含义。 Linux/macOS node 另声明 `shellContext: true`；新版控制面只向当前连接具备该能力的 POSIX node 转发 Bash，旧 POSIX 或未知平台连接明确要求升级，文件工具仍可用。当前认证连接报告 Windows 时保留旧命令路径，不从历史系统报告推断平台或能力。
+**升级顺序。** 控制面先于 node 升级，node 不得比控制面新。新版 node 在认证和配对时声明 `workspaceVisits: true`，网关只在当前认证连接上保存该声明，不落库，也不从历史系统版本推断。缺少声明的连接仍可执行原有主 node 操作；网关拒绝向它发送 `visit` 的准备和工具调用，提示升级目标 node，既不让旧 node 初始化远端 `MEMORY.md`，也不让它在账号主目录执行。新连接替代旧连接时声明随连接替换。准备消息的 `access` 缺省为 `home`，保留旧主 node 调用的含义。
 
 **持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。POSIX 目录和私有文件分别用 0700、0600；Windows 存在当前账号的 `%LOCALAPPDATA%\Mate` 下，依靠该目录对普通账号的默认 ACL 隔离，不用 `chmod` 模拟 Windows 权限。网关的 node 注册表和配对令牌存在**控制库** `data/control.sqlite`，这个文件和 Web 外壳的登录、管理模块的 API key 共用：
 - 每个模块用 `@mate/control-store` 的 `openControlTables(dataDirectory, { module, migrations })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
@@ -489,7 +491,7 @@ interface Admin {
 
 拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`name-taken`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。每个拒绝都是 `AdminError`（或上面这种 `ChatError`）：对 Agent 的操作排在该 Agent 的队列里执行，排队期间 Agent 被删掉，同样是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
 
-**工作区宿主与授权。** `WorkspaceHost.port(homeNodeId, agentId)` 返回的端口接受 `{ tool, arguments, node?, conversationRole }`，runtime 统一将 `node` 从四个工具的参数中取出，并从对话身份读取可信角色；角色独立于模型参数，经管理模块和网关透传。端口的 `nodes()` 返回 `{ name, online, platform, home }[]`。缺省目标为主 node，否则按名字解析。
+**工作区宿主与授权。** `WorkspaceHost.port(homeNodeId, agentId)` 返回的端口接受 `{ tool, arguments, node?, conversationId }`，runtime 统一将 `node` 从四个工具的参数中取出，node 收到的 `arguments` 不变；`conversationId` 是发起调用的对话，经管理模块和网关原样交给 node。端口的 `nodes()` 返回 `{ name, online, platform, home }[]`。缺省目标为主 node，否则按名字解析。
 
 **只有 `nodeAccess(agentId, homeNodeId, targetNodeId)` 决定访问方式。** 主 node 返回 `home`，现读授权表命中的其他 node 返回 `visit`，其余拒绝。工具调用和 `nodes()` 共用这个函数；以后增加权限规则只改它和它读的数据。未知名字和未授权名字返回相同错误，列出可访问的名字，不向任何 node 发请求，也不泄露其他 node 是否存在。授权按 ID 保存，改名后仍有效。
 

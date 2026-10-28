@@ -24,8 +24,6 @@ export type ToolName = z.infer<typeof ToolNameSchema>;
 
 export const NodeAccessSchema = z.enum(["home", "visit"]);
 export type NodeAccess = z.infer<typeof NodeAccessSchema>;
-export const ConversationRoleSchema = z.enum(["main", "assistant"]);
-export type ConversationRole = z.infer<typeof ConversationRoleSchema>;
 
 // ── The bash tool ────────────────────────────────────────────────────────────
 
@@ -51,13 +49,6 @@ const { foreground, background } = BASH_TIMEOUT_SECONDS;
 const BashArgumentsSchema = z
   .object({
     command: z.string().describe("The command, run by the node's system shell"),
-    workdir: z
-      .string()
-      .regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/, "workdir must be an absolute directory path")
-      .optional()
-      .describe(
-        "Absolute starting directory for this call on Linux/macOS, including recovery from a removed remembered directory",
-      ),
     timeout: z
       .number()
       .positive()
@@ -84,12 +75,11 @@ const BashArgumentsSchema = z
       path: ["timeout"],
     },
   )
-  .transform(({ command, timeout, workdir, background: inBackground = false }) => {
+  .transform(({ command, timeout, background: inBackground = false }) => {
     const effective =
       timeout ?? BASH_TIMEOUT_SECONDS[inBackground ? "background" : "foreground"].default;
     return {
       command,
-      ...(workdir === undefined ? {} : { workdir }),
       background: inBackground,
       ...(effective === undefined ? {} : { timeout: effective }),
     };
@@ -112,22 +102,19 @@ const { $schema: _, ...bashParameters } = z.toJSONSchema(BashArgumentsSchema, { 
 export const bashTool = {
   name: "bash",
   description:
-    "Run a command in a fresh process. On Linux/macOS the interpreter is the node account's configured Bash or zsh, " +
-    "initialized once per Agent from its interactive non-login startup configuration. HOME is the node user's home. " +
-    "The initial directory is your workspace. Sequential main-conversation foreground calls remember their final directory; " +
-    "other shell changes do not survive a call. Use source setup.sh && command for setup needed in that call. " +
-    "Background calls and calls started while another main foreground call is running do not update the remembered main directory. Assistant calls start at the workspace " +
-    "each time. Use an absolute workdir to choose a starting directory, including recovery from a deleted directory. " +
-    "Prefer absolute paths for concurrent work; a sibling command's cd does not change your directory. File-tool paths " +
-    "always stay rooted in the workspace. On Windows, PowerShell 5.1 runs without profiles, with cwd and HOME at the " +
-    "workspace each time; workdir and directory persistence are unavailable. Returns " +
+    "Run a command in a fresh process. On Linux and macOS the shell is the node account's Bash or zsh, with the " +
+    "aliases, functions, variables and options its interactive startup files set, read once per node start; HOME is " +
+    "the account's home. A command starts where this conversation's last foreground command on that node ended, at " +
+    "first your workspace, and the result names the new directory when a foreground command changes it. Background " +
+    "commands never change it, and other shell changes such as exports last only for the call. File-tool paths stay " +
+    "rooted in the workspace. On Windows, PowerShell 5.1 runs without profiles in your workspace, which is also HOME, " +
+    "every time. Returns " +
     `the combined stdout and stderr; only the last ${BASH_KEPT_OUTPUT_BYTES / 1024}KB are kept, and the result says ` +
     "how much was dropped before them. A nonzero exit, a kill by signal, and a timeout are errors. When the command " +
     "returns while processes it started in the background still run, the result says so; if they still hold the " +
     "output, it returns about a second after the command and says the output may be incomplete. You wait for a " +
     `foreground command, ${foreground.default / 60} minutes at most unless you give a timeout; run a long command ` +
-    "with background: true instead and keep working. Do not add & for Mate-managed background execution. Wait for its " +
-    "result input instead of polling; stop it with bash_stop.",
+    "with background: true instead and keep working.",
   parameters: bashParameters,
 } as const;
 
@@ -215,7 +202,6 @@ export const NodeAuthenticateSchema = z.object({
   signature: z.string().min(1),
   system: NodeSystemSchema,
   workspaceVisits: z.literal(true).optional(),
-  shellContext: z.literal(true).optional(),
 });
 
 export const NodePairSchema = z.object({
@@ -229,7 +215,6 @@ export const NodePairSchema = z.object({
   pairingToken: z.string().min(1),
   system: NodeSystemSchema,
   workspaceVisits: z.literal(true).optional(),
-  shellContext: z.literal(true).optional(),
 });
 
 export const NodePingSchema = z.object({
@@ -330,8 +315,8 @@ export const GatewayRunToolSchema = z.object({
   requestId,
   agentId,
   access: NodeAccessSchema,
-  /** Trusted conversation identity supplied by the runtime, outside model arguments. */
-  conversationRole: ConversationRoleSchema.default("main"),
+  /** The calling conversation, numbered within its Agent, which keys the node's remembered command directory. Absent from an older control plane. */
+  conversationId: z.number().int().nonnegative().optional(),
   tool: ToolNameSchema,
   arguments: z.record(z.string(), z.json()),
 });

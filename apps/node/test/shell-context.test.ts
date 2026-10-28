@@ -18,7 +18,7 @@ const shell = basename(userInfo().shell ?? "");
 const rc = shell === "bash" ? ".bashrc" : ".zshrc";
 
 describe.skipIf(windows)("node shell context (MODULE_TESTS 8.1)", () => {
-  it("restores startup functions and their scalar, array, readonly, export, alias and option dependencies once per Agent", async () => {
+  it("restores startup functions and their scalar, array, readonly, export, alias and option dependencies once per node", async () => {
     const node = await connectedNode({
       env: { REMOVED: "inherited", PRIVATE: "inherited", SHELL: "/not/the/account/shell" },
     });
@@ -72,9 +72,11 @@ describe.skipIf(windows)("node shell context (MODULE_TESTS 8.1)", () => {
     expect(readFileSync(join(node.home, "startups"), "utf8")).toBe("startup\n");
     expect(existsSync(join(node.home, "hook-ran"))).toBe(false);
     const other = await node.agent();
-    expect((await node.run(other.agentId, "bash", { command: "echo forbidden" })).isError).toBe(
-      true,
+    const shared = await node.run(other.agentId, "bash", { command: inspect });
+    expect(shared.content[0]?.text).toBe(
+      first.content[0]?.text.replaceAll(workspace, other.workspace),
     );
+    expect(readFileSync(join(node.home, "startups"), "utf8")).toBe("startup\n");
   });
 
   it("keeps startup variables absent when the interpreter supplies its own defaults", async () => {
@@ -169,7 +171,6 @@ describe.skipIf(windows)("node shell context (MODULE_TESTS 8.1)", () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("Command exited with code 1");
     expect(textOf(result)).not.toContain("must-not-run");
-    expect(textOf(result)).toContain("No working directory update");
     expect(textOf(await node.run(agentId, "bash", { command: "printf '%s' \"$PWD\"" }))).toBe(
       workspace,
     );
@@ -232,18 +233,17 @@ describe.skipIf(windows)("node shell context (MODULE_TESTS 8.1)", () => {
     expect(existsSync(join(workspace, "forbidden"))).toBe(false);
   });
 
-  it("retains the committed directory after exit, exec, signals and closed metadata without changing their outcomes", async () => {
+  it("keeps the previous directory when exit, exec or a signal ends the shell, without changing their outcomes", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    for (const [command, expected, isError] of [
-      ["cd /; exit 7", "Command exited with code 7", true],
-      ["cd /; exec /usr/bin/true", "No working directory update", false],
-      ["cd /; kill -TERM $$", "Command was killed by signal SIGTERM", true],
-      ["cd /; exec 3>&-; true", "No working directory update", false],
+    for (const [command, isError] of [
+      ["cd /; exit 7", true],
+      ["cd /; exec /usr/bin/true", false],
+      ["cd /; kill -TERM $$", true],
     ] as const) {
       const result = await node.run(agentId, "bash", { command });
       expect(result.isError, textOf(result)).toBe(isError);
-      expect(textOf(result)).toContain(expected);
+      expect(textOf(result)).not.toContain("Working directory");
       expect(textOf(await node.run(agentId, "bash", { command: "printf '%s' \"$PWD\"" }))).toBe(
         workspace,
       );
@@ -265,79 +265,54 @@ describe.skipIf(windows)("node shell context (MODULE_TESTS 8.1)", () => {
     );
   });
 
-  it("recovers a missing remembered directory only through an absolute override while preserving the workspace check", async () => {
+  it("starts in the workspace when the remembered directory is gone, and still requires the workspace", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     const directory = join(workspace, "removed");
     mkdirSync(directory);
     await node.run(agentId, "bash", { command: "cd removed" });
     rmSync(directory, { recursive: true });
-    const missing = await node.run(agentId, "bash", { command: "echo must-not-run" });
-    expect(missing.isError).toBe(true);
-    expect(textOf(missing)).toContain(directory);
-    expect(textOf(missing)).not.toContain("must-not-run");
-    const relative = await node.run(agentId, "bash", { command: "touch forbidden", workdir: "." });
-    expect(relative.isError).toBe(true);
-    expect(textOf(relative)).toContain("absolute");
-    expect(existsSync(join(workspace, "forbidden"))).toBe(false);
-    const recovered = await node.run(agentId, "bash", { command: "pwd", workdir: workspace });
-    expect(recovered.isError, textOf(recovered)).toBe(false);
-    expect(textOf(recovered)).toContain(`[Working directory: ${workspace}]`);
-    expect(textOf(await node.run(agentId, "bash", { command: "printf '%s' \"$PWD\"" }))).toBe(
-      workspace,
-    );
+    const fallback = await node.run(agentId, "bash", { command: "pwd" });
+    expect(fallback.isError, textOf(fallback)).toBe(false);
+    expect(fallback.content[0]?.text).toBe(`${workspace}\n`);
+    expect(textOf(fallback)).toContain(`${directory} no longer exists`);
     rmSync(workspace, { recursive: true });
-    const noWorkspace = await node.run(agentId, "bash", {
-      command: "echo forbidden",
-      workdir: node.home,
-    });
+    const noWorkspace = await node.run(agentId, "bash", { command: "echo forbidden" });
     expect(noWorkspace.isError).toBe(true);
     expect(textOf(noWorkspace)).toContain("prepare the workspace again");
   });
 
-  it("keeps overlapping calls isolated after their original publisher finishes", async () => {
+  it("starts overlapping calls from the remembered directory and keeps the one that finishes last", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    for (const name of ["owner", "sibling", "next"]) mkdirSync(join(workspace, name));
-    const owner = node.run(agentId, "bash", { command: `cd owner; ${longCommand("owner")}` });
-    await pidsOf(join(workspace, "owner"), "owner");
-    const sibling = node.run(agentId, "bash", { command: `cd sibling; ${longCommand("sibling")}` });
-    await pidsOf(join(workspace, "sibling"), "sibling");
-    writeFileSync(join(workspace, "owner", "owner.go"), "");
-    expect((await owner).isError).toBe(false);
-    await node.run(agentId, "bash", { command: "cd ../next" });
-    writeFileSync(join(workspace, "sibling", "sibling.go"), "");
-    const isolated = await sibling;
-    expect(textOf(isolated)).toContain(join(workspace, "sibling"));
-    expect(textOf(isolated)).toContain("main working directory remains unchanged");
+    for (const name of ["first", "last"]) mkdirSync(join(workspace, name));
+    const first = node.run(agentId, "bash", { command: `cd first; ${longCommand("first")}` });
+    await pidsOf(join(workspace, "first"), "first");
+    const last = node.run(agentId, "bash", { command: `cd last; ${longCommand("last")}` });
+    await pidsOf(join(workspace, "last"), "last");
+    writeFileSync(join(workspace, "first", "first.go"), "");
+    expect((await first).isError).toBe(false);
+    writeFileSync(join(workspace, "last", "last.go"), "");
+    expect((await last).isError).toBe(false);
     expect(textOf(await node.run(agentId, "bash", { command: "printf '%s' \"$PWD\"" }))).toBe(
-      join(workspace, "next"),
+      join(workspace, "last"),
     );
   });
 
-  it("starts main background calls at remembered cwd and assistants at workspace without publishing either", async () => {
+  it("remembers a directory per conversation, which background calls start from but never change", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    mkdirSync(join(workspace, "project"));
-    await node.run(agentId, "bash", { command: "cd project" });
-    const background = await node.run(agentId, "bash", { command: "pwd; cd /", background: true });
-    expect(background.content[0]?.text).toBe(`${join(workspace, "project")}\n`);
-    expect(textOf(background)).toContain("main working directory remains unchanged");
-    for (const background of [false, true]) {
-      const assistant = await node.run(
-        agentId,
-        "bash",
-        { command: "pwd; cd project", background },
-        undefined,
-        "home",
-        "assistant",
-      );
-      expect(assistant.content[0]?.text).toBe(`${workspace}\n`);
-      expect(textOf(assistant)).toContain("main working directory remains unchanged");
-    }
-    expect(textOf(await node.run(agentId, "bash", { command: "printf '%s' \"$PWD\"" }))).toBe(
-      join(workspace, "project"),
-    );
+    const project = join(workspace, "project");
+    mkdirSync(project);
+    const run = (conversationId: number, command: string, background = false) =>
+      node.run(agentId, "bash", { command, background }, undefined, "home", conversationId);
+    await run(1, "cd project");
+    const background = await run(1, "pwd; cd /", true);
+    expect(background.content[0]?.text).toBe(`${project}\n`);
+    expect(textOf(background)).not.toContain("Working directory");
+    expect((await run(2, "pwd; cd /")).content[0]?.text).toBe(`${workspace}\n`);
+    expect(textOf(await run(1, "printf '%s' \"$PWD\""))).toBe(project);
+    expect(textOf(await run(2, "printf '%s' \"$PWD\""))).toBe("/");
     const other = await node.agent();
     expect((await node.run(other.agentId, "bash", { command: "pwd" })).content[0]?.text).toBe(
       `${other.workspace}\n`,
@@ -345,9 +320,7 @@ describe.skipIf(windows)("node shell context (MODULE_TESTS 8.1)", () => {
     const before = node.gateway.authentications;
     node.gateway.disconnect();
     await eventually(() => node.gateway.authentications > before, "node reconnected");
-    expect(textOf(await node.run(agentId, "bash", { command: "printf '%s' \"$PWD\"" }))).toBe(
-      join(workspace, "project"),
-    );
+    expect(textOf(await run(1, "printf '%s' \"$PWD\""))).toBe(project);
   });
 
   it("does not repeat failed startup side effects until the node restarts", async () => {
@@ -369,7 +342,7 @@ describe.skipIf(windows)("node shell context (MODULE_TESTS 8.1)", () => {
     expect(retried.content[0]?.text).toBe("recovered\n");
   });
 
-  it("starts a new environment at the workspace after node restart and reloads startup configuration", async () => {
+  it("starts at the workspace after node restart and reloads startup configuration", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     writeFileSync(join(node.home, rc), "export STARTUP=before\n");
@@ -382,40 +355,36 @@ describe.skipIf(windows)("node shell context (MODULE_TESTS 8.1)", () => {
       command: 'printf \'%s|%s\' "$PWD" "$STARTUP"',
     });
     expect(result.content[0]?.text).toBe(`${workspace}|after`);
-    expect(textOf(result)).toContain("Initialized");
-    expect(textOf(result)).toContain(workspace);
   });
 
-  it("stops one startup waiter without cancelling another and cleans initialization when all callers stop", async () => {
+  it("keeps capturing startup for other callers, and for later ones, when its waiters stop", async () => {
     const node = await connectedNode();
-    const { agentId, workspace } = await node.agent();
+    const { agentId } = await node.agent();
     writeFileSync(
       join(node.home, rc),
-      `echo $$ > "$HOME/initializing.pid"; while [ ! -e "$HOME/startup.go" ]; do sleep 0.02; done\n`,
+      `echo started >> "$HOME/startups"; while [ ! -e "$HOME/startup.go" ]; do sleep 0.02; done\n`,
     );
     const first = node.gateway.runTool("first", agentId, "bash", { command: "echo first" });
     const second = node.run(agentId, "bash", { command: "echo second" });
-    await eventually(() => existsSync(join(node.home, "initializing.pid")), "startup began");
+    await eventually(() => existsSync(join(node.home, "startups")), "startup began");
     node.gateway.stopTool("first");
     expect((await first).isError).toBe(true);
     writeFileSync(join(node.home, "startup.go"), "");
     expect((await second).content[0]?.text).toBe("second\n");
-    expect(textOf(await node.run(agentId, "bash", { command: "printf '%s' \"$PWD\"" }))).toBe(
-      workspace,
+
+    const alone = await connectedNode();
+    const lone = await alone.agent();
+    writeFileSync(
+      join(alone.home, rc),
+      `echo started >> "$HOME/startups"; while [ ! -e "$HOME/startup.go" ]; do sleep 0.02; done\n`,
     );
-    rmSync(join(node.home, "startup.go"));
-    rmSync(join(node.home, "initializing.pid"));
-    const other = await node.agent();
-    const alone = node.gateway.runTool("alone", other.agentId, "bash", {
-      command: "echo forbidden",
-    });
-    await eventually(() => existsSync(join(node.home, "initializing.pid")), "second startup began");
-    const pid = Number(readFileSync(join(node.home, "initializing.pid"), "utf8"));
-    node.gateway.stopTool("alone");
-    expect((await alone).isError).toBe(true);
-    await eventually(() => !running(pid), "startup process stopped");
-    expect(textOf(await node.run(other.agentId, "bash", { command: "echo forbidden" }))).toContain(
-      "Restart the node",
-    );
+    const stopped = alone.gateway.runTool("alone", lone.agentId, "bash", { command: "echo no" });
+    await eventually(() => existsSync(join(alone.home, "startups")), "second startup began");
+    alone.gateway.stopTool("alone");
+    expect((await stopped).isError).toBe(true);
+    writeFileSync(join(alone.home, "startup.go"), "");
+    const later = await alone.run(lone.agentId, "bash", { command: "echo later" });
+    expect(later.content[0]?.text).toBe("later\n");
+    expect(readFileSync(join(alone.home, "startups"), "utf8")).toBe("started\n");
   });
 });

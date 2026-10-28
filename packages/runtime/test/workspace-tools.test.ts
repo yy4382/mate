@@ -62,7 +62,6 @@ describe("workspace targets", () => {
         },
       ]);
       for (const call of agent.workspace.calls) {
-        expect(call.conversationRole).toBe("main");
         if (node === undefined) expect(call).not.toHaveProperty("node");
         else expect(call.node).toBe("laptop");
         expect(call.arguments).not.toHaveProperty("node");
@@ -100,12 +99,13 @@ describe("workspace targets", () => {
 
   it("offers node_list to work assistants", async () => {
     const agent = await testAgent();
-    agent.workspace.answerAll(() => text("workspace reached"));
+    agent.workspace.answerAll(() => text("done"));
     const primaryReady = Promise.withResolvers<void>();
     const finished = Promise.withResolvers<void>();
     agent.provider
       .step("primary spawns the reader", (request) => {
         request.call([
+          { name: "bash", arguments: { command: "pwd" } },
           {
             name: "assistant",
             arguments: { action: "spawn", name: "reader", message: "check available nodes" },
@@ -125,28 +125,18 @@ describe("workspace targets", () => {
       .step("assistant can list nodes", async (request) => {
         await primaryReady.promise;
         expect(request.toolNames()).toContain("node_list");
-        request.call([
-          {
-            name: "bash",
-            arguments: { command: "pwd", workdir: "/tmp", conversationRole: "main" },
-          },
-        ]);
+        request.call([{ name: "bash", arguments: { command: "pwd" } }]);
       })
-      .step("assistant gets its workspace result", (request) => {
-        request.text("I can list the available nodes");
-      });
+      .step("assistant answers", (request) => request.text("I can list the available nodes"));
     const { runtime } = await agent.open();
 
     await runtime.submit("delegate the check", { requestId: "m1" });
     await finished.promise;
     await runtime.idle();
-    expect(agent.workspace.calls).toHaveLength(1);
-    expect(agent.workspace.calls[0]).toMatchObject({
-      conversationRole: "assistant",
-      arguments: { workdir: "/tmp" },
-    });
-    expect(agent.workspace.calls[0]?.arguments).not.toHaveProperty("conversationRole");
 
+    const [primary, assistant] = agent.workspace.calls.map((call) => call.conversationId);
+    expect(primary, "each command names its conversation").toEqual(expect.any(Number));
+    expect(assistant, "the assistant's commands keep their own directory").not.toBe(primary);
     agent.provider.assertComplete();
   });
 });
