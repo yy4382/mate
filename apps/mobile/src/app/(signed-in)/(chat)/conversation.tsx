@@ -700,7 +700,11 @@ function TimelineList({
                 <ErrorLine text={timeline.error} />
                 <Button
                   title={t("chat.retry_loading")}
-                  onPress={() => void chat.retryLoad(ref, timeline.loaded)}
+                  onPress={() => {
+                    // A target that failed for want of this page is located again once it loads.
+                    if (destination === "failed") settled.current = false;
+                    void chat.retryLoad(ref, timeline.loaded);
+                  }}
                 />
               </View>
             ) : null}
