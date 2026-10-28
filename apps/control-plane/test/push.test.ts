@@ -29,7 +29,7 @@ it("refuses unusable APNs credentials before serving and can restart with native
         keyFile: join(directory, "missing-test-key.p8"),
         keyId: "TESTKEY001",
         teamId: "TESTTEAM01",
-        topic: "com.yy4382.mate",
+        topic: "dev.yyang.mate",
         environment: "sandbox",
         server,
       },
@@ -115,7 +115,7 @@ async function fixture(configured = true) {
             keyFile: apnsKey,
             keyId: "TESTKEY001",
             teamId: "TESTTEAM01",
-            topic: "com.yy4382.mate",
+            topic: "dev.yyang.mate",
             environment: "sandbox",
             server,
             connection: { address: "localhost", port: address.port, ca: [cert] },
@@ -269,7 +269,7 @@ it("validates native transport data and sends a private, scoped alert through th
   const request = f.requests[0]!;
   expect(request.headers).toMatchObject({
     ":path": `/3/device/${native.token}`,
-    "apns-topic": "com.yy4382.mate",
+    "apns-topic": "dev.yyang.mate",
     "apns-push-type": "alert",
     "apns-priority": "10",
     "apns-expiration": String((f.clock.now() + 86_400_000) / 1000),
