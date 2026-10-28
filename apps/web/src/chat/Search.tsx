@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, SearchX } from "lucide-react";
 import { get } from "../shell/api.ts";
@@ -45,13 +46,16 @@ export function SearchPage() {
           className="inline-flex w-fit items-center gap-1.5 text-sm text-muted no-underline hover:text-foreground [&_svg]:size-4"
         >
           <ArrowLeft aria-hidden />
-          返回聊天
+          {t("Search.backToChat")}
         </Link>
-        <PageHeader title={`搜索「${query}」`} description="在所有你能看到的会话里找消息。" />
+        <PageHeader
+          title={t("Search.resultsFor", { query })}
+          description={t("Search.searchMessagesInAllConversationsYouCanAccess")}
+        />
         <form
           key={query}
           role="search"
-          aria-label="搜索结果页搜索"
+          aria-label={t("Search.searchFromResults")}
           onSubmit={(event) => {
             event.preventDefault();
             const next = String(new FormData(event.currentTarget).get("q") ?? "").trim();
@@ -61,17 +65,19 @@ export function SearchPage() {
           <Input
             name="q"
             type="search"
-            aria-label="搜索词"
+            aria-label={t("Search.searchTerm")}
             defaultValue={query}
             className="max-w-md"
           />
         </form>
       </div>
       <ErrorLine error={hits.error} />
-      {hits.isPending && query !== "" ? <p className="text-sm text-muted">搜索中…</p> : null}
+      {hits.isPending && query !== "" ? (
+        <p className="text-sm text-muted">{t("Search.searching")}</p>
+      ) : null}
       {hits.data?.length === 0 ? (
-        <EmptyState icon={<SearchX />} title="没有找到匹配的消息。">
-          换个关键词试试。
+        <EmptyState icon={<SearchX />} title={t("Search.noMatchingMessages")}>
+          {t("Search.tryADifferentSearchTerm")}
         </EmptyState>
       ) : null}
       {hits.data === undefined || hits.data.length === 0 ? null : (

@@ -1,3 +1,4 @@
+import { t, locale } from "../i18n.ts";
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { Menu as BaseMenu } from "@base-ui/react/menu";
@@ -307,7 +308,7 @@ export function Dialog(props: {
               )}
             </div>
             <BaseDialog.Close
-              aria-label="关闭"
+              aria-label={t("ui.close")}
               className={buttonClass({
                 variant: "ghost",
                 size: "icon-sm",
@@ -354,7 +355,7 @@ export function ConfirmDialog(props: {
           </AlertDialog.Description>
           <div className="mt-6 flex justify-end gap-2">
             <AlertDialog.Close className={buttonClass({ variant: "secondary" })}>
-              取消
+              {t("ui.cancel")}
             </AlertDialog.Close>
             <Button
               variant="danger"
@@ -388,7 +389,7 @@ export function Menu(props: {
   return (
     <BaseMenu.Root>
       <BaseMenu.Trigger
-        aria-label={props.label ?? "更多"}
+        aria-label={props.label ?? t("ui.more")}
         className={props.triggerClassName ?? buttonClass({ variant: "ghost", size: "icon-sm" })}
       >
         {props.trigger ?? <MoreHorizontal aria-hidden />}
@@ -578,8 +579,9 @@ export function ErrorLine({ error }: { error: unknown }) {
 export function timeLabel(at: number): string {
   const date = new Date(at);
   const today = new Date();
-  const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-  return date.toDateString() === today.toDateString()
-    ? time
-    : `${date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" })} ${time}`;
+  return new Intl.DateTimeFormat(locale, {
+    ...(date.toDateString() === today.toDateString() ? {} : { month: "numeric", day: "numeric" }),
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }

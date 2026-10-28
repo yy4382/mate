@@ -1,3 +1,5 @@
+import { Trans } from "react-i18next";
+import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { Bot, MessageSquare, Plus } from "lucide-react";
 import { useState } from "react";
@@ -22,7 +24,7 @@ import {
   type Tone,
 } from "../shell/ui.tsx";
 import { AgentActions } from "./AgentActions.tsx";
-import { STATE_LABEL, totalTokens, useAgents, useModels, useNodes } from "./data.ts";
+import { thinkingLabel, STATE_LABEL, totalTokens, useAgents, useModels, useNodes } from "./data.ts";
 
 const STATE_TONE: Record<string, Tone> = {
   open: "success",
@@ -53,7 +55,7 @@ export function SettingsFields(props: {
   const chosen = models.find((m) => `${m.provider}/${m.modelId}` === value.model);
   return (
     <>
-      <Field label="模型">
+      <Field label={t("Agents.model")}>
         <Select
           value={value.model}
           onChange={(event) =>
@@ -61,7 +63,7 @@ export function SettingsFields(props: {
           }
           required
         >
-          <option value="">选择…</option>
+          <option value="">{t("Agents.select")}</option>
           {models.map((m) => (
             <option key={`${m.provider}/${m.modelId}`} value={`${m.provider}/${m.modelId}`}>
               {m.provider} · {m.name}
@@ -69,20 +71,20 @@ export function SettingsFields(props: {
           ))}
         </Select>
       </Field>
-      <Field label="思考级别">
+      <Field label={t("Agents.thinkingLevel")}>
         <Select
           value={value.thinking}
           onChange={(event) => props.onChange({ ...value, thinking: event.target.value })}
         >
-          <option value="">默认</option>
+          <option value="">{t("Agents.default")}</option>
           {chosen?.thinkingLevels.map((level) => (
             <option key={level} value={level}>
-              {level}
+              {thinkingLabel(level)}
             </option>
           ))}
         </Select>
       </Field>
-      <Field label="说明文字（可选）">
+      <Field label={t("Agents.instructionsOptional")}>
         <Textarea
           rows={3}
           value={value.instructions}
@@ -139,13 +141,13 @@ function CreateAgent(props: {
   const node = nodes.length === 1 ? nodes[0]?.nodeId : nodeId;
   return (
     <Dialog
-      title="创建 Agent"
-      description="给它起个名字，选好模型，它就会在聊天里上线。"
+      title={t("Agents.createAgent")}
+      description={t("Agents.giveItANameAndChooseAModel")}
       onClose={props.onClose}
     >
       <form
         className="grid gap-4"
-        aria-label="创建 Agent"
+        aria-label={t("Agents.createAgent")}
         onSubmit={async (event) => {
           event.preventDefault();
           try {
@@ -167,14 +169,14 @@ function CreateAgent(props: {
           }
         }}
       >
-        <Field label="显示名">
+        <Field label={t("Agents.displayName")}>
           <Input
             value={displayName}
             onChange={(event) => onDraft((d) => ({ ...d, displayName: event.target.value }))}
             required
           />
         </Field>
-        <Field label="Handle">
+        <Field label={t("common.handle")}>
           <Input
             value={handle}
             onChange={(event) => onDraft((d) => ({ ...d, handle: event.target.value }))}
@@ -184,28 +186,36 @@ function CreateAgent(props: {
         </Field>
         {nodes.length === 0 ? (
           <Notice>
-            还没有配对的 node，先到
-            <Link to="/app/admin/nodes" className={linkClass}>
-              Node
-            </Link>
-            里配对一个。
+            <Trans
+              i18nKey="Agents.pairFirst"
+              components={{
+                nodes: (
+                  <Link to="/app/admin/nodes" className={linkClass}>
+                    {null}
+                  </Link>
+                ),
+              }}
+            />
           </Notice>
         ) : nodes.length === 1 ? (
           <div className="grid gap-1.5">
-            <span className="text-sm font-medium">Node</span>
+            <span className="text-sm font-medium">{t("common.node")}</span>
             <span className="text-sm text-muted">{nodes[0]?.name}</span>
           </div>
         ) : (
-          <Field label="Node">
+          <Field label={t("common.node")}>
             <Select
               value={nodeId}
               onChange={(event) => onDraft((d) => ({ ...d, nodeId: event.target.value }))}
               required
             >
-              <option value="">选择…</option>
+              <option value="">{t("Agents.select")}</option>
               {nodes.map((n) => (
                 <option key={n.nodeId} value={n.nodeId}>
-                  {n.name}（{n.online ? "在线" : "离线"}）
+                  {t("Agents.nodeOption", {
+                    name: n.name,
+                    status: n.online ? t("Agents.online") : t("Agents.offline"),
+                  })}
                 </option>
               ))}
             </Select>
@@ -213,11 +223,16 @@ function CreateAgent(props: {
         )}
         {models.length === 0 ? (
           <Notice>
-            没有可选的模型，先到
-            <Link to="/app/admin/providers" className={linkClass}>
-              提供商
-            </Link>
-            里保存 API key。
+            <Trans
+              i18nKey="Agents.keyFirst"
+              components={{
+                providers: (
+                  <Link to="/app/admin/providers" className={linkClass}>
+                    {null}
+                  </Link>
+                ),
+              }}
+            />
           </Notice>
         ) : (
           <SettingsFields
@@ -233,7 +248,7 @@ function CreateAgent(props: {
             variant="primary"
             disabled={nodes.length === 0 || models.length === 0}
           >
-            {unfinished === null ? "创建" : "继续创建"}
+            {unfinished === null ? t("Agents.create") : t("Agents.continueCreating")}
           </Button>
         </div>
       </form>
@@ -276,10 +291,12 @@ function AgentRow({ agent }: { agent: AgentView }) {
               {agent.settings.model.provider}/{agent.settings.model.modelId}
               {agent.settings.thinkingLevel === undefined
                 ? ""
-                : ` · 思考 ${agent.settings.thinkingLevel}`}
-              {" · "}已用 {totalTokens(agent)} tokens
-              {" · Node "}
-              {agent.nodeName}
+                : t("Agents.thinkingSummary", {
+                    level: thinkingLabel(agent.settings.thinkingLevel),
+                  })}
+              {" · "}
+              {t("Agents.tokensUsed", { count: totalTokens(agent) })}
+              {t("Agents.homeNodeSummary", { name: agent.nodeName })}
             </p>
           )}
         </div>
@@ -288,10 +305,10 @@ function AgentRow({ agent }: { agent: AgentView }) {
             <Link
               to={`/app?dm=${encodeURIComponent(agent.handle)}`}
               className={buttonClass({ size: "sm", className: "max-sm:size-8 max-sm:px-0" })}
-              aria-label="发消息"
+              aria-label={t("Agents.sendMessage")}
             >
               <MessageSquare aria-hidden />
-              <span className="max-sm:hidden">发消息</span>
+              <span className="max-sm:hidden">{t("Agents.sendMessage")}</span>
             </Link>
           )}
           <AgentActions agent={agent} onError={setError} />
@@ -309,21 +326,21 @@ export function Agents() {
   const create = (
     <Button variant="primary" onClick={() => setCreating(true)}>
       <Plus aria-hidden />
-      创建 Agent
+      {t("Agents.createAgent")}
     </Button>
   );
   const empty = agents.data?.length === 0;
   return (
     <>
       <PageHeader
-        title="Agent"
-        description="常驻的 AI 同事。每个 Agent 有自己的上下文和工作目录。"
+        title={t("common.agents")}
+        description={t("Agents.persistentAiColleaguesEachAgentHasItsOwn")}
         actions={empty ? undefined : create}
       />
       <ErrorLine error={agents.error} />
       {empty ? (
-        <EmptyState icon={<Bot />} title="还没有 Agent。" action={create}>
-          创建一个，它就会出现在聊天里，等你交代事情。
+        <EmptyState icon={<Bot />} title={t("Agents.noAgentsYet")} action={create}>
+          {t("Agents.createAnAgentToStartWorkingWithIt")}
         </EmptyState>
       ) : null}
       {agents.data === undefined || empty ? null : (

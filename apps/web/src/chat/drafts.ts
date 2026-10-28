@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { ApiError, post } from "../shell/api.ts";
+import { ApiError, describe, post } from "../shell/api.ts";
 import type { AccountView, TimelineKey, TimelineRef } from "./types.ts";
 import { timelineKey } from "./types.ts";
 
@@ -74,7 +74,7 @@ async function deliver(ref: TimelineRef): Promise<void> {
     update(key, (draft) => ({
       ...draft,
       pending: refused ? null : { ...pending, status: "failed" },
-      error: error instanceof Error ? error.message : String(error),
+      error: describe(error),
     }));
   }
 }

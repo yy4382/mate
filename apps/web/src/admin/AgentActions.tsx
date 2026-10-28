@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { Pause, Play, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -30,13 +31,13 @@ export function AgentActions({
   const name = agent.displayName ?? agent.agentId;
   return (
     <>
-      <Menu label={`更多：${name}`}>
+      <Menu label={t("common.moreFor", { name: name })}>
         {agent.state === "open" ? (
           <MenuItem
             icon={<Pause aria-hidden />}
             onClick={() => run(() => post(`/api/admin/agents/${agent.agentId}/pause`))}
           >
-            暂停
+            {t("AgentActions.pause")}
           </MenuItem>
         ) : null}
         {agent.state === "paused" ? (
@@ -44,19 +45,19 @@ export function AgentActions({
             icon={<Play aria-hidden />}
             onClick={() => run(() => post(`/api/admin/agents/${agent.agentId}/resume`))}
           >
-            恢复
+            {t("AgentActions.resume")}
           </MenuItem>
         ) : null}
         <MenuItem tone="danger" icon={<Trash2 aria-hidden />} onClick={() => setConfirming(true)}>
-          删除 Agent
+          {t("AgentActions.deleteAgent")}
         </MenuItem>
       </Menu>
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}
-        title={`删除 ${name}？`}
-        description="它的设置和对话记录会被删除，聊天账号停用，无法恢复。已经发出的消息会保留。"
-        confirmLabel="删除"
+        title={t("AgentActions.deleteNamed", { name })}
+        description={t("AgentActions.itsSettingsAndConversationHistoryWillBeDeleted")}
+        confirmLabel={t("AgentActions.delete")}
         onConfirm={() =>
           run(async () => {
             await del(`/api/admin/agents/${agent.agentId}`);

@@ -126,6 +126,7 @@ export type Site = {
   ): Promise<string>;
   /** A scripted model provider whose address and key the owner has stored through the API. */
   provider(): Promise<ScriptedProvider>;
+  disconnectNodes(): void;
   /** An Agent on a paired node, whose model is the scripted provider. */
   agent(handle: string): Promise<TestAgent>;
   close(): Promise<void>;
@@ -159,6 +160,9 @@ export async function startSite(): Promise<Site> {
     clock,
     owner,
     close: () => plane.close(),
+    disconnectNodes: () => {
+      for (const node of nodes) node.terminate();
+    },
     async provider() {
       if (provider !== undefined) return provider;
       const started = await ScriptedProvider.start();
@@ -247,8 +251,9 @@ export async function startSite(): Promise<Site> {
 export async function newPage(
   site: Site,
   viewport: { width: number; height: number } = { width: 1280, height: 800 },
+  locale = "zh-CN",
 ): Promise<{ page: Page; context: BrowserContext }> {
-  const context = await (await chromiumBrowser()).newContext({ viewport });
+  const context = await (await chromiumBrowser()).newContext({ viewport, locale });
   onTestFinished(() => context.close());
   if (process.env.MATE_SCREENS === undefined)
     await context.route("https://api.dicebear.com/**", (route) =>

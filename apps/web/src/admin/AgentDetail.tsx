@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, MessageSquare } from "lucide-react";
 import { useState } from "react";
@@ -28,16 +29,19 @@ import { adminKeys, useAgents, useModels } from "./data.ts";
 type Tab = "settings" | "watch" | "workspace";
 
 const TABS: { value: Tab; label: string }[] = [
-  { value: "settings", label: "设置" },
-  { value: "watch", label: "观察" },
-  { value: "workspace", label: "工作区" },
+  { value: "settings", label: t("AgentDetail.settings") },
+  { value: "watch", label: t("AgentDetail.observe") },
+  { value: "workspace", label: t("AgentDetail.workspace") },
 ];
 
 function Breadcrumb({ name }: { name: string }) {
   return (
-    <nav aria-label="面包屑" className="flex items-center gap-2 text-sm text-muted">
+    <nav
+      aria-label={t("AgentDetail.breadcrumb")}
+      className="flex items-center gap-2 text-sm text-muted"
+    >
       <Link to="/app/admin/agents" className="text-muted no-underline hover:text-foreground">
-        Agent
+        {t("common.agents")}
       </Link>
       <span aria-hidden>/</span>
       <span className="truncate text-foreground">{name}</span>
@@ -62,8 +66,10 @@ export function AgentDetail({ agentId }: { agentId: string }) {
   if (agent === undefined)
     return agents.data === undefined ? null : (
       <>
-        <Breadcrumb name="未知" />
-        <EmptyState title="找不到这个 Agent。">它可能已经被删除了。</EmptyState>
+        <Breadcrumb name={t("AgentDetail.unknown")} />
+        <EmptyState title={t("AgentDetail.agentNotFound")}>
+          {t("AgentDetail.itMayHaveBeenDeleted")}
+        </EmptyState>
       </>
     );
   if (agent.state === "unreadable")
@@ -119,7 +125,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
               {agent.handle === undefined ? null : (
                 <Link to={`/app?dm=${encodeURIComponent(agent.handle)}`} className={buttonClass()}>
                   <MessageSquare aria-hidden />
-                  发消息
+                  {t("AgentDetail.sendMessage")}
                 </Link>
               )}
               <AgentActions
@@ -136,7 +142,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
         <TabPanel value="settings">
           <form
             className="mb-6"
-            aria-label="Agent 设置"
+            aria-label={t("AgentDetail.agentSettings")}
             onSubmit={async (event) => {
               event.preventDefault();
               try {
@@ -170,13 +176,15 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                     className={cx("flex items-center gap-1.5 text-sm text-success", feedbackClass)}
                   >
                     <Check aria-hidden className="size-4" />
-                    已保存，从下一次请求起生效。
+                    {t("AgentDetail.savedTakesEffectOnTheNextRequest")}
                   </p>
                 ) : (
-                  <p className="text-xs text-muted">从下一次模型请求起生效</p>
+                  <p className="text-xs text-muted">
+                    {t("AgentDetail.takesEffectOnTheNextModelRequest")}
+                  </p>
                 )}
                 <Button type="submit" variant="primary">
-                  保存设置
+                  {t("AgentDetail.saveSettings")}
                 </Button>
               </CardFooter>
             </Card>

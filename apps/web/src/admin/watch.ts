@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import type { AgentEvent } from "@mate/admin";
 
 type Entry = Extract<AgentEvent, { type: "snapshot" }>["entries"][number];
@@ -71,11 +72,20 @@ function apply(state: Watching, event: AgentEvent): Watching {
       };
     }
     case "task_failed":
-      return { ...state, notes: [...state.notes, `${event.kind} 失败：${event.message}`] };
+      return {
+        ...state,
+        notes: [
+          ...state.notes,
+          t("watch.taskFailed", { kind: watchLabel(event.kind), message: event.message }),
+        ],
+      };
     case "auto_retry_start":
       return {
         ...state,
-        notes: [...state.notes, `模型请求失败，第 ${event.attempt} 次重试：${event.errorMessage}`],
+        notes: [
+          ...state.notes,
+          t("watch.retry", { count: event.attempt, message: event.errorMessage }),
+        ],
       };
     default:
       return state;
@@ -104,11 +114,38 @@ export function describeEntry(entry: Entry): { role: string; text: string }[] {
               block.type === "text"
                 ? (block.text ?? "")
                 : block.type === "thinking"
-                  ? `（思考）${block.thinking ?? ""}`
+                  ? t("watch.thinking", { text: block.thinking ?? "" })
                   : block.type === "toolCall"
-                    ? `调用 ${block.name ?? "?"} ${JSON.stringify(block.arguments)}`
+                    ? t("watch.toolCall", {
+                        name: block.name ?? "?",
+                        arguments: JSON.stringify(block.arguments),
+                      })
                     : `[${block.type}]`,
             )
             .join("\n"),
   }));
+}
+
+export function watchLabel(kind: string): string {
+  const labels: Record<string, string> = {
+    system: t("watchLabels.system"),
+    reset: t("watchLabels.reset"),
+    compaction: t("watchLabels.compaction"),
+    user: t("watchLabels.user"),
+    assistant: t("watchLabels.assistant"),
+    toolResult: t("watchLabels.toolResult"),
+    "pi.user": t("watchLabels.pi_user"),
+    "pi.assistant": t("watchLabels.pi_assistant"),
+    "pi.system": t("watchLabels.pi_system"),
+    "pi.tool-result": t("watchLabels.pi_tool_result"),
+    "pi.reset": t("watchLabels.pi_reset"),
+    "pi.compaction": t("watchLabels.pi_compaction"),
+    "pi.generation": t("watchLabels.pi_generation"),
+    "pi.tool": t("watchLabels.pi_tool"),
+
+    "mate.input-delivery": t("watchLabels.mate_input_delivery"),
+    "mate.assistant-anchor": t("watchLabels.mate_assistant_anchor"),
+    "mate.background-command": t("watchLabels.mate_background_command"),
+  };
+  return labels[kind] ?? kind;
 }

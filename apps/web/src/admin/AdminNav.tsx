@@ -1,3 +1,4 @@
+import { t } from "../i18n.ts";
 import { Bot, KeyRound, Server, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useRoute } from "../shell/router.tsx";
@@ -6,10 +7,10 @@ import { cx } from "../shell/ui.tsx";
 type Section = "agents" | "providers" | "nodes" | "humans";
 
 const sections: { section: Section; label: string; icon: ReactNode }[] = [
-  { section: "agents", label: "Agent", icon: <Bot aria-hidden /> },
-  { section: "providers", label: "提供商", icon: <KeyRound aria-hidden /> },
-  { section: "nodes", label: "Node", icon: <Server aria-hidden /> },
-  { section: "humans", label: "人类", icon: <Users aria-hidden /> },
+  { section: "agents", label: t("common.agents"), icon: <Bot aria-hidden /> },
+  { section: "providers", label: t("AdminNav.providers"), icon: <KeyRound aria-hidden /> },
+  { section: "nodes", label: t("common.nodes"), icon: <Server aria-hidden /> },
+  { section: "humans", label: t("AdminNav.humans"), icon: <Users aria-hidden /> },
 ];
 
 /** The admin section's links: a tab row above the page on phones, a list in the sidebar on desktop. */
@@ -18,7 +19,7 @@ export function AdminNav() {
   const current = route.page === "admin" ? route.section : null;
   return (
     <nav
-      aria-label="管理"
+      aria-label={t("AdminNav.administration")}
       className="flex gap-1 overflow-x-auto border-b border-border px-4 md:flex-1 md:flex-col md:gap-0.5 md:border-0 md:p-2"
     >
       {sections.map((item) => (
