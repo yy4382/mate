@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { createECDH, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createSecureServer, type IncomingHttpHeaders, type ServerHttp2Session } from "node:http2";
+import { createServer as createHttpsServer, globalAgent } from "node:https";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeClock, HumanBrowser, temporaryDirectory } from "@mate/testkit";
@@ -314,4 +316,54 @@ it("does not hand notices older than a day to APNs after a delayed retry", async
   await f.say();
   await expect.poll(() => f.requests.length).toBe(2);
   expect(JSON.parse(f.requests[1]!.body).body.seq).toBe(2);
+});
+
+it("maps Web Push answers: 404 and 410 remove the subscription, 429 and 5xx retry, others drop the push", async () => {
+  const f = await fixture();
+  const paths: string[] = [];
+  const answers: Record<string, number[]> = {
+    "/gone": [410],
+    "/missing": [404],
+    "/refused": [400],
+    "/busy": [503],
+    "/limited": [429],
+  };
+  const service = createHttpsServer(tls, (request, response) => {
+    paths.push(request.url ?? "");
+    request.resume();
+    response.writeHead(answers[request.url ?? ""]?.shift() ?? 201).end();
+  });
+  await new Promise<void>((resolve) => service.listen(0, "127.0.0.1", resolve));
+  const { port } = service.address() as AddressInfo;
+  const ca = globalAgent.options.ca;
+  globalAgent.options.ca = tls.cert;
+  onTestFinished(async () => {
+    globalAgent.options.ca = ca;
+    await new Promise<void>((resolve) => service.close(() => resolve()));
+  });
+  const keys = {
+    p256dh: createECDH("prime256v1").generateKeys("base64url"),
+    auth: randomBytes(16).toString("base64url"),
+  };
+  for (const path of Object.keys(answers))
+    await f.owner.post("/api/chat/push/subscribe", {
+      endpoint: `https://localhost:${port}${path}`,
+      keys,
+    });
+  await f.say();
+  await expect.poll(() => paths.length).toBe(5);
+  await f.owner.get("/api/chat/snapshot");
+  f.clock.advance(30_000);
+  await expect.poll(() => paths.length).toBe(7);
+  expect(paths.slice(5).sort(), "only the transient failures are retried").toEqual([
+    "/busy",
+    "/limited",
+  ]);
+  await f.say();
+  await expect.poll(() => paths.length).toBe(10);
+  expect(paths.slice(7).sort(), "removed subscriptions get nothing more").toEqual([
+    "/busy",
+    "/limited",
+    "/refused",
+  ]);
 });

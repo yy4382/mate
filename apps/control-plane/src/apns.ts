@@ -34,6 +34,8 @@ export function openApns(options: ApnsOptions, now: () => number) {
     production: config.environment === "production",
     // Mate's durable queue owns retries, including Retry-After responses.
     connectionRetryLimit: 0,
+    // No per-request timeout of the library's own; the race below is the one deadline.
+    requestTimeout: 0,
   };
   let provider: apn.Provider | undefined = new apn.Provider(providerOptions);
   const send = async (subscription: ApnsSubscription, notice: PushNotice): Promise<PushOutcome> => {
