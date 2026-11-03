@@ -1,5 +1,5 @@
-import { CHAT_READ_UNREAD, createAgentStore, openAgentRuntime } from "@mate/runtime";
-import { FaultyDatabase } from "@mate/testkit";
+import { CHAT_READ_UNREAD, createAgentStore, openAgentRuntime } from "@palace/runtime";
+import { FaultyDatabase } from "@palace/testkit";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { connectInbox, type NoticeTarget } from "../src/index.ts";

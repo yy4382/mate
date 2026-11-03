@@ -1,5 +1,5 @@
 import { t, numberText, currencyText } from "../i18n";
-import type { SnapshotEvent } from "@mate/admin";
+import type { SnapshotEvent } from "@palace/admin";
 import { View } from "react-native";
 import { Caption, Copy, Empty, Row, Section } from "../ui";
 

@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import { t } from "./i18n.ts";
-import type { PushNotice } from "@mate/chat";
+import type { PushNotice } from "@palace/chat";
 
 const worker = self as unknown as ServiceWorkerGlobalScope;
 

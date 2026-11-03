@@ -9,19 +9,19 @@ import { currentPlatform } from "./platforms/index.ts";
 import { EXIT_DO_NOT_RESTART } from "./platforms/types.ts";
 
 const USAGE = `Usage:
-  mate node install <bundle.tar.gz>     install the program, the \`mate\` command and the service
-  mate node update <bundle.tar.gz>      replace the program while the service is stopped
-  mate node uninstall                   remove what install added; keeps config, identity and workspaces
-  mate node configure --control-plane <url> [--pairing-token <token>] [--workspaces <dir>]
-  mate node start | stop | status
-  mate node logs [--lines <n>] [--follow]
-  mate node run                         run the node in the foreground (what the service runs)`;
+  palace node install <bundle.tar.gz>     install the program, the \`palace\` command and the service
+  palace node update <bundle.tar.gz>      replace the program while the service is stopped
+  palace node uninstall                   remove what install added; keeps config, identity and workspaces
+  palace node configure --control-plane <url> [--pairing-token <token>] [--workspaces <dir>]
+  palace node start | stop | status
+  palace node logs [--lines <n>] [--follow]
+  palace node run                         run the node in the foreground (what the service runs)`;
 
 const [scope, command, ...rest] = process.argv.slice(2);
 if (scope !== "node" || command === undefined) usage();
 if (command === "run") await run(rest);
 if (process.getuid?.() === 0) {
-  fail("Refusing to run as root; run `mate` as the account the node and its Agents run as.");
+  fail("Refusing to run as root; run `palace` as the account the node and its Agents run as.");
 }
 try {
   process.exitCode = await manage(command, rest);
@@ -115,7 +115,7 @@ async function run(args: string[]): Promise<never> {
     exit(EXIT_DO_NOT_RESTART);
   }
   if (config === undefined) {
-    report(`${paths.config} is missing; run \`mate node configure\` first`);
+    report(`${paths.config} is missing; run \`palace node configure\` first`);
     exit(EXIT_DO_NOT_RESTART);
   }
   try {
@@ -160,6 +160,6 @@ function usage(): never {
 }
 
 function fail(message: string): never {
-  process.stderr.write(`mate: ${message}\n`);
+  process.stderr.write(`palace: ${message}\n`);
   process.exit(1);
 }

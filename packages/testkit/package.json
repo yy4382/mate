@@ -1,10 +1,10 @@
 {
-  "name": "@mate/testkit",
+  "name": "@palace/testkit",
   "private": true,
   "type": "module",
   "exports": {
     ".": {
-      "mate-source": "./src/index.ts",
+      "palace-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     }
@@ -15,8 +15,8 @@
   },
   "dependencies": {
     "@earendil-works/pi-durable": "1.1.0",
-    "@mate/clock": "workspace:*",
-    "@mate/node-protocol": "workspace:*",
+    "@palace/clock": "workspace:*",
+    "@palace/node-protocol": "workspace:*",
     "ws": "8.22.0",
     "zod": "4.6.5"
   },

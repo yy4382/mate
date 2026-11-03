@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { it } from "vitest";
 import { newPage, signIn, startSite } from "./support.ts";
 
-/** Screenshots of every page, for looking at the interface rather than testing it: `MATE_SCREENS=<dir> pnpm vitest run apps/web/test/screens.test.ts`. */
-const out = process.env.MATE_SCREENS;
+/** Screenshots of every page, for looking at the interface rather than testing it: `PALACE_SCREENS=<dir> pnpm vitest run apps/web/test/screens.test.ts`. */
+const out = process.env.PALACE_SCREENS;
 
 const VIEWS = [
   { name: "desktop", viewport: { width: 1280, height: 800 }, colorScheme: "light" },

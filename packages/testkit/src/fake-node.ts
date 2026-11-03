@@ -8,7 +8,7 @@ import {
   type NodeSystem,
   type NodeAccess,
   type ToolResult,
-} from "@mate/node-protocol";
+} from "@palace/node-protocol";
 import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 
@@ -16,7 +16,7 @@ export interface FakeNodeOptions {
   gatewayUrl: string;
   nodeId: string;
   /**
-   * Signs the nonce for authenticate/pair. In tests, pass signChallenge from @mate/node.
+   * Signs the nonce for authenticate/pair. In tests, pass signChallenge from @palace/node.
    * Accepts the nonce string and returns a base64url signature.
    */
   sign: (nonce: string) => string;

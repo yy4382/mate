@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChatApp } from "@mate/chat";
-import type { Clock } from "@mate/clock";
-import { type TimelineRef } from "@mate/chat/contracts";
+import { ChatApp } from "@palace/chat";
+import type { Clock } from "@palace/clock";
+import { type TimelineRef } from "@palace/chat/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { MobileChat, operationKey, type ChatPlatform, type ChatState } from "../src/chat.ts";
 
@@ -30,7 +30,7 @@ function until(chat: MobileChat, condition: (state: ChatState) => boolean): Prom
   });
 }
 function fixture(clock?: Clock) {
-  const directory = mkdtempSync(join(tmpdir(), "mate-chat-test-"));
+  const directory = mkdtempSync(join(tmpdir(), "palace-chat-test-"));
   const server = new ChatApp(join(directory, "chat.sqlite"));
   const me = server.ensureAccount({
     externalId: "me",

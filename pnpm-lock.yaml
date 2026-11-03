@@ -26,22 +26,22 @@ importers:
 
   apps/control-plane:
     dependencies:
-      '@mate/admin':
+      '@palace/admin':
         specifier: workspace:*
         version: link:../../packages/admin
-      '@mate/chat':
+      '@palace/chat':
         specifier: workspace:*
         version: link:../../packages/chat
-      '@mate/clock':
+      '@palace/clock':
         specifier: workspace:*
         version: link:../../packages/clock
-      '@mate/control-store':
+      '@palace/control-store':
         specifier: workspace:*
         version: link:../../packages/control-store
-      '@mate/gateway':
+      '@palace/gateway':
         specifier: workspace:*
         version: link:../../packages/gateway
-      '@mate/migrations':
+      '@palace/migrations':
         specifier: workspace:*
         version: link:../../packages/migrations
       '@parse/node-apn':
@@ -54,7 +54,7 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
-      '@mate/testkit':
+      '@palace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
       '@types/web-push':
@@ -72,16 +72,16 @@ importers:
       '@formatjs/intl-pluralrules':
         specifier: 6.3.16
         version: 6.3.16
-      '@mate/admin':
+      '@palace/admin':
         specifier: workspace:*
         version: link:../../packages/admin
-      '@mate/chat':
+      '@palace/chat':
         specifier: workspace:*
         version: link:../../packages/chat
-      '@mate/clock':
+      '@palace/clock':
         specifier: workspace:*
         version: link:../../packages/clock
-      '@mate/control-plane':
+      '@palace/control-plane':
         specifier: workspace:*
         version: link:../control-plane
       '@preeternal/react-native-cookie-manager':
@@ -181,10 +181,10 @@ importers:
       '@earendil-works/pi-durable':
         specifier: 1.1.0
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
-      '@mate/clock':
+      '@palace/clock':
         specifier: workspace:*
         version: link:../../packages/clock
-      '@mate/node-protocol':
+      '@palace/node-protocol':
         specifier: workspace:*
         version: link:../../packages/node-protocol
       typebox:
@@ -197,10 +197,10 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
-      '@mate/gateway':
+      '@palace/gateway':
         specifier: workspace:*
         version: link:../../packages/gateway
-      '@mate/testkit':
+      '@palace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
       '@types/ws':
@@ -246,16 +246,16 @@ importers:
         specifier: 4.3.3
         version: 4.3.3
     devDependencies:
-      '@mate/admin':
+      '@palace/admin':
         specifier: workspace:*
         version: link:../../packages/admin
-      '@mate/chat':
+      '@palace/chat':
         specifier: workspace:*
         version: link:../../packages/chat
-      '@mate/control-plane':
+      '@palace/control-plane':
         specifier: workspace:*
         version: link:../control-plane
-      '@mate/testkit':
+      '@palace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
       '@tailwindcss/vite':
@@ -279,51 +279,51 @@ importers:
 
   packages/admin:
     dependencies:
-      '@mate/chat':
+      '@palace/chat':
         specifier: workspace:*
         version: link:../chat
-      '@mate/clock':
+      '@palace/clock':
         specifier: workspace:*
         version: link:../clock
-      '@mate/control-store':
+      '@palace/control-store':
         specifier: workspace:*
         version: link:../control-store
-      '@mate/gateway':
+      '@palace/gateway':
         specifier: workspace:*
         version: link:../gateway
-      '@mate/manager':
+      '@palace/manager':
         specifier: workspace:*
         version: link:../manager
-      '@mate/migrations':
+      '@palace/migrations':
         specifier: workspace:*
         version: link:../migrations
-      '@mate/node-protocol':
+      '@palace/node-protocol':
         specifier: workspace:*
         version: link:../node-protocol
-      '@mate/runtime':
+      '@palace/runtime':
         specifier: workspace:*
         version: link:../runtime
       zod:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
-      '@mate/testkit':
+      '@palace/testkit':
         specifier: workspace:*
         version: link:../testkit
 
   packages/chat:
     dependencies:
-      '@mate/clock':
+      '@palace/clock':
         specifier: workspace:*
         version: link:../clock
-      '@mate/migrations':
+      '@palace/migrations':
         specifier: workspace:*
         version: link:../migrations
       zod:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
-      '@mate/testkit':
+      '@palace/testkit':
         specifier: workspace:*
         version: link:../testkit
 
@@ -331,29 +331,29 @@ importers:
 
   packages/control-store:
     dependencies:
-      '@mate/migrations':
+      '@palace/migrations':
         specifier: workspace:*
         version: link:../migrations
       zod:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
-      '@mate/testkit':
+      '@palace/testkit':
         specifier: workspace:*
         version: link:../testkit
 
   packages/gateway:
     dependencies:
-      '@mate/clock':
+      '@palace/clock':
         specifier: workspace:*
         version: link:../clock
-      '@mate/control-store':
+      '@palace/control-store':
         specifier: workspace:*
         version: link:../control-store
-      '@mate/migrations':
+      '@palace/migrations':
         specifier: workspace:*
         version: link:../migrations
-      '@mate/node-protocol':
+      '@palace/node-protocol':
         specifier: workspace:*
         version: link:../node-protocol
       ws:
@@ -363,7 +363,7 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
-      '@mate/testkit':
+      '@palace/testkit':
         specifier: workspace:*
         version: link:../testkit
       '@types/ws':
@@ -372,20 +372,20 @@ importers:
 
   packages/manager:
     dependencies:
-      '@mate/chat':
+      '@palace/chat':
         specifier: workspace:*
         version: link:../chat
-      '@mate/clock':
+      '@palace/clock':
         specifier: workspace:*
         version: link:../clock
-      '@mate/runtime':
+      '@palace/runtime':
         specifier: workspace:*
         version: link:../runtime
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 1.1.0
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
-      '@mate/testkit':
+      '@palace/testkit':
         specifier: workspace:*
         version: link:../testkit
 
@@ -408,20 +408,20 @@ importers:
       '@earendil-works/pi-durable':
         specifier: 1.1.0
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
-      '@mate/clock':
+      '@palace/clock':
         specifier: workspace:*
         version: link:../clock
-      '@mate/node-protocol':
+      '@palace/node-protocol':
         specifier: workspace:*
         version: link:../node-protocol
       zod:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
-      '@mate/chat':
+      '@palace/chat':
         specifier: workspace:*
         version: link:../chat
-      '@mate/testkit':
+      '@palace/testkit':
         specifier: workspace:*
         version: link:../testkit
 
@@ -430,10 +430,10 @@ importers:
       '@earendil-works/pi-durable':
         specifier: 1.1.0
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
-      '@mate/clock':
+      '@palace/clock':
         specifier: workspace:*
         version: link:../clock
-      '@mate/node-protocol':
+      '@palace/node-protocol':
         specifier: workspace:*
         version: link:../node-protocol
       vitest:
@@ -452,7 +452,7 @@ importers:
 
   tests/system:
     devDependencies:
-      '@mate/testkit':
+      '@palace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
 

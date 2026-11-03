@@ -1,7 +1,7 @@
 import { createPrivateKey, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PushNotice, PushSubscription } from "@mate/chat";
+import type { PushNotice, PushSubscription } from "@palace/chat";
 import {
   FakeClock,
   FakeNode,
@@ -10,7 +10,7 @@ import {
   type Answer,
   type FakeNodeOptions,
   type ServerEvent,
-} from "@mate/testkit";
+} from "@palace/testkit";
 import { onTestFinished } from "vitest";
 import { startControlPlane, type ControlPlane } from "../src/control-plane.ts";
 

@@ -22,10 +22,10 @@ public static class Runner {
   }
 
   public static int Main(string[] args) {
-    var command = new StringBuilder(Quote(Environment.GetEnvironmentVariable("MATE_FAKE_SERVICE_SCRIPT")));
+    var command = new StringBuilder(Quote(Environment.GetEnvironmentVariable("PALACE_FAKE_SERVICE_SCRIPT")));
     command.Append(' ').Append(Quote(Path.GetFileNameWithoutExtension(Environment.GetCommandLineArgs()[0])));
     foreach (string argument in args) command.Append(' ').Append(Quote(argument));
-    var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("MATE_TEST_NODE"), command.ToString());
+    var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("PALACE_TEST_NODE"), command.ToString());
     start.UseShellExecute = false;
     var child = Process.Start(start);
     child.WaitForExit();

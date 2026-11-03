@@ -1,4 +1,4 @@
-import { systemClock, type Clock } from "@mate/clock";
+import { systemClock, type Clock } from "@palace/clock";
 import {
   GatewayBrowseSchema,
   GatewayPrepareWorkspaceSchema,
@@ -10,7 +10,7 @@ import {
   type NodeSystem,
   type ToolName,
   type ToolResult,
-} from "@mate/node-protocol";
+} from "@palace/node-protocol";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";

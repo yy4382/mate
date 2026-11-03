@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 
 // Workspace packages export their TypeScript source under this condition, so tests run without a build.
-const conditions = ["mate-source"];
+const conditions = ["palace-source"];
 
 export default defineConfig({
   resolve: { conditions },

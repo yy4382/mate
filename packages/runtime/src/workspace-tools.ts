@@ -9,7 +9,7 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
-import { bashTool, parseBashArguments, type ToolName } from "@mate/node-protocol";
+import { bashTool, parseBashArguments, type ToolName } from "@palace/node-protocol";
 import { z } from "zod";
 import { backgroundCommands } from "./background-commands.ts";
 

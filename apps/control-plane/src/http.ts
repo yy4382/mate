@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { AdminError, AgentCreationFailed, type AdminErrorReason } from "@mate/admin";
-import { ChatError, type ChatErrorReason } from "@mate/chat";
+import { AdminError, AgentCreationFailed, type AdminErrorReason } from "@palace/admin";
+import { ChatError, type ChatErrorReason } from "@palace/chat";
 import { z } from "zod";
 
 /** Request bodies are small JSON documents; the largest is a message of at most 20,000 characters. */

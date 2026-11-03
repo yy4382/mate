@@ -6,7 +6,7 @@ import { createServer as createHttpsServer, globalAgent } from "node:https";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FakeClock, HumanBrowser, temporaryDirectory } from "@mate/testkit";
+import { FakeClock, HumanBrowser, temporaryDirectory } from "@palace/testkit";
 import { expect, it, onTestFinished } from "vitest";
 import { startControlPlane } from "../src/control-plane.ts";
 
@@ -30,7 +30,7 @@ it("refuses unusable APNs credentials before serving and can restart with native
         keyFile: join(directory, "missing-test-key.p8"),
         keyId: "TESTKEY001",
         teamId: "TESTTEAM01",
-        topic: "dev.yyang.mate",
+        topic: "dev.yyang.palace",
         environment: "sandbox",
       },
     }),
@@ -44,7 +44,7 @@ it("refuses unusable APNs credentials before serving and can restart with native
 
 /** One self-signed localhost certificate for the whole file: RSA key generation is the slow part of a fixture. */
 const tls = (() => {
-  const directory = mkdtempSync(join(tmpdir(), "mate-apns-tls-"));
+  const directory = mkdtempSync(join(tmpdir(), "palace-apns-tls-"));
   const certFile = join(directory, "cert.pem"),
     tlsKey = join(directory, "tls.pem");
   execFileSync(
@@ -123,7 +123,7 @@ async function fixture(configured = true) {
             keyFile: apnsKey,
             keyId: "TESTKEY001",
             teamId: "TESTTEAM01",
-            topic: "dev.yyang.mate",
+            topic: "dev.yyang.palace",
             environment: "sandbox",
             connection: { address: "localhost", port: address.port, ca: [cert] },
           },
@@ -209,7 +209,7 @@ it("validates native transport data and sends a private, scoped alert through th
   const request = f.requests[0]!;
   expect(request.headers).toMatchObject({
     ":path": `/3/device/${native.token}`,
-    "apns-topic": "dev.yyang.mate",
+    "apns-topic": "dev.yyang.palace",
     "apns-push-type": "alert",
     "apns-priority": "10",
     "apns-expiration": String((f.clock.now() + 86_400_000) / 1000),
@@ -217,7 +217,7 @@ it("validates native transport data and sends a private, scoped alert through th
   expect(request.headers.authorization).toMatch(/^bearer /);
   expect(request.body).not.toContain("private message body");
   expect(JSON.parse(request.body)).toMatchObject({
-    aps: { alert: { title: "Mate", "loc-key": "MATE_PUSH_ALERT" } },
+    aps: { alert: { title: "Palace", "loc-key": "MATE_PUSH_ALERT" } },
     body: {
       version: 1,
       binding: native.binding,

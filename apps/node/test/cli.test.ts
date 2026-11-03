@@ -22,28 +22,28 @@ const command = (h: Host) => h.paths.command;
 const config = (h: Host) => h.paths.config;
 const installedVersion = (h: Host) =>
   JSON.parse(readFileSync(join(program(h), "manifest.json"), "utf8")).version;
-/** Mate's scratch directories next to the program directory (DEPLOYMENT §3.2). */
+/** Palace's scratch directories next to the program directory (DEPLOYMENT §3.2). */
 const scratch = (h: Host) =>
-  readdirSync(dirname(h.paths.program)).filter((name) => name.startsWith(".mate-node-"));
+  readdirSync(dirname(h.paths.program)).filter((name) => name.startsWith(".palace-node-"));
 
 function expectCommand(h: Host): void {
   if (process.platform === "win32") {
     expect(statSync(command(h)).isFile()).toBe(true);
-    expect(readFileSync(command(h), "utf8")).toContain("%~dp0..\\program\\bin\\mate.cmd");
+    expect(readFileSync(command(h), "utf8")).toContain("%~dp0..\\program\\bin\\palace.cmd");
   } else {
-    expect(readlinkSync(command(h))).toBe(join(program(h), "bin/mate"));
+    expect(readlinkSync(command(h))).toBe(join(program(h), "bin/palace"));
   }
 }
 
 function ok(h: Host, ...args: string[]): string {
   const result = h.mate(...args);
-  expect(result.status, `mate ${args.join(" ")}: ${result.stderr}`).toBe(0);
+  expect(result.status, `palace ${args.join(" ")}: ${result.stderr}`).toBe(0);
   return result.stdout;
 }
 
 function refused(h: Host, ...args: string[]): string {
   const result = h.mate(...args);
-  expect(result.status, `mate ${args.join(" ")} should refuse: ${result.stdout}`).toBe(1);
+  expect(result.status, `palace ${args.join(" ")} should refuse: ${result.stdout}`).toBe(1);
   return result.stderr;
 }
 
@@ -72,11 +72,11 @@ function runningNode(version = "1.0.0"): Host {
 const agentData = (h: Host) => [
   readFileSync(config(h), "utf8"),
   ...snapshot(h.paths.data),
-  ...snapshot(join(h.home, "mate")),
+  ...snapshot(join(h.home, "palace")),
 ];
 
-describe("mate node CLI (MODULE_TESTS 9)", () => {
-  it("install puts the program, the mate command and the unit in place without starting anything, and start then enables and starts the service", () => {
+describe("palace node CLI (MODULE_TESTS 9)", () => {
+  it("install puts the program, the palace command and the unit in place without starting anything, and start then enables and starts the service", () => {
     const h = host();
     const out = ok(h, "node", "install", writeBundle(h.inputs, { version: "1.0.0" }));
     expect(installedVersion(h)).toBe("1.0.0");
@@ -87,10 +87,10 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
       expect(bytes.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
       expect(definition).toContain('encoding="UTF-16"');
     }
-    expect(definition).toContain("mate.mjs");
+    expect(definition).toContain("palace.mjs");
     expect(definition).toContain("--service");
     expect(serviceChanges(h), "install never starts or enables").toEqual([]);
-    expect(out, "install tells the owner what is left to do").toContain("mate node configure");
+    expect(out, "install tells the owner what is left to do").toContain("palace node configure");
 
     expect(refused(h, "node", "start"), "start needs a config").toContain("configure");
     expect(serviceChanges(h)).toEqual([]);
@@ -101,7 +101,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
 
   it("install again changes nothing and never starts, restarts or re-enables the service, whether it runs or the owner stopped it", () => {
     const h = runningNode();
-    const bundle = join(h.inputs, "mate-node-1.0.0.tar.gz");
+    const bundle = join(h.inputs, "palace-node-1.0.0.tar.gz");
     const before = snapshot(h.home);
     h.setService({ calls: [] });
     ok(h, "node", "install", bundle);
@@ -121,7 +121,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     const h = runningNode("1.0.0");
     const before = snapshot(h.home);
     expect(refused(h, "node", "install", writeBundle(h.inputs, { version: "2.0.0" }))).toContain(
-      "mate node update",
+      "palace node update",
     );
     expect(snapshot(h.home)).toEqual(before);
   });
@@ -133,7 +133,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
       h.setService({ active, calls: [] });
       const before = snapshot(h.home);
       expect(refused(h, "node", "update", writeBundle(h.inputs, { version: "2.0.0" }))).toContain(
-        "mate node stop",
+        "palace node stop",
       );
       expect(snapshot(h.home)).toEqual(before);
       expect(serviceChanges(h)).toEqual([]);
@@ -147,21 +147,21 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
       h.setService({ active: "inactive", mainPid: 0, calls: [] });
       const before = snapshot(h.home);
       expect(refused(h, "node", "update", writeBundle(h.inputs, { version: "2.0.0" }))).toContain(
-        "mate node stop",
+        "palace node stop",
       );
       expect(snapshot(h.home)).toEqual(before);
       expect(serviceChanges(h)).toEqual([]);
     },
   );
 
-  it("refuses to install into or remove a program directory without a Mate manifest", () => {
+  it("refuses to install into or remove a program directory without a Palace manifest", () => {
     const h = host();
     mkdirSync(program(h), { recursive: true });
     writeFileSync(join(program(h), "my-program.txt"), "keep this");
     const before = snapshot(h.home);
     const bundle = writeBundle(h.inputs, { version: "1.0.0" });
     for (const args of [["install", bundle], ["update", bundle], ["uninstall"]]) {
-      expect(refused(h, "node", ...args)).toContain("no Mate manifest");
+      expect(refused(h, "node", ...args)).toContain("no Palace manifest");
       expect(snapshot(h.home)).toEqual(before);
     }
     expect(h.service().calls).toEqual([]);
@@ -174,7 +174,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     h.setService({ calls: [] });
     ok(h, "node", "update", writeBundle(h.inputs, { version: "2.0.0" }));
     expect(installedVersion(h)).toBe("2.0.0");
-    expect(readFileSync(join(program(h), "lib/mate.mjs"), "utf8")).toBe("// mate 2.0.0\n");
+    expect(readFileSync(join(program(h), "lib/palace.mjs"), "utf8")).toBe("// palace 2.0.0\n");
     expectCommand(h);
     expect(serviceChanges(h), "update never starts the service").toEqual([]);
     expect(h.service().active).toBe("inactive");
@@ -187,10 +187,10 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     ok(h, "node", "stop");
     const data = agentData(h);
     const lib = dirname(h.paths.program);
-    mkdirSync(join(lib, ".mate-node-old-abc123"));
-    renameSync(program(h), join(lib, ".mate-node-old-abc123/program"));
-    mkdirSync(join(lib, ".mate-node-staging-def456/lib"), { recursive: true });
-    writeFileSync(join(lib, ".mate-node-staging-def456/lib/mate.mjs"), "// half\n");
+    mkdirSync(join(lib, ".palace-node-old-abc123"));
+    renameSync(program(h), join(lib, ".palace-node-old-abc123/program"));
+    mkdirSync(join(lib, ".palace-node-staging-def456/lib"), { recursive: true });
+    writeFileSync(join(lib, ".palace-node-staging-def456/lib/palace.mjs"), "// half\n");
 
     ok(h, "node", "update", writeBundle(h.inputs, { version: "2.0.0" }));
     expect(installedVersion(h)).toBe("2.0.0");
@@ -243,7 +243,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
         ok(h, "node", "stop");
         rmSync(unit(h));
         rmSync(command(h));
-        const old = join(dirname(h.paths.program), ".mate-node-old-abc123");
+        const old = join(dirname(h.paths.program), ".palace-node-old-abc123");
         mkdirSync(old);
         renameSync(program(h), join(old, "program"));
         rmSync(join(old, "program/lib"), { recursive: true });
@@ -261,7 +261,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     expect(agentData(h)).toEqual(data);
   });
 
-  it("update and uninstall refuse when the program directory holds files Mate did not install, name them, and change nothing", () => {
+  it("update and uninstall refuse when the program directory holds files Palace did not install, name them, and change nothing", () => {
     const h = runningNode();
     ok(h, "node", "stop");
     writeFileSync(join(program(h), "notes.txt"), "mine\n");
@@ -279,12 +279,12 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     expect(ok(h, "node", "status"), "status reports them too").toContain("notes.txt");
   });
 
-  it("install and uninstall leave a unit file and a mate command that are not Mate's alone and report them", () => {
+  it("install and uninstall leave a unit file and a palace command that are not Palace's alone and report them", () => {
     const h = host();
     mkdirSync(dirname(h.paths.unit), { recursive: true });
     writeFileSync(unit(h), "[Service]\nExecStart=/opt/my-own-node\n");
     mkdirSync(dirname(h.paths.command), { recursive: true });
-    writeFileSync(command(h), "#!/bin/sh\necho my own mate\n");
+    writeFileSync(command(h), "#!/bin/sh\necho my own palace\n");
     const theirs = () => [readFileSync(unit(h), "utf8"), readFileSync(command(h), "utf8")];
     const before = theirs();
 
@@ -299,7 +299,9 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     expect(theirs()).toEqual(before);
     const calls = h.service().calls.slice(callsBefore);
     h.setService({ calls });
-    expect(serviceChanges(h), "uninstall never changes a service Mate did not define").toEqual([]);
+    expect(serviceChanges(h), "uninstall never changes a service Palace did not define").toEqual(
+      [],
+    );
     expect(existsSync(program(h))).toBe(false);
   });
 
@@ -309,7 +311,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
     h.setService({ available: false });
     const before = snapshot(h.home);
     for (const args of [
-      ["node", "install", join(h.inputs, "mate-node-1.0.0.tar.gz")],
+      ["node", "install", join(h.inputs, "palace-node-1.0.0.tar.gz")],
       ["node", "update", writeBundle(h.inputs, { version: "2.0.0" })],
       ["node", "uninstall"],
     ]) {
@@ -328,18 +330,18 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
       symlinkSync(physical, linked, "dir");
       ok(h, "node", "stop");
       ok(h, "node", "start");
-      expect(ok(h, "node", "status")).not.toContain("not Mate's");
+      expect(ok(h, "node", "status")).not.toContain("not Palace's");
       expect(h.service()).toMatchObject({ active: "active", enabled: "enabled" });
     },
   );
 
-  it("leaves a foreign service loaded under Mate's name alone, even when the local definition is Mate's", () => {
+  it("leaves a foreign service loaded under Palace's name alone, even when the local definition is Palace's", () => {
     const h = runningNode();
     h.setService({ foreignDefinition: true, calls: [] });
     const definition = readFileSync(unit(h), "utf8");
     expect(refused(h, "node", "stop")).toContain("left alone");
     expect(refused(h, "node", "start")).toContain("left alone");
-    ok(h, "node", "install", join(h.inputs, "mate-node-1.0.0.tar.gz"));
+    ok(h, "node", "install", join(h.inputs, "palace-node-1.0.0.tar.gz"));
     ok(h, "node", "uninstall");
     expect(readFileSync(unit(h), "utf8")).toBe(definition);
     expect(h.service()).toMatchObject({ active: "active", enabled: "enabled" });
@@ -372,7 +374,7 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
   );
 
   const canMapRoot = spawnSync("unshare", ["-r", "true"]).status === 0;
-  it.runIf(canMapRoot || process.env["MATE_REQUIRE_PID_NAMESPACE"] === "1")(
+  it.runIf(canMapRoot || process.env["PALACE_REQUIRE_PID_NAMESPACE"] === "1")(
     "management commands refuse to run as root",
     () => {
       const h = host();
@@ -396,21 +398,29 @@ describe("mate node CLI (MODULE_TESTS 9)", () => {
 
   it("configure writes a private config, and writing it again without a pairing token drops the token", () => {
     const h = host();
-    ok(h, "node", "configure", "--control-plane", "https://mate.example", "--pairing-token", "t1");
+    ok(
+      h,
+      "node",
+      "configure",
+      "--control-plane",
+      "https://palace.example",
+      "--pairing-token",
+      "t1",
+    );
     if (process.platform !== "win32") expect(statSync(config(h)).mode & 0o777).toBe(0o600);
     expect(JSON.parse(readFileSync(config(h), "utf8"))).toEqual({
-      controlPlaneUrl: "https://mate.example",
-      workspacesRoot: join(h.home, "mate/workspaces"),
+      controlPlaneUrl: "https://palace.example",
+      workspacesRoot: join(h.home, "palace/workspaces"),
       pairingToken: "t1",
     });
-    ok(h, "node", "configure", "--control-plane", "https://mate.example", "--workspaces", "ws");
+    ok(h, "node", "configure", "--control-plane", "https://palace.example", "--workspaces", "ws");
     expect(JSON.parse(readFileSync(config(h), "utf8"))).toEqual({
-      controlPlaneUrl: "https://mate.example",
+      controlPlaneUrl: "https://palace.example",
       workspacesRoot: join(h.inputs, "ws"),
     });
 
     const before = readFileSync(config(h), "utf8");
-    refused(h, "node", "configure", "--control-plane", "ftp://mate.example");
+    refused(h, "node", "configure", "--control-plane", "ftp://palace.example");
     expect(readFileSync(config(h), "utf8")).toBe(before);
   });
 

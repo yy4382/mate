@@ -4,9 +4,9 @@ import {
   ControlStoreIncompatible,
   openControlTables,
   type ControlTables,
-} from "@mate/control-store";
-import { Migrations, type Migration } from "@mate/migrations";
-import { temporaryDirectory } from "@mate/testkit";
+} from "@palace/control-store";
+import { Migrations, type Migration } from "@palace/migrations";
+import { temporaryDirectory } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 
 const v1 = {

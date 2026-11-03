@@ -1,4 +1,4 @@
-import type { NodeBrowseOutcome, ToolResult } from "@mate/node-protocol";
+import type { NodeBrowseOutcome, ToolResult } from "@palace/node-protocol";
 import type { WebSocket } from "ws";
 
 interface Pending<R> {

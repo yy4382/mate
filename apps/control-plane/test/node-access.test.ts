@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentView } from "@mate/admin";
+import type { AgentView } from "@palace/admin";
 import { expect, it } from "vitest";
 import { environment } from "./support.ts";
 

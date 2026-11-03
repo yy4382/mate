@@ -6,13 +6,13 @@ import { expect, it } from "vitest";
 import { PASSWORD, newPage, startSite, webDirectory } from "./support.ts";
 
 it.each([
-  { languages: ["zh-CN", "en-US"], lang: "zh-CN", heading: "登录 Mate" },
-  { languages: ["zh-Hant-TW", "en"], lang: "zh-CN", heading: "登录 Mate" },
-  { languages: ["en-GB", "zh"], lang: "en-US", heading: "Sign in to Mate" },
-  { languages: ["fr-FR", "zh-HK", "en"], lang: "zh-CN", heading: "登录 Mate" },
-  { languages: ["ja-JP", "en-AU", "zh"], lang: "en-US", heading: "Sign in to Mate" },
-  { languages: ["fr-FR", "ja"], lang: "en-US", heading: "Sign in to Mate" },
-  { languages: [], lang: "en-US", heading: "Sign in to Mate" },
+  { languages: ["zh-CN", "en-US"], lang: "zh-CN", heading: "登录 Palace" },
+  { languages: ["zh-Hant-TW", "en"], lang: "zh-CN", heading: "登录 Palace" },
+  { languages: ["en-GB", "zh"], lang: "en-US", heading: "Sign in to Palace" },
+  { languages: ["fr-FR", "zh-HK", "en"], lang: "zh-CN", heading: "登录 Palace" },
+  { languages: ["ja-JP", "en-AU", "zh"], lang: "en-US", heading: "Sign in to Palace" },
+  { languages: ["fr-FR", "ja"], lang: "en-US", heading: "Sign in to Palace" },
+  { languages: [], lang: "en-US", heading: "Sign in to Palace" },
 ])(
   "the browser matches $languages in preference order and ignores saved overrides",
   async ({ languages, lang, heading }) => {
@@ -26,10 +26,13 @@ it.each([
     }, languages);
     await page.goto(`${site.origin}/login?lng=zh`);
     await page.getByRole("heading", { name: heading }).waitFor();
+    expect(await page.title()).toBe("Palace");
     expect(await page.locator("html").getAttribute("lang")).toBe(lang);
     const href = await page.locator('link[rel="manifest"]').getAttribute("href");
     const manifest = await (await page.request.get(new URL(href ?? "", site.origin).href)).json();
     expect(manifest.lang).toBe(lang === "zh-CN" ? "zh-CN" : "en");
+    expect(manifest.name).toBe("Palace");
+    expect(manifest.short_name).toBe("Palace");
   },
 );
 

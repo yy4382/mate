@@ -2,8 +2,8 @@ const randomUUID = () => globalThis.crypto.randomUUID();
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ChatApp } from "@mate/chat";
-import { ApnsSubscription } from "@mate/chat/contracts";
+import { ChatApp } from "@palace/chat";
+import { ApnsSubscription } from "@palace/chat/contracts";
 import { describe, expect, it, onTestFinished } from "vitest";
 import {
   MobileNotifications,
@@ -13,7 +13,7 @@ import {
 } from "../src/notifications";
 import { MobileAuth } from "../src/auth";
 
-const session = { server: "https://mate.example.com", accountId: 7 };
+const session = { server: "https://palace.example.com", accountId: 7 };
 const now = Date.UTC(2026, 9, 26);
 const reply = (body: unknown) => new Response(JSON.stringify(body));
 function fixture() {
@@ -110,7 +110,7 @@ function fixture() {
 
 function deliveryFixture() {
   const f = fixture();
-  const directory = mkdtempSync(join(tmpdir(), "mate-notification-retirement-"));
+  const directory = mkdtempSync(join(tmpdir(), "palace-notification-retirement-"));
   const deliveries: string[] = [];
   const chat = new ChatApp(join(directory, "chat.sqlite"), {
     push: async (subscription) => {

@@ -1,10 +1,10 @@
 {
-  "name": "@mate/gateway",
+  "name": "@palace/gateway",
   "private": true,
   "type": "module",
   "exports": {
     ".": {
-      "mate-source": "./src/index.ts",
+      "palace-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     }
@@ -14,15 +14,15 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@mate/clock": "workspace:*",
-    "@mate/control-store": "workspace:*",
-    "@mate/migrations": "workspace:*",
-    "@mate/node-protocol": "workspace:*",
+    "@palace/clock": "workspace:*",
+    "@palace/control-store": "workspace:*",
+    "@palace/migrations": "workspace:*",
+    "@palace/node-protocol": "workspace:*",
     "ws": "8.22.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/ws": "8.18.1",
-    "@mate/testkit": "workspace:*"
+    "@palace/testkit": "workspace:*"
   }
 }

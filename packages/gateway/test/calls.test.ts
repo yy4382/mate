@@ -1,7 +1,7 @@
 import { getEventListeners } from "node:events";
-import type { GatewayRunTool, ToolResult } from "@mate/node-protocol";
+import type { GatewayRunTool, ToolResult } from "@palace/node-protocol";
 import { describe, expect, it, onTestFinished } from "vitest";
-import { FakeNode } from "@mate/testkit";
+import { FakeNode } from "@palace/testkit";
 import { deferred, eventually, never, startGateway, text, toolResult, within } from "./support.ts";
 
 describe("node gateway tool calls (MODULE_TESTS 7)", () => {

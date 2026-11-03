@@ -1,5 +1,5 @@
 import { t, thinkingText, listText } from "../i18n";
-import type { CatalogModel, ProviderView } from "@mate/admin";
+import type { CatalogModel, ProviderView } from "@palace/admin";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { FlatList, View } from "react-native";

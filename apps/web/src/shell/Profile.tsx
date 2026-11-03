@@ -1,4 +1,4 @@
-import { passwordTooShort } from "@mate/control-plane/passwords";
+import { passwordTooShort } from "@palace/control-plane/passwords";
 import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { LogOut } from "lucide-react";

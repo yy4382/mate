@@ -16,9 +16,9 @@ import { connectedNode, temporaryDirectory, textOf, windows } from "./support.ts
 function shortPath(path: string): string {
   const result = spawnSync(
     "cmd.exe",
-    ["/d", "/c", 'for %I in ("%MATE_TEST_DIRECTORY%") do @echo %~sI'],
+    ["/d", "/c", 'for %I in ("%PALACE_TEST_DIRECTORY%") do @echo %~sI'],
     {
-      env: { ...process.env, MATE_TEST_DIRECTORY: path },
+      env: { ...process.env, PALACE_TEST_DIRECTORY: path },
       encoding: "utf8",
       windowsVerbatimArguments: true,
     },

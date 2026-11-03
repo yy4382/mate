@@ -1,6 +1,6 @@
 import { createPrivateKey, sign } from "node:crypto";
-import type { NodeSystem } from "@mate/node-protocol";
-import { FakeNode, storeFixture } from "@mate/testkit";
+import type { NodeSystem } from "@palace/node-protocol";
+import { FakeNode, storeFixture } from "@palace/testkit";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { startGateway } from "./support.ts";
 

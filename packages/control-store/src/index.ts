@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Migrations } from "@mate/migrations";
+import type { Migrations } from "@palace/migrations";
 import { z } from "zod";
 
 /** The control store's file name inside the data directory. */
@@ -75,7 +75,7 @@ export function openControlTables(dataDirectory: string, tables: ControlTables):
 }
 
 /**
- * The store holds the humans' password hashes, sessions and API keys, so only the account Mate runs as may read it.
+ * The store holds the humans' password hashes, sessions and API keys, so only the account Palace runs as may read it.
  * The file is created empty with mode 0600 before SQLite opens it; SQLite gives its -wal and -shm files the main file's
  * mode.
  */

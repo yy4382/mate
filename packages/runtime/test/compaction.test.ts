@@ -1,10 +1,10 @@
-import type { ScriptedRequest, ScriptedRequestBody } from "@mate/testkit";
+import type { ScriptedRequest, ScriptedRequestBody } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defaultSettings, testAgent, text, within } from "./support.ts";
 
 /**
- * A 100k-token window. Mate compacts before a request that would leave less than 16384 tokens of it, and the summary
+ * A 100k-token window. Palace compacts before a request that would leave less than 16384 tokens of it, and the summary
  * keeps about the newest 20000 tokens verbatim, so the two logs hold more than that: there is something to compact.
  */
 const contextWindow = 100_000;

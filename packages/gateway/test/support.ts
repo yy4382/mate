@@ -2,15 +2,15 @@ import { createServer } from "node:http";
 import { createPrivateKey, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { onTestFinished } from "vitest";
-import { createNodeGateway, type NodeGateway, type NodeGatewayOptions } from "@mate/gateway";
-import type { ToolResult } from "@mate/node-protocol";
+import { createNodeGateway, type NodeGateway, type NodeGatewayOptions } from "@palace/gateway";
+import type { ToolResult } from "@palace/node-protocol";
 import {
   FakeClock,
   FakeNode,
   NetworkProxy,
   temporaryDirectory,
   type FakeNodeOptions,
-} from "@mate/testkit";
+} from "@palace/testkit";
 
 export type GatewayUnderTest = {
   gateway: NodeGateway;

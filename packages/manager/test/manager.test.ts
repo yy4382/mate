@@ -1,4 +1,4 @@
-import { AgentRuntime, createAgentStore, readAgentState } from "@mate/runtime";
+import { AgentRuntime, createAgentStore, readAgentState } from "@palace/runtime";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

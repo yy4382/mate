@@ -1,4 +1,4 @@
-import { liveRetryDelay, timelineQuery } from "@mate/chat/client";
+import { liveRetryDelay, timelineQuery } from "@palace/chat/client";
 import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";

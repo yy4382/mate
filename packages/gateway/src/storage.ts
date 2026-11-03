@@ -1,8 +1,8 @@
 import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { openControlTables, type ControlTables } from "@mate/control-store";
-import { Migrations } from "@mate/migrations";
-import { NodeSystemSchema, type NodeSystem } from "@mate/node-protocol";
+import { openControlTables, type ControlTables } from "@palace/control-store";
+import { Migrations } from "@palace/migrations";
+import { NodeSystemSchema, type NodeSystem } from "@palace/node-protocol";
 import { z } from "zod";
 import { NodeGatewayError } from "./node-gateway-error.ts";
 

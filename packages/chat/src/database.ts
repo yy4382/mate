@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
-import type { Clock } from "@mate/clock";
+import type { Clock } from "@palace/clock";
 import { z } from "zod";
 import { CHAT_MIGRATIONS } from "./chat-migrations.ts";
 

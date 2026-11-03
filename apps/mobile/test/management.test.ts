@@ -2,9 +2,9 @@ import en from "../src/locales/en.json";
 import { afterEach, describe, expect, it } from "vitest";
 import { MobileAuth, type AuthPlatform } from "../src/auth";
 import { ApiError, errorText, ManagementClient } from "../src/admin/client";
-import type { AgentEvent } from "@mate/admin";
+import type { AgentEvent } from "@palace/admin";
 
-const server = "https://mate.example.com";
+const server = "https://palace.example.com";
 const human = { accountId: 7, handle: "lin", displayName: "林", role: "admin", active: true };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const clients: ManagementClient[] = [];

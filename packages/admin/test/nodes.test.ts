@@ -1,4 +1,4 @@
-import { FakeNode } from "@mate/testkit";
+import { FakeNode } from "@palace/testkit";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { environment, newIdentity, settings } from "./support.ts";
 

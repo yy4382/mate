@@ -1,36 +1,36 @@
 import { describe, expect, it } from "vitest";
 import { host, snapshot, writeBundle, type TarEntry } from "./cli-support.ts";
 
-describe("mate node install and update check the bundle (MODULE_TESTS 9)", () => {
+describe("palace node install and update check the bundle (MODULE_TESTS 9)", () => {
   const file = (path: string): TarEntry => ({ path, type: "file", content: "x" });
   const regularFiles =
     process.platform === "win32"
-      ? ["bin/mate.cmd", "node/node.exe", "lib/mate.mjs"]
-      : ["bin/mate", "node/bin/node", "lib/mate.mjs"];
+      ? ["bin/palace.cmd", "node/node.exe", "lib/palace.mjs"]
+      : ["bin/palace", "node/bin/node", "lib/palace.mjs"];
   it.each<[string, Parameters<typeof writeBundle>[1]]>([
     ["does not match its checksum", { version: "2.0.0", checksum: "wrong" }],
     ["has no checksum file", { version: "2.0.0", checksum: "missing" }],
     [
       "holds a symbolic link",
-      { version: "2.0.0", extra: [{ path: "mate-node/lib/x", type: "symlink", target: "/etc" }] },
+      { version: "2.0.0", extra: [{ path: "palace-node/lib/x", type: "symlink", target: "/etc" }] },
     ],
     [
       "holds a hard link",
       {
         version: "2.0.0",
-        extra: [{ path: "mate-node/lib/x", type: "hardlink", target: "mate-node/bin/mate" }],
+        extra: [{ path: "palace-node/lib/x", type: "hardlink", target: "palace-node/bin/palace" }],
       },
     ],
     [
       "holds a special file",
-      { version: "2.0.0", extra: [{ path: "mate-node/lib/x", type: "fifo" }] },
+      { version: "2.0.0", extra: [{ path: "palace-node/lib/x", type: "fifo" }] },
     ],
-    ["holds a path with ..", { version: "2.0.0", extra: [file("mate-node/../../escaped")] }],
+    ["holds a path with ..", { version: "2.0.0", extra: [file("palace-node/../../escaped")] }],
     ["holds an absolute path", { version: "2.0.0", extra: [file("/tmp/escaped")] }],
-    ["holds a path outside mate-node/", { version: "2.0.0", extra: [file("other/escaped")] }],
+    ["holds a path outside palace-node/", { version: "2.0.0", extra: [file("other/escaped")] }],
     [
       "holds a file its manifest does not list",
-      { version: "2.0.0", extra: [file("mate-node/lib/x")] },
+      { version: "2.0.0", extra: [file("palace-node/lib/x")] },
     ],
     [
       "lacks a file its manifest lists",

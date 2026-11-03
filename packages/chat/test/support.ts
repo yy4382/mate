@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import { temporaryDirectory } from "@mate/testkit";
-import type { Clock } from "@mate/clock";
+import { temporaryDirectory } from "@palace/testkit";
+import type { Clock } from "@palace/clock";
 import { vi } from "vitest";
 import {
   ChatApp,

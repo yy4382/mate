@@ -11,15 +11,15 @@ import {
 } from "./service-files.ts";
 import type { BundleLayout, Layout, ServiceManager, ServiceState } from "./types.ts";
 
-const LABEL = "io.mate.node";
-const MARKER = "<!-- Written by mate node. -->";
+const LABEL = "io.palace.node";
+const MARKER = "<!-- Written by palace node. -->";
 
 function launchctl(...args: string[]): string {
   const result = spawnSync("launchctl", args, { encoding: "utf8" });
   if (result.error !== undefined || result.status !== 0) {
     const detail = result.stderr?.trim() || result.error?.message || `exit ${result.status}`;
     throw new Error(
-      `launchctl ${args.join(" ")} failed: ${detail}. Mate needs this account's launchd user manager in a graphical login session.`,
+      `launchctl ${args.join(" ")} failed: ${detail}. Palace needs this account's launchd user manager in a graphical login session.`,
     );
   }
   return result.stdout;
@@ -36,7 +36,7 @@ ${MARKER}
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key><array>
     <string>${xmlText(join(paths.program, bundle.runtime))}</string>
-    <string>${xmlText(join(paths.program, "lib/mate.mjs"))}</string>
+    <string>${xmlText(join(paths.program, "lib/palace.mjs"))}</string>
     <string>node</string><string>run</string><string>--service</string>
   </array>
   <key>Disabled</key><true/>
@@ -52,7 +52,7 @@ ${MARKER}
   function read() {
     launchctl("print", domain);
     const disabled = launchctl("print-disabled", domain);
-    const override = /"io\.mate\.node"\s*=>\s*(true|false)/.exec(disabled)?.[1];
+    const override = /"io\.palace\.node"\s*=>\s*(true|false)/.exec(disabled)?.[1];
     const result = spawnSync("launchctl", ["print", target], { encoding: "utf8" });
     if (result.error !== undefined) throw result.error;
     if (result.status !== 0 && result.status !== 113) {
@@ -84,7 +84,7 @@ ${MARKER}
   function requireOwned(): ServiceState {
     const { state } = read();
     if (state.ownership === "foreign")
-      throw new Error(`${paths.unit} is not Mate's service; it was left alone.`);
+      throw new Error(`${paths.unit} is not Palace's service; it was left alone.`);
     return state;
   }
 
@@ -94,7 +94,7 @@ ${MARKER}
       return ["No node service is installed; nothing to stop."];
     launchctl("disable", target);
     if (state.loaded) launchctl("bootout", target);
-    return ["Stopped and disabled the node service; it stays stopped until `mate node start`."];
+    return ["Stopped and disabled the node service; it stays stopped until `palace node start`."];
   }
 
   return {
@@ -102,13 +102,13 @@ ${MARKER}
     install() {
       const { state } = read();
       if (state.ownership === "foreign")
-        return [`Left ${paths.unit} alone: Mate did not write it.`];
+        return [`Left ${paths.unit} alone: Palace did not write it.`];
       return writeServiceFile(paths.unit, plist) ? [`Wrote ${paths.unit}.`] : [];
     },
     uninstall() {
       const { state } = read();
       if (state.ownership === "foreign")
-        return [`Left ${paths.unit} and the service it defines alone: Mate did not write it.`];
+        return [`Left ${paths.unit} and the service it defines alone: Palace did not write it.`];
       const report: string[] = [];
       if (state.loaded || state.enabled) report.push(...stop());
       if (state.ownership === "mate") {
@@ -120,7 +120,7 @@ ${MARKER}
     start() {
       const state = requireOwned();
       if (state.ownership === "absent")
-        throw new Error(`${paths.unit} is missing; run \`mate node install <bundle>\` again.`);
+        throw new Error(`${paths.unit} is missing; run \`palace node install <bundle>\` again.`);
       mkdirSync(paths.data, { recursive: true, mode: 0o700 });
       launchctl("enable", target);
       if (!state.loaded) launchctl("bootstrap", domain, paths.unit);

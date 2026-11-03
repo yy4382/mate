@@ -1,10 +1,10 @@
 import apn from "@parse/node-apn";
-import type { PushNotice, PushOutcome } from "@mate/chat";
+import type { PushNotice, PushOutcome } from "@palace/chat";
 import {
   ApnsEnvironment,
   type ApnsSubscription,
   type NativePushNotice,
-} from "@mate/chat/contracts";
+} from "@palace/chat/contracts";
 import { z } from "zod";
 
 export const ApnsConfig = z.object({
@@ -30,7 +30,7 @@ export function openApns(options: ApnsOptions, now: () => number) {
     ...options.connection,
     token: { key: config.keyFile, keyId: config.keyId, teamId: config.teamId },
     production: config.environment === "production",
-    // Mate's durable queue owns retries, including Retry-After responses.
+    // Palace's durable queue owns retries, including Retry-After responses.
     connectionRetryLimit: 0,
     // No per-request timeout of the library's own; the race below is the one deadline.
     requestTimeout: 0,
@@ -48,7 +48,7 @@ export function openApns(options: ApnsOptions, now: () => number) {
     // iOS shows this alert while JS cannot run, so it carries no account or channel details. The app bundles the
     // localized text for the key (`locales` in apps/mobile/app.config.ts).
     notification.alert = {
-      title: "Mate",
+      title: "Palace",
       "loc-key": "MATE_PUSH_ALERT",
       body: "You have a new direct message or mention.",
     };

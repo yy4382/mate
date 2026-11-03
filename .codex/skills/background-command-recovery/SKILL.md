@@ -1,15 +1,15 @@
 ---
 name: background-command-recovery
-description: Check that Mate never dispatches a background command twice after a crash. Use when changing background command checkpoints, recovery phases, workspace dispatch, or the Durable task lifecycle.
+description: Check that Palace never dispatches a background command twice after a crash. Use when changing background command checkpoints, recovery phases, workspace dispatch, or the Durable task lifecycle.
 ---
 
 # Check background command recovery
 
-Property. Mate invokes `node.run` at most once for each persisted background command task across crashes and reopens.
+Property. Palace invokes `node.run` at most once for each persisted background command task across crashes and reopens.
 
 Harm. Repeating a command can repeat a deployment or a destructive file operation.
 
-This is a TLA+ model checked by TLC, not a proof of the TypeScript implementation. Compare the model with the code before treating a pass as evidence about Mate. TLA+ fits because the question concerns the ordering of durable writes, external calls, and crashes.
+This is a TLA+ model checked by TLC, not a proof of the TypeScript implementation. Compare the model with the code before treating a pass as evidence about Palace. TLA+ fits because the question concerns the ordering of durable writes, external calls, and crashes.
 
 ## Confirm that the model describes the change
 
@@ -51,7 +51,7 @@ From the repository root:
 pnpm exec node .codex/skills/background-command-recovery/check.mjs
 ```
 
-Read every result with the pstack `/statechart` skill. Give it `BackgroundCommand.tla` and `BackgroundCommand.cfg` from this folder in a scratch directory. Follow that installed skill's current instructions. On a pass, show its statechart. On a failure, explain its shortest path in Mate's terms. Do not copy `/statechart` commands or installation paths into this skill or its runner.
+Read every result with the pstack `/statechart` skill. Give it `BackgroundCommand.tla` and `BackgroundCommand.cfg` from this folder in a scratch directory. Follow that installed skill's current instructions. On a pass, show its statechart. On a failure, explain its shortest path in Palace's terms. Do not copy `/statechart` commands or installation paths into this skill or its runner.
 
 A successful run must exit zero, report no error, and finish with zero states left on the queue. A missing Java installation, checksum mismatch, parse failure, or interrupted run is not a pass or a counterexample.
 

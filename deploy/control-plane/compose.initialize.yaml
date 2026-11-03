@@ -3,10 +3,10 @@
 services:
   control-plane:
     environment:
-      MATE_INITIAL_PASSWORD_FILE: /run/secrets/initial_password
-      MATE_INITIAL_HANDLE: ${MATE_INITIAL_HANDLE:-admin}
+      PALACE_INITIAL_PASSWORD_FILE: /run/secrets/initial_password
+      PALACE_INITIAL_HANDLE: ${PALACE_INITIAL_HANDLE:-admin}
     secrets:
       - initial_password
 secrets:
   initial_password:
-    file: ${MATE_INITIAL_PASSWORD:?set MATE_INITIAL_PASSWORD to the initial password file}
+    file: ${PALACE_INITIAL_PASSWORD:?set PALACE_INITIAL_PASSWORD to the initial password file}

@@ -1,5 +1,5 @@
-import type { Clock } from "@mate/clock";
-import { BASH_KEPT_OUTPUT_BYTES, type ToolResult } from "@mate/node-protocol";
+import type { Clock } from "@palace/clock";
+import { BASH_KEPT_OUTPUT_BYTES, type ToolResult } from "@palace/node-protocol";
 import { currentPlatform } from "./platforms/index.ts";
 import type { Background, CommandProcess, ShellRequest } from "./platforms/types.ts";
 

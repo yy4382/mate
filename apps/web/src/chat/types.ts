@@ -10,7 +10,7 @@ import type {
   TaskResult,
   TimelineRef,
   UnreadSummary,
-} from "@mate/chat";
+} from "@palace/chat";
 
 export type {
   AccountView,

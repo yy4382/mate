@@ -1,10 +1,10 @@
 import { t } from "../i18n.ts";
 import { EyeOff } from "lucide-react";
 import { useEffect, useReducer, useState } from "react";
-import type { AgentEvent } from "@mate/admin";
+import type { AgentEvent } from "@palace/admin";
 import { get, redirectToLogin } from "../shell/api.ts";
 import { Badge, EmptyState, ErrorLine, Field, Notice, Select, cx } from "../shell/ui.tsx";
-import { initialObservation, observeEvents } from "@mate/admin/client";
+import { initialObservation, observeEvents } from "@palace/admin/client";
 import { blockText, describeEntry, noteText, watchLabel } from "./watch.ts";
 
 function Line(props: { role: string; streaming?: boolean; text: string }) {

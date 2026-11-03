@@ -7,14 +7,14 @@
 # Two containers: the first copies the sources and runs `pnpm install` (which runs dependency
 # install scripts) under Docker's default confinement. Only the second, which runs the tests, gets
 # the relaxed seccomp and /proc/sys options the PID-reuse test needs to choose PIDs in an
-# unprivileged user and PID namespace (AppArmor, where the host has it, would refuse mounting /proc there); MATE_REQUIRE_PID_NAMESPACE makes that test fail rather than
+# unprivileged user and PID namespace (AppArmor, where the host has it, would refuse mounting /proc there); PALACE_REQUIRE_PID_NAMESPACE makes that test fail rather than
 # skip if the capability is missing anyway.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
-image=mate-test-linux
+image=palace-test-linux
 docker build --quiet --tag "$image" --file "$root/scripts/linux-test.Dockerfile" "$root/scripts" >/dev/null
 [ "$#" -gt 0 ] || set -- apps/node tests/system
-volumes="--volume mate-test-linux-work:/work --volume mate-test-linux-store:/home/node/.pnpm-store"
+volumes="--volume palace-test-linux-work:/work --volume palace-test-linux-store:/home/node/.pnpm-store"
 # shellcheck disable=SC2086
 docker run --rm --init --volume "$root:/src:ro" $volumes "$image" sh -ec '
   find /work -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
@@ -26,5 +26,5 @@ docker run --rm --init --volume "$root:/src:ro" $volumes "$image" sh -ec '
 # shellcheck disable=SC2086
 exec docker run --rm --init \
   --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=unconfined \
-  --env MATE_REQUIRE_PID_NAMESPACE=1 \
+  --env PALACE_REQUIRE_PID_NAMESPACE=1 \
   $volumes "$image" sh -ec 'exec pnpm exec vitest run "$@"' test-linux "$@"

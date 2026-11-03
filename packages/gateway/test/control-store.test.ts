@@ -1,14 +1,14 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createNodeGateway } from "@mate/gateway";
+import { createNodeGateway } from "@palace/gateway";
 import {
   ControlStoreIncompatible,
   openControlTables,
   type ControlTables,
-} from "@mate/control-store";
-import { Migrations } from "@mate/migrations";
-import { FakeNode, temporaryDirectory } from "@mate/testkit";
+} from "@palace/control-store";
+import { Migrations } from "@palace/migrations";
+import { FakeNode, temporaryDirectory } from "@palace/testkit";
 import { startGateway } from "./support.ts";
 
 const webShell: ControlTables = {

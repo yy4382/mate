@@ -1,14 +1,14 @@
 import { join } from "node:path";
-import { AccountNames, type ChatApp } from "@mate/chat";
-import { systemClock, type Clock } from "@mate/clock";
-import { NodeGatewayError, type NodeGateway, type NodeStatusResult } from "@mate/gateway";
+import { AccountNames, type ChatApp } from "@palace/chat";
+import { systemClock, type Clock } from "@palace/clock";
+import { NodeGatewayError, type NodeGateway, type NodeStatusResult } from "@palace/gateway";
 import {
   AgentIdInUse,
   isAgentId,
   openAgentManager,
   type AgentDescription,
   type AgentManager,
-} from "@mate/manager";
+} from "@palace/manager";
 import {
   AgentStoreMissing,
   catalogModels,
@@ -17,14 +17,14 @@ import {
   type AgentSettings,
   type CatalogModel,
   type EventWatch,
-} from "@mate/runtime";
-import { WorkspacePathSchema, type WorkspaceListing } from "@mate/node-protocol";
+} from "@palace/runtime";
+import { WorkspacePathSchema, type WorkspaceListing } from "@palace/node-protocol";
 import { z } from "zod";
 import { AdminError, parseInput } from "./admin-error.ts";
 import { AdminStore } from "./store.ts";
 import { gatewayWorkspaces } from "./workspaces.ts";
 
-/** The providers Mate offers. Their models come from pi-ai's catalog. */
+/** The providers Palace offers. Their models come from pi-ai's catalog. */
 const Provider = z.enum(["openai", "deepseek"]);
 type ProviderId = z.output<typeof Provider>;
 const PROVIDER_NAMES: Record<ProviderId, string> = { openai: "OpenAI", deepseek: "DeepSeek" };
@@ -293,7 +293,7 @@ export class Admin {
 
   // ── Providers and models ────────────────────────────────────────────────────
 
-  /** Every provider Mate offers, and its stored credentials, masked. */
+  /** Every provider Palace offers, and its stored credentials, masked. */
   providers(): ProviderView[] {
     return Provider.options.map((provider) => {
       const stored = this.#store.credentials(provider);
@@ -405,7 +405,7 @@ export class Admin {
 
   #provider(provider: string): ProviderId {
     const parsed = Provider.safeParse(provider);
-    if (!parsed.success) throw new AdminError("unknown-provider", `Mate offers no ${provider}`);
+    if (!parsed.success) throw new AdminError("unknown-provider", `Palace offers no ${provider}`);
     return parsed.data;
   }
 

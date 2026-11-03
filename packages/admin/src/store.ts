@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { openControlTables, type ControlTables } from "@mate/control-store";
-import { Migrations } from "@mate/migrations";
-import type { NodeAccess } from "@mate/node-protocol";
-import type { ProviderCredentials } from "@mate/runtime";
+import { openControlTables, type ControlTables } from "@palace/control-store";
+import { Migrations } from "@palace/migrations";
+import type { NodeAccess } from "@palace/node-protocol";
+import type { ProviderCredentials } from "@palace/runtime";
 import { z } from "zod";
 
 const ADMIN_TABLES: ControlTables = {

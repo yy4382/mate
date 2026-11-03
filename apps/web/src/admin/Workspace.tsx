@@ -2,7 +2,7 @@ import { t, locale } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, File, Folder, House, Link2 } from "lucide-react";
 import { Fragment, useState, type ReactNode } from "react";
-import type { WorkspaceListing } from "@mate/admin";
+import type { WorkspaceListing } from "@palace/admin";
 import { get } from "../shell/api.ts";
 import { Button, ErrorLine, Notice } from "../shell/ui.tsx";
 

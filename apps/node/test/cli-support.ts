@@ -46,28 +46,28 @@ export type HostPaths = {
 
 export function hostPaths(home: string, localAppData = join(home, "AppData/Local")): HostPaths {
   if (process.platform === "win32") {
-    const root = join(localAppData, "Mate");
+    const root = join(localAppData, "Palace");
     return {
       program: join(root, "program"),
-      command: join(root, "bin/mate.cmd"),
+      command: join(root, "bin/palace.cmd"),
       unit: join(root, "config/node-task.xml"),
       config: join(root, "config/node.json"),
       data: join(root, "data"),
-      workspaces: join(home, "mate/workspaces"),
+      workspaces: join(home, "palace/workspaces"),
     };
   }
   return {
-    program: join(home, ".local/lib/mate-node"),
-    command: join(home, ".local/bin/mate"),
+    program: join(home, ".local/lib/palace-node"),
+    command: join(home, ".local/bin/palace"),
     unit: join(
       home,
       process.platform === "darwin"
-        ? "Library/LaunchAgents/io.mate.node.plist"
-        : ".config/systemd/user/mate-node.service",
+        ? "Library/LaunchAgents/io.palace.node.plist"
+        : ".config/systemd/user/palace-node.service",
     ),
-    config: join(home, ".config/mate/node.json"),
-    data: join(home, ".local/share/mate/node"),
-    workspaces: join(home, "mate/workspaces"),
+    config: join(home, ".config/palace/node.json"),
+    data: join(home, ".local/share/palace/node"),
+    workspaces: join(home, "palace/workspaces"),
   };
 }
 
@@ -79,7 +79,7 @@ afterAll(() => {
 
 function executableRunner(): string {
   if (windowsRunner !== undefined) return windowsRunner;
-  const directory = mkdtempSync(join(tmpdir(), "mate-cli-runner-"));
+  const directory = mkdtempSync(join(tmpdir(), "palace-cli-runner-"));
   runnerDirectories.add(directory);
   const source = fileURLToPath(new URL("./fixtures/service-runner.cs", import.meta.url));
   const executable = join(directory, "runner.exe");
@@ -149,7 +149,7 @@ export function host(): Host {
       const path = join(bin, command);
       writeFileSync(
         path,
-        `#!/usr/bin/env node\nprocess.argv.splice(2, 0, ${JSON.stringify(command)});\nrequire(process.env.MATE_FAKE_SERVICE_SCRIPT);\n`,
+        `#!/usr/bin/env node\nprocess.argv.splice(2, 0, ${JSON.stringify(command)});\nrequire(process.env.PALACE_FAKE_SERVICE_SCRIPT);\n`,
       );
       chmodSync(path, 0o755);
     }
@@ -164,12 +164,17 @@ export function host(): Host {
     USERPROFILE: home,
     LOCALAPPDATA: join(home, "AppData/Local"),
     PATH: `${bin}${delimiter}${process.env["PATH"] ?? process.env["Path"]}`,
-    MATE_FAKE_SERVICE_STATE: state,
-    MATE_FAKE_SERVICE_PATHS: JSON.stringify(paths),
-    MATE_FAKE_SERVICE_SCRIPT: fake,
-    MATE_TEST_NODE: process.execPath,
+    PALACE_FAKE_SERVICE_STATE: state,
+    PALACE_FAKE_SERVICE_PATHS: JSON.stringify(paths),
+    PALACE_FAKE_SERVICE_SCRIPT: fake,
+    PALACE_TEST_NODE: process.execPath,
   };
-  const argv = (...args: string[]) => [process.execPath, "--conditions=mate-source", main, ...args];
+  const argv = (...args: string[]) => [
+    process.execPath,
+    "--conditions=palace-source",
+    main,
+    ...args,
+  ];
   const service = (): FakeService => JSON.parse(readFileSync(state, "utf8"));
   return {
     home,
@@ -219,15 +224,15 @@ export type BundleOptions = {
 };
 
 /**
- * Write `mate-node-<version>.tar.gz` and its `.sha256` into `directory` the way the release build does: a ustar
- * archive with everything under `mate-node/` and a manifest listing the files. Options make it wrong in one way.
+ * Write `palace-node-<version>.tar.gz` and its `.sha256` into `directory` the way the release build does: a ustar
+ * archive with everything under `palace-node/` and a manifest listing the files. Options make it wrong in one way.
  */
 export function writeBundle(directory: string, options: BundleOptions): string {
   const windows = process.platform === "win32";
   const files: Record<string, string | Buffer> = {
-    [windows ? "bin/mate.cmd" : "bin/mate"]: windows ? "@echo off\r\n" : "#!/bin/sh\n",
+    [windows ? "bin/palace.cmd" : "bin/palace"]: windows ? "@echo off\r\n" : "#!/bin/sh\n",
     [windows ? "node/node.exe" : "node/bin/node"]: `node runtime for ${options.version}\n`,
-    "lib/mate.mjs": `// mate ${options.version}\n`,
+    "lib/palace.mjs": `// palace ${options.version}\n`,
   };
   if (options.bigFileBytes !== undefined) {
     files["lib/big.bin"] = randomBytes(options.bigFileBytes);
@@ -239,17 +244,17 @@ export function writeBundle(directory: string, options: BundleOptions): string {
     files: options.listed ?? Object.keys(files),
   };
   const entries: TarEntry[] = [
-    { path: "mate-node/", type: "directory" },
-    { path: "mate-node/manifest.json", type: "file", content: JSON.stringify(manifest) },
+    { path: "palace-node/", type: "directory" },
+    { path: "palace-node/manifest.json", type: "file", content: JSON.stringify(manifest) },
     ...Object.entries(files).map(([path, content]): TarEntry => ({
-      path: `mate-node/${path}`,
+      path: `palace-node/${path}`,
       type: "file",
       content,
       mode: path.startsWith("bin/") || path.startsWith("node/bin/") ? 0o755 : 0o644,
     })),
     ...(options.extra ?? []),
   ];
-  const name = `mate-node-${options.version}.tar.gz`;
+  const name = `palace-node-${options.version}.tar.gz`;
   const archive = gzipSync(tar(entries), { level: 1 });
   const path = join(directory, name);
   writeFileSync(path, archive);

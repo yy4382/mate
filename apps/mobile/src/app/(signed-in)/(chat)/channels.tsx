@@ -1,6 +1,6 @@
 import { t } from "../../../i18n";
 import { router, Stack, useLocalSearchParams } from "expo-router";
-import type { ConversationView } from "@mate/chat/contracts";
+import type { ConversationView } from "@palace/chat/contracts";
 import { conversationLabel } from "../../../chat";
 import { useChatState } from "../../../session";
 import { Empty, Screen } from "../../../ui";

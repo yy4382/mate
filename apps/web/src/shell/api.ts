@@ -1,5 +1,5 @@
-import type { AdminErrorReason } from "@mate/admin";
-import type { ChatErrorReason } from "@mate/chat";
+import type { AdminErrorReason } from "@palace/admin";
+import type { ChatErrorReason } from "@palace/chat";
 import { t } from "../i18n.ts";
 /** A refusal from the control plane: `reason` is the `error` code of its `{ error, message }` body. */
 export class ApiError extends Error {

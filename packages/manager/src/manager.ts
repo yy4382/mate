@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import type { ChatApp } from "@mate/chat";
-import { systemClock, type Clock } from "@mate/clock";
+import type { ChatApp } from "@palace/chat";
+import { systemClock, type Clock } from "@palace/clock";
 import {
   configureAgentFile,
   createAgentStore,
@@ -14,7 +14,7 @@ import {
   type AgentUsage,
   type CredentialsLookup,
   type WorkspacePort,
-} from "@mate/runtime";
+} from "@palace/runtime";
 import { AgentFiles } from "./agent-files.ts";
 import { connectInbox, type InboxConnector } from "./connector.ts";
 
