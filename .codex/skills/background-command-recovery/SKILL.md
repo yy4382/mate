@@ -13,12 +13,12 @@ This is a TLA+ model checked by TLC, not a proof of the TypeScript implementatio
 
 ## Confirm that the model describes the change
 
-Last confirmed source commit: `a3dd75bd338c9c7762bdf11de0aea219ab445136`.
+Last confirmed source commit: `65bce182684310c49aa4c176e0891b438b6c122d`.
 
 From the repository root, inspect committed and uncommitted changes since that commit:
 
 ```sh
-git diff a3dd75bd338c9c7762bdf11de0aea219ab445136 -- packages/runtime/src/background-commands.ts packages/runtime/src/workspace-tools.ts packages/runtime/src/runtime.ts packages/runtime/src/lifetime.ts packages/runtime/src/storage.ts packages/runtime/package.json packages/manager/src/manager.ts pnpm-lock.yaml
+git diff 65bce182684310c49aa4c176e0891b438b6c122d -- packages/runtime/src/background-commands.ts packages/runtime/src/workspace-tools.ts packages/runtime/src/runtime.ts packages/runtime/src/lifetime.ts packages/runtime/src/storage.ts packages/runtime/package.json packages/manager/src/manager.ts pnpm-lock.yaml
 ```
 
 Read `docs/ARCHITECTURE.md` sections 4.2, 4.4, and 4.5. Trace the changed calls against this coverage record:
@@ -85,4 +85,8 @@ Use `/maintain-formal-verification-skill` after changes that bypassed this compa
 
 ## Validation record
 
-At the source commit above, TLC exhausted 12 distinct states with no invariant violation. All 12 existing background-command tests passed. An independent reader followed this skill on the reordered real code and found the four-step duplicate-dispatch counterexample. A temporary public-interface probe observed `dispatched again` instead of the expected recovery report. After restoring the code, that probe and all 12 existing tests passed. The probe was removed after validation.
+Maintenance on 2026-11-03: **in sync** after rebasing onto main at `7b4bcfffd4344694b29e22b8e9652ad85dbc74ed`. Reviewed changes from the previous sync, `a3dd75bd338c9c7762bdf11de0aea219ab445136`, through the source commit above. The runtime and Manager trees are unchanged. The covered lockfile changed for mobile, APNs, and build tooling; the runtime and Manager importer records and the Chord, pi-ai, and Durable 1.1.0 package resolutions and dependency snapshots are unchanged. Searched for moved or new background-command checkpoint and dispatch writers; found none. The model, invariant, bounds, and assumptions remain unchanged.
+
+TLC exhausted 12 distinct states, with zero states left on the queue and no invariant violation. The statechart check also passed `AtMostOneDispatch` and `NoDeadlock`. All 12 existing background-command tests passed with the rebased lockfile.
+
+Repeated the negative control in an isolated copy of this source commit. Moving the checkpoint after the awaited `node.run` and updating the scratch model produced the shortest four-step violation: dispatch, crash, reopen at `start`, dispatch again. A temporary public-interface probe observed `dispatched again` instead of the expected recovery report; this was an assertion failure, not a timeout. After restoring the source and model, the model check, that probe, and all 12 existing tests passed. The probe was removed after validation. These deliberate failures are negative-control evidence, not bugs found in the unmodified code. The initial skill creation also received an independent reader's validation; this maintenance reran the checks without a new independent review.
