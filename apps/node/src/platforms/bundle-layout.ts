@@ -57,7 +57,7 @@ rmdir "%mate_temporary%" 2>nul
 exit /b 1
 
 :manage
-"%~dp0node.exe" "%~dp0mate.mjs" %*
+"%~dp0node.exe" "%~dp0palace.mjs" %*
 exit /b %errorlevel%
 `.replaceAll("\n", "\r\n");
 
