@@ -1,0 +1,17 @@
+#!/bin/bash
+set -eu
+[ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || { echo 'credential leaked to systemctl' >&2; exit 1; }
+echo "$*" >>/run/systemctl-actions
+. /etc/palace-deploy.env
+cd "$PALACE_PLANE_DIR"
+case "$1" in
+  start)
+    if [ -e /run/apns-unavailable-once ]; then
+      rm /run/apns-unavailable-once
+      exit 1
+    fi
+    docker compose up -d --wait
+    ;;
+  stop) docker compose down ;;
+  *) exit 1 ;;
+esac

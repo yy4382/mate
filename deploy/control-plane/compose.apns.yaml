@@ -1,0 +1,13 @@
+services:
+  control-plane:
+    restart: "no"
+    stdin_open: true
+    tty: false
+    ulimits:
+      core: 0
+    environment:
+      PALACE_APNS_KEY_STDIN: "1"
+      PALACE_APNS_KEY_ID: ${PALACE_APNS_KEY_ID:?set PALACE_APNS_KEY_ID}
+      PALACE_APNS_TEAM_ID: ${PALACE_APNS_TEAM_ID:?set PALACE_APNS_TEAM_ID}
+      PALACE_APNS_TOPIC: ${PALACE_APNS_TOPIC:?set PALACE_APNS_TOPIC}
+      PALACE_APNS_ENVIRONMENT: production

@@ -319,6 +319,43 @@ echo "restrict,command=\"/usr/local/sbin/palace-deploy\" $(cat palace-deploy-key
 
 `restrict,command=` 让这把 key 只能执行 `palace-deploy`，没有 shell、转发和终端；拿到它的人最多能把这台机器升级到一个已发布的版本。GitHub 仓库里建一个 `production` 环境，放三个 secret：`DEPLOY_HOST`（例如 `root@203.0.113.7`）、`DEPLOY_SSH_KEY`（私钥）和 `DEPLOY_KNOWN_HOSTS`（`ssh-keyscan` 得到、和你已知的主机指纹核对过的那一行）。主机地址、key 和主机指纹只放在这里，不写进仓库，Action 日志里也被遮掉。没有 `DEPLOY_HOST` 时 Deploy 任务什么都不做。
 
+### 5.6 从 1Password 通过标准输入提供 APNs 私钥
+
+需要避免在服务器文件系统保存 APNs `.p8` 时，可以让宿主机上的 systemd 管理控制面。每次启动由 `palace-apns` 使用 1Password CLI 读取一次 Document，成功后通过匿名管道交给容器的标准输入，由控制面解析并验证 EC P-256 私钥。`PALACE_APNS_KEY_STDIN=1` 让控制面接收这份 PKCS#8 PEM 输入；读到 `-----END PRIVATE KEY-----` 就开始启动，不等待 Docker 关闭标准输入。原有 `PALACE_APNS_KEY_FILE` 仍适用于文件部署，两种输入不能同时设置。
+
+这个模式要求 Linux、Docker Compose、systemd、1Password CLI 2.18+ 和关闭 swap。宿主脚本及容器都禁用 core dump。私钥不会写入文件、命令参数、Compose 环境变量或 Docker 容器配置。root 仍能读取进程内存。Service Account token 是宿主机持久凭据，由 root 持有，容器只收到 APNs 私钥。
+
+首次启用前，先通过原有 Compose 部署流程发布并验证支持 `PALACE_APNS_KEY_STDIN` 的控制面版本，之后才安装以下脚本、启用 override 和 systemd。启用此模式后，后续部署的回退镜像也必须支持 stdin 输入；若要回退到不支持的旧镜像，须先停止 systemd 服务，移除 stdin override 和 `PALACE_PLANE_SERVICE` 配置，恢复原有 Compose 管理方式。
+
+先创建专用 vault、保存 APNs Document，并创建只读 Service Account。将 token 保存在 `/etc/palace-secrets/1password-token`，文件属主 root、权限 0600，父目录权限 0700。通过交互式隐藏输入写入，避免把 token 写进命令历史。以下安装文件必须来自经过审阅的 Git 提交。
+
+```sh
+install -m 0755 deploy/auto-update/palace-apns /usr/local/sbin/palace-apns
+install -m 0600 deploy/auto-update/palace-apns.env.example /etc/palace-apns.env
+install -m 0644 deploy/auto-update/palace-control-plane.service /etc/systemd/system/palace-control-plane.service
+```
+
+编辑 `/etc/palace-apns.env`，填入实际控制面目录、vault ID 和 Document ID。将 `deploy/control-plane/compose.apns.yaml` 合并到部署目录的 `compose.override.yaml`，保留已有 override 设置。它设置 `restart: "no"`、`stdin_open: true`、`tty: false`，并禁用容器 core dump。在 Compose 的 `.env` 中填写非私钥配置 `PALACE_APNS_KEY_ID`、`PALACE_APNS_TEAM_ID` 和 `PALACE_APNS_TOPIC`。这个示例使用 production APNs。
+
+```sh
+systemctl daemon-reload
+# 在实际控制面部署目录中执行。首次切换先停止 Docker 管理的旧容器。
+docker compose down
+systemctl enable --now palace-control-plane.service
+```
+
+`palace-apns /etc/palace-apns.env` 在取密钥成功后用 Compose 创建控制面容器，附加标准输入并运行它。取密钥的输出暂存在未导出的 shell 变量中；只有 1Password 命令成功后才交给 Docker，避免把失败请求的部分输出作为私钥传入。systemd 在输入准备好后收到 ready 通知，自动部署的健康检查从这时开始。容器退出时，systemd 重新运行整个流程并取新密钥。服务器重启也走相同流程。只对这个服务使用 systemd 管理重启，其他容器继续使用各自策略。
+
+自动部署的 `/etc/palace-deploy.env` 增加：
+
+```sh
+PALACE_PLANE_SERVICE=palace-control-plane.service
+```
+
+新版本部署停止 systemd 服务并按 5.5 备份、更新、启动、检查和回退。取密钥失败就是启动失败，会触发部署回退；回退也需要重新取密钥，因此 1Password 持续不可用时回退同样无法启动。服务会每 10 秒重试。已经运行的 Palace 不依赖后续 1Password 请求；它异常退出或主机重启后，需要 1Password 可用才能恢复。相同版本的部署保持原有 no-op 行为。手动轮换密钥使用 `systemctl restart palace-control-plane.service`。
+
+更换 Apple key 时，同时更新 1Password Document 和 Compose 中的 Key ID。需要更改 topic、team 或环境时同步修改对应配置。部署配置更新也应先提交 Git，再安装到服务器。查看状态使用 `systemctl status palace-control-plane` 和 `journalctl -u palace-control-plane`，不要输出 token、Document 内容或私钥环境。
+
 ## 6. 在开发机上运行
 
 需要 Node 24、pnpm 10；跑 Linux 测试还需要 Docker（macOS 上用 OrbStack 即可）。node 的执行与 CLI 测试在 Linux、macOS、Windows 上运行，CI 的 macOS/Windows 任务另外构建本机发布包并验证真实服务。真实服务冒烟只在一次性 CI 账号上显式启用，日常 `pnpm check` 不安装开发机的服务。
@@ -383,11 +420,12 @@ iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模�
 
 移动端使用 [expo-notifications SDK 58](https://docs.expo.dev/versions/v58.0.0/sdk/notifications/) 的原生 APNs token。SDK 58 的[官方依赖表](https://github.com/expo/expo/blob/sdk-58/packages/expo/bundledNativeModules.json) 推荐 `~58.1.6`。服务端使用维护中的 [@parse/node-apn 8.1.0](https://github.com/parse-community/node-apn)，其 Node 范围包含 24。选择直接 APNs，是因为已有后端可以持有 provider，避免另加 Expo 托管推送服务与账号。[Expo 官方说明](https://docs.expo.dev/push-notifications/sending-notifications-custom/)允许直接 APNs；Expo 推送服务还需要 Expo token、服务与凭据管理，本项目不使用它。库负责 HTTP/2 与 JWT，Palace 只适配现有队列。
 
-未配置时 Web Push 照常运行，`GET /api/chat/push/native` 返回 `{ enabled: false }`，原生订阅回 503 `native-push-disabled`。系统权限允许也不会显示已登记。配置 APNs 时，控制面需要同时提供以下环境变量；只提供一部分或 key 无法加载时拒绝启动。
+未配置时 Web Push 照常运行，`GET /api/chat/push/native` 返回 `{ enabled: false }`，原生订阅回 503 `native-push-disabled`。系统权限允许也不会显示已登记。配置 APNs 时，控制面需要选择一个私钥输入，并提供 Key ID、Team ID、topic 和环境；只提供一部分或 key 无法加载时拒绝启动。
 
 | 变量 | 内容 |
 | --- | --- |
 | `PALACE_APNS_KEY_FILE` | 由操作者提供的 APNs `.p8` key 文件路径，控制面可读；容器中可只读挂载，不提交到仓库 |
+| `PALACE_APNS_KEY_STDIN` | 设置为 `1` 从标准输入读取私钥，与 `PALACE_APNS_KEY_FILE` 二选一；PKCS#8 PEM 输入上限 16 KiB，须在 15 秒内收到完整结束标记，无需关闭 stdin，详见 §5.6 |
 | `PALACE_APNS_KEY_ID` | Apple 签发的 10 位 key ID |
 | `PALACE_APNS_TEAM_ID` | 10 位 team ID |
 | `PALACE_APNS_TOPIC` | 签名 app 的 bundle identifier，当前为 `dev.yyang.palace` |

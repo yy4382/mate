@@ -1,0 +1,20 @@
+[Unit]
+Description=Palace control plane with APNs credentials from 1Password
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=all
+ExecStart=/usr/local/sbin/palace-apns /etc/palace-apns.env
+Restart=always
+RestartSec=10
+TimeoutStartSec=90
+TimeoutStopSec=30
+KillMode=mixed
+LimitCORE=0
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

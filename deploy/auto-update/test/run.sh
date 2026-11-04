@@ -24,6 +24,7 @@ PALACE_HEALTH_WAIT=2
 PALACE_NODE_CONNECT_WAIT=2
 EOF
 mkdir -p /var/lib/palace-deploy/bundles
+install -m 0755 /t/test/stubs/systemctl /usr/local/bin/
 fails=0
 check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=1; fi; }
 bundle() { head -c 1000 /dev/urandom >"/tmp/palace-node-$1-linux-x64.tar.gz"; }
@@ -61,5 +62,19 @@ check "later versions deploy after a rollback" '[ "$(state)" = "repo/plane:0.6.0
 check "only the newest backups are kept" '[ "$(ls $plane/backups | wc -l)" = 2 ]'
 check "only the running and previous bundles are kept" '[ "$(ls /var/lib/palace-deploy/bundles | sort | tr "\n" " ")" = "palace-node-0.5.0-linux-x64.tar.gz palace-node-0.5.0-linux-x64.tar.gz.sha256 palace-node-0.6.0-linux-x64.tar.gz palace-node-0.6.0-linux-x64.tar.gz.sha256 " ]'
 check "the log has every deploy" '[ "$(grep -c "deploy " /var/lib/palace-deploy/deploy.log)" -ge 7 ]'
+cat >>/etc/palace-deploy.env <<EOF
+PALACE_PLANE_SERVICE=palace-control-plane.service
+EOF
+bundle 0.7.0
+touch /run/apns-unavailable-once
+before=$(state)
+deploy 0.7.0; code=$?
+check "a credential fetch failure during startup rolls back through systemd" '[ $code = 1 ] && [ "$(state)" = "$before" ] && grep -q "rolled back" /tmp/out && [ "$(grep -c "start palace-control-plane.service" /run/systemctl-actions)" = 2 ]'
+deploy 0.7.0; code=$?
+check "systemd deployments use the configured service" '[ $code = 0 ] && [ "$(state)" = "repo/plane:0.7.0 0.7.0 migrated by repo/plane:0.7.0 active" ] && grep -qx "start palace-control-plane.service" /run/systemctl-actions'
+bundle 0.8.0-bad
+deploy 0.8.0-bad; code=$?
+check "systemd deployments restore the previous image and node on failure" '[ $code = 1 ] && grep -q "rolled back" /tmp/out && [ "$(state)" = "repo/plane:0.7.0 0.7.0 migrated by repo/plane:0.7.0 active" ]'
 [ $fails = 0 ] || { echo "--- last output"; cat /tmp/out; }
-exit $fails
+[ $fails = 0 ] || exit "$fails"
+bash /t/test/apns.sh

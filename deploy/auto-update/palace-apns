@@ -1,0 +1,40 @@
+#!/bin/bash
+set +x
+set -euo pipefail
+ulimit -c 0
+unset OP_SERVICE_ACCOUNT_TOKEN OP_CONNECT_HOST OP_CONNECT_TOKEN apns_private_key
+
+config=${1:-/etc/palace-apns.env}
+# shellcheck source=/dev/null
+. "$config"
+: "${PALACE_PLANE_DIR:?} ${PALACE_OP_VAULT:?} ${PALACE_OP_DOCUMENT:?} ${PALACE_OP_TOKEN_FILE:?}"
+# Keep private-key process memory out of swap.
+if [ -n "$(swapon --show --noheadings --output NAME)" ]; then
+  echo "palace-apns: disable swap before loading the private key" >&2
+  exit 1
+fi
+if ! apns_private_key=$(
+  (
+    export OP_SERVICE_ACCOUNT_TOKEN
+    OP_SERVICE_ACCOUNT_TOKEN=$(cat "$PALACE_OP_TOKEN_FILE")
+    timeout --kill-after=5s 60s op document get "$PALACE_OP_DOCUMENT" --vault "$PALACE_OP_VAULT"
+  ) 2>/dev/null
+); then
+  echo "palace-apns: could not fetch APNs credentials" >&2
+  exit 1
+fi
+
+cd "$PALACE_PLANE_DIR"
+docker compose create --force-recreate --no-build --pull never control-plane
+container=$(docker compose ps --all --quiet control-plane)
+cleanup() {
+  docker stop --time 20 "$container" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+trap 'exit 0' TERM INT
+# Background the attachment so Bash handles SIGTERM while the server is running.
+(printf '%s' "$apns_private_key" | docker start --attach --interactive "$container") &
+attached=$!
+unset apns_private_key
+if [ -n "${NOTIFY_SOCKET:-}" ]; then systemd-notify --ready; fi
+wait "$attached"
