@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** What `node run` records about its link to the gateway, for `mate node status` to report. */
+/** What `node run` records about its link to the gateway, for `palace node status` to report. */
 export type LinkState = {
   pid: number;
   connected: boolean;

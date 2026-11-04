@@ -1,6 +1,6 @@
 import { t } from "../i18n";
 import type { ReactNode } from "react";
-import type { WorkspaceListing } from "@mate/admin";
+import type { WorkspaceListing } from "@palace/admin";
 import { router, Stack } from "expo-router";
 import { Button, Caption, Copy, Empty, Loading, Row, Screen, Section } from "../ui";
 import { AgentFallback, useAgent } from "./Agents";

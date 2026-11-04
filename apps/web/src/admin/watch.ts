@@ -1,5 +1,5 @@
 import { t } from "../i18n.ts";
-import type { Entry, ObservationNote } from "@mate/admin/client";
+import type { Entry, ObservationNote } from "@palace/admin/client";
 
 type Block = { type: string; text?: string; thinking?: string; name?: string; arguments?: unknown };
 

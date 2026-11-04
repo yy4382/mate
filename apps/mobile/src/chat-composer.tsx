@@ -1,6 +1,6 @@
 import { t } from "./i18n";
 import { Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
-import type { AccountView } from "@mate/chat/contracts";
+import type { AccountView } from "@palace/chat/contracts";
 import type { Draft } from "./chat";
 import { Button, Caption, ErrorLine, Field, styles } from "./ui";
 import { useTheme } from "./theme";

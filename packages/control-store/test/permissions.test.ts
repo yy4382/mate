@@ -1,8 +1,8 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
-import { openControlTables, CONTROL_STORE_FILE } from "@mate/control-store";
-import { Migrations } from "@mate/migrations";
-import { temporaryDirectory } from "@mate/testkit";
+import { openControlTables, CONTROL_STORE_FILE } from "@palace/control-store";
+import { Migrations } from "@palace/migrations";
+import { temporaryDirectory } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 
 const tables = {

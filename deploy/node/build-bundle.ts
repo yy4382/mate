@@ -46,7 +46,7 @@ const script = await build({
   target: "node24",
   dts: false,
   deps: { alwaysBundle: [/.*/], onlyBundle: false },
-  inputOptions: { resolve: { conditionNames: ["mate-source"] } },
+  inputOptions: { resolve: { conditionNames: ["palace-source"] } },
   outputOptions: { codeSplitting: false },
   define: { __MATE_NODE_VERSION__: JSON.stringify(version) },
   clean: false,
@@ -68,12 +68,12 @@ for (const runtime of runtimes) {
     { path: layout.runtime, content: files.node, executable: true },
     { path: "node/LICENSE", content: files.license, executable: false },
     {
-      path: "lib/mate.mjs",
+      path: "lib/palace.mjs",
       content: Buffer.from(chunk.code),
       executable: false,
     },
   ]);
-  const path = join(values.out, `mate-node-${version}-${layout.name}-${runtime.arch}.tar.gz`);
+  const path = join(values.out, `palace-node-${version}-${layout.name}-${runtime.arch}.tar.gz`);
   const digest = createHash("sha256").update(archive).digest("hex");
   writeFileSync(path, archive);
   writeFileSync(`${path}.sha256`, `${digest}  ${basename(path)}\n`);

@@ -77,7 +77,7 @@ function ServerForm({
           editable={!busy}
           keyboardType="url"
           textContentType="URL"
-          placeholder="https://mate.example.com"
+          placeholder="https://palace.example.com"
           hint={t("auth.use_an_https_address_without_credentials_a")}
           returnKeyType="done"
           onSubmitEditing={Keyboard.dismiss}

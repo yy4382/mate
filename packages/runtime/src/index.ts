@@ -23,7 +23,7 @@ export {
   type ChatTaskChange,
   type ChatTimeline,
 } from "./chat-tools.ts";
-export type { Clock } from "@mate/clock";
+export type { Clock } from "@palace/clock";
 export type { AgentEvent, SnapshotEvent } from "@earendil-works/pi-durable";
 export type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 export {

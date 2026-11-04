@@ -22,7 +22,7 @@ export function posixLauncher(bundle: BundleLayout): Launcher {
           return [`Linked ${paths.command} to ${target(paths)}.`];
         case "foreign":
           return [
-            `Left ${paths.command} alone: it is not Mate's link. Run ${target(paths)} instead.`,
+            `Left ${paths.command} alone: it is not Palace's link. Run ${target(paths)} instead.`,
           ];
         case "mate":
           return [];
@@ -34,7 +34,7 @@ export function posixLauncher(bundle: BundleLayout): Launcher {
           unlinkSync(paths.command);
           return [`Removed ${paths.command}.`];
         case "foreign":
-          return [`Left ${paths.command} alone: it is not Mate's link.`];
+          return [`Left ${paths.command} alone: it is not Palace's link.`];
         case "absent":
           return [];
       }
@@ -43,7 +43,7 @@ export function posixLauncher(bundle: BundleLayout): Launcher {
 }
 
 export function windowsLauncher(bundle: BundleLayout): Launcher {
-  const header = "@echo off\r\nrem Written by mate node.\r\n";
+  const header = "@echo off\r\nrem Written by palace node.\r\n";
   const content = (paths: Layout) => {
     const program = relative(dirname(paths.command), paths.program).replaceAll("%", "%%");
     const command = bundle.command.replaceAll("/", "\\");
@@ -63,11 +63,11 @@ export function windowsLauncher(bundle: BundleLayout): Launcher {
         case "absent":
           writeServiceFile(paths.command, content(paths));
           return [
-            `Wrote ${paths.command}. Add ${dirname(paths.command)} to your user PATH to run mate.`,
+            `Wrote ${paths.command}. Add ${dirname(paths.command)} to your user PATH to run palace.`,
           ];
         case "foreign":
           return [
-            `Left ${paths.command} alone: Mate did not write it. Run ${join(paths.program, bundle.command)} instead.`,
+            `Left ${paths.command} alone: Palace did not write it. Run ${join(paths.program, bundle.command)} instead.`,
           ];
         case "mate":
           return writeServiceFile(paths.command, content(paths))
@@ -81,7 +81,7 @@ export function windowsLauncher(bundle: BundleLayout): Launcher {
           unlinkSync(paths.command);
           return [`Removed ${paths.command}.`];
         case "foreign":
-          return [`Left ${paths.command} alone: Mate did not write it.`];
+          return [`Left ${paths.command} alone: Palace did not write it.`];
         case "absent":
           return [];
       }

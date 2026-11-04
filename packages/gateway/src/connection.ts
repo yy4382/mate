@@ -1,4 +1,4 @@
-import type { Clock } from "@mate/clock";
+import type { Clock } from "@palace/clock";
 import {
   GatewayMessageSchema,
   NodeAuthenticateSchema,
@@ -8,7 +8,7 @@ import {
   type GatewayMessage,
   type GatewayRefused,
   type ToolResult,
-} from "@mate/node-protocol";
+} from "@palace/node-protocol";
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { RawData, WebSocket } from "ws";

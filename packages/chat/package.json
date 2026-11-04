@@ -1,22 +1,22 @@
 {
-  "name": "@mate/chat",
+  "name": "@palace/chat",
   "private": true,
   "type": "module",
   "exports": {
     ".": {
-      "mate-source": "./src/index.ts",
+      "palace-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     },
     "./client": {
       "react-native": "./src/client.ts",
-      "mate-source": "./src/client.ts",
+      "palace-source": "./src/client.ts",
       "types": "./dist/src/client.d.ts",
       "default": "./dist/src/client.js"
     },
     "./contracts": {
       "react-native": "./src/contracts.ts",
-      "mate-source": "./src/contracts.ts",
+      "palace-source": "./src/contracts.ts",
       "types": "./dist/src/contracts.d.ts",
       "default": "./dist/src/contracts.js"
     }
@@ -26,11 +26,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@mate/clock": "workspace:*",
-    "@mate/migrations": "workspace:*",
+    "@palace/clock": "workspace:*",
+    "@palace/migrations": "workspace:*",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@mate/testkit": "workspace:*"
+    "@palace/testkit": "workspace:*"
   }
 }

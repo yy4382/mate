@@ -14,11 +14,11 @@ import { createGunzip, gzipSync } from "node:zlib";
 import { z } from "zod";
 
 /**
- * The node release bundle: a gzipped ustar archive holding one directory, `mate-node/`, whose contents become the
+ * The node release bundle: a gzipped ustar archive holding one directory, `palace-node/`, whose contents become the
  * program directory. `manifest.json` lists every other file in it, so the manifest is also the record of which files
- * in an installed program directory are Mate's. A `<bundle>.sha256` file next to the archive carries its checksum.
+ * in an installed program directory are Palace's. A `<bundle>.sha256` file next to the archive carries its checksum.
  */
-export const BUNDLE_ROOT = "mate-node";
+export const BUNDLE_ROOT = "palace-node";
 export const MANIFEST = "manifest.json";
 const relativePath = z
   .string()
@@ -35,7 +35,7 @@ const manifestSchema = z.strictObject({
 });
 export type Manifest = z.infer<typeof manifestSchema>;
 
-/** The manifest of an unpacked bundle or program directory, or undefined when it has none Mate can read. */
+/** The manifest of an unpacked bundle or program directory, or undefined when it has none Palace can read. */
 export function readManifest(directory: string): Manifest | undefined {
   try {
     return manifestSchema.parse(JSON.parse(readFileSync(join(directory, MANIFEST), "utf8")));
@@ -44,7 +44,7 @@ export function readManifest(directory: string): Manifest | undefined {
   }
 }
 
-/** Paths under `directory` that its manifest does not list: files, links and directories Mate did not put there. */
+/** Paths under `directory` that its manifest does not list: files, links and directories Palace did not put there. */
 export function unlisted(directory: string, manifest: Manifest): string[] {
   const files = new Set([MANIFEST, ...manifest.files]);
   const directories = new Set(manifest.files.flatMap(parents));
@@ -64,7 +64,7 @@ export function unlisted(directory: string, manifest: Manifest): string[] {
 /**
  * Check `bundle` against `<bundle>.sha256`, unpack it into the empty directory `into`, and return its manifest.
  * Throws, leaving `into` for the caller to remove, when the checksum does not match, the archive holds a link, a
- * special file or a path outside `mate-node/`, its files differ from its manifest, or it was built for another
+ * special file or a path outside `palace-node/`, its files differ from its manifest, or it was built for another
  * platform.
  */
 export async function unpackBundle(bundle: string, into: string): Promise<Manifest> {
@@ -213,7 +213,7 @@ function isFile(path: string): boolean {
 
 export type BundleFile = { path: string; content: Buffer; executable: boolean };
 
-/** The gzipped bundle archive holding `files` under `mate-node/`, with the manifest describing them. */
+/** The gzipped bundle archive holding `files` under `palace-node/`, with the manifest describing them. */
 export function packBundle(release: Omit<Manifest, "files">, files: readonly BundleFile[]): Buffer {
   const manifest = manifestSchema.parse({ ...release, files: files.map((file) => file.path) });
   const all = [

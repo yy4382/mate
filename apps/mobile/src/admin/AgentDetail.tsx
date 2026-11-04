@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { CatalogModel } from "@mate/admin";
+import type { CatalogModel } from "@palace/admin";
 import { router, Stack } from "expo-router";
 import { useState } from "react";
 import { View } from "react-native";

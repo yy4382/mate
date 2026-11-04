@@ -1,4 +1,4 @@
-import { storeFixture } from "@mate/testkit";
+import { storeFixture } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 import { environment } from "./support.ts";
 

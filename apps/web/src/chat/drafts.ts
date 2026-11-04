@@ -1,4 +1,4 @@
-import { mentionsIn, timelineKey, unsentText, type TimelineKey } from "@mate/chat/client";
+import { mentionsIn, timelineKey, unsentText, type TimelineKey } from "@palace/chat/client";
 import { useSyncExternalStore } from "react";
 import { ApiError, describe, post } from "../shell/api.ts";
 import type { AccountView, TimelineRef } from "./types.ts";

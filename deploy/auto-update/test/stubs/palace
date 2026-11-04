@@ -1,10 +1,10 @@
 #!/bin/bash
-# Stub `mate node`, keeping the installed version in ~/ver; a version containing "nostart" never connects to the control plane.
+# Stub `palace node`, keeping the installed version in ~/ver; a version containing "nostart" never connects to the control plane.
 set -e
 shift
 case "$1" in
   status)
-    echo "Program: $(cat ~/ver) (linux-x64) in ~/.local/lib/mate-node"
+    echo "Program: $(cat ~/ver) (linux-x64) in ~/.local/lib/palace-node"
     if [ -f ~/active ]; then echo "Service: active, enabled"; else echo "Service: inactive, disabled"; fi
     if [ -f ~/active ] && ! grep -q nostart ~/ver; then echo "Link: connected since 2026-01-01T00:00:00.000Z"; else echo "Link: none"; fi ;;
   stop) rm -f ~/active ;;
@@ -12,6 +12,6 @@ case "$1" in
   update)
     [ ! -f ~/active ] || { echo "refusing: running" >&2; exit 1; }
     (cd "$(dirname "$2")" && sha256sum -c --quiet "$(basename "$2").sha256")
-    basename "$2" | sed 's/^mate-node-\(.*\)-linux-x64.tar.gz$/\1/' >~/ver ;;
+    basename "$2" | sed 's/^palace-node-\(.*\)-linux-x64.tar.gz$/\1/' >~/ver ;;
   logs) echo "(node logs)" ;;
 esac

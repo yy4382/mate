@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const file = process.env.MATE_FAKE_SERVICE_STATE;
-const paths = JSON.parse(process.env.MATE_FAKE_SERVICE_PATHS);
+const file = process.env.PALACE_FAKE_SERVICE_STATE;
+const paths = JSON.parse(process.env.PALACE_FAKE_SERVICE_PATHS);
 const state = JSON.parse(fs.readFileSync(file, "utf8"));
 const tool = process.argv[2];
 const args = process.argv.slice(3);
@@ -40,7 +40,7 @@ if (tool === "systemctl") {
 } else if (tool === "launchctl") {
   const [verb, target] = args;
   if (verb === "print-disabled") {
-    print('{ "io.mate.node" => ' + (state.enabled === "enabled" ? "false" : "true") + " }");
+    print('{ "io.palace.node" => ' + (state.enabled === "enabled" ? "false" : "true") + " }");
   } else if (verb === "print" && target.split("/").length === 2) {
     print(target + " = {}");
   } else if (verb === "print") {
@@ -87,7 +87,7 @@ if (tool === "systemctl") {
       : {
           state: states[state.active] ?? 0,
           enabled: state.enabled === "enabled",
-          description: state.foreignDefinition ? "Someone else's task" : "Written by mate node.",
+          description: state.foreignDefinition ? "Someone else's task" : "Written by palace node.",
           instances: state.active === "active" ? [pid] : [],
         };
     const processes =
@@ -101,7 +101,7 @@ if (tool === "systemctl") {
               created: state.created ?? "2000-01-01T00:00:00.000Z",
             },
           ];
-    print(JSON.stringify({ name: "Mate node " + sid, sid, task, processes }));
+    print(JSON.stringify({ name: "Palace node " + sid, sid, task, processes }));
   }
 } else if (tool === "schtasks") {
   const verb = args[0];

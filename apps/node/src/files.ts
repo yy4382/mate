@@ -11,7 +11,7 @@ import { err, FileError, ok, type Result } from "@earendil-works/pi-durable/env"
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";
-import type { ToolResult } from "@mate/node-protocol";
+import type { ToolResult } from "@palace/node-protocol";
 import type { TSchema } from "typebox";
 import { currentPlatform } from "./platforms/index.ts";
 

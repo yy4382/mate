@@ -1,6 +1,6 @@
 import { t } from "../i18n";
-import type { Admin, AdminErrorReason, AgentEvent, AgentView } from "@mate/admin";
-import { HumanView } from "@mate/control-plane/contracts";
+import type { Admin, AdminErrorReason, AgentEvent, AgentView } from "@palace/admin";
+import { HumanView } from "@palace/control-plane/contracts";
 import { z } from "zod";
 import { readEvents, sendJson } from "../http";
 import type { AuthState, MobileAuth } from "../auth";

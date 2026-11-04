@@ -2,7 +2,7 @@ import { chmodSync, copyFileSync, existsSync, readFileSync, rmSync, writeFileSyn
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
-import { FakeGateway } from "@mate/testkit";
+import { FakeGateway } from "@palace/testkit";
 import {
   connectedNode,
   eventually,

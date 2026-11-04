@@ -1,4 +1,4 @@
-import { accountName } from "@mate/chat/client";
+import { accountName } from "@palace/chat/client";
 import { t } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, SearchX } from "lucide-react";

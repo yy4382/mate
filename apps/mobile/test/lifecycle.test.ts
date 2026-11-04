@@ -4,7 +4,7 @@ import { MobileAuth } from "../src/auth";
 import { MobileNotifications, type NotificationPermission } from "../src/notifications";
 import { startMobileLifecycle } from "../src/lifecycle";
 
-const server = "https://mate.example.com";
+const server = "https://palace.example.com";
 const human = { accountId: 7, displayName: "Lin", handle: "lin", role: "member", active: true };
 
 type Store<T> = { subscribe(listener: () => void): () => void; getSnapshot(): T };

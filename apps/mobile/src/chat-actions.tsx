@@ -1,7 +1,7 @@
 import { t } from "./i18n";
 import { useState, type ReactNode } from "react";
-import type { AccountView, ConversationView, Entry } from "@mate/chat/contracts";
-import { accountName } from "@mate/chat/client";
+import type { AccountView, ConversationView, Entry } from "@palace/chat/contracts";
+import { accountName } from "@palace/chat/client";
 import {
   conversationLabel,
   operationKey,

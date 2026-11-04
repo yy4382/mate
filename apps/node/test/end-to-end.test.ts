@@ -3,8 +3,8 @@ import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, onTestFinished } from "vitest";
-import { createNodeGateway, type NodeGateway } from "@mate/gateway";
-import { loadOrCreateNodeIdentity, startNode } from "@mate/node";
+import { createNodeGateway, type NodeGateway } from "@palace/gateway";
+import { loadOrCreateNodeIdentity, startNode } from "@palace/node";
 import {
   eventually,
   longCommand,

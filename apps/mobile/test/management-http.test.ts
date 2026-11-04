@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, onTestFinished } from "vitest";
-import type { AgentView } from "@mate/admin";
-import { HumanView } from "@mate/control-plane/contracts";
+import type { AgentView } from "@palace/admin";
+import { HumanView } from "@palace/control-plane/contracts";
 import { MobileAuth } from "../src/auth";
 import { ManagementClient } from "../src/admin/client";
 import { environment, PASSWORD } from "../../control-plane/test/support.ts";
@@ -11,7 +11,7 @@ async function mobile(
     response,
 ) {
   const site = await environment().start();
-  const server = "https://mate.example.com";
+  const server = "https://palace.example.com";
   let cookie = "";
   const network: typeof fetch = async (url, init) => {
     const response = await fetch(String(url).replace(server, site.url), {

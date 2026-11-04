@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { onTestFinished } from "vitest";
-import type { JsonValue, NodeAccess, ToolName, ToolResult } from "@mate/node-protocol";
-import { FakeGateway } from "@mate/testkit";
+import type { JsonValue, NodeAccess, ToolName, ToolResult } from "@palace/node-protocol";
+import { FakeGateway } from "@palace/testkit";
 
 const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
 const runner = fileURLToPath(new URL("./fixtures/running-node.ts", import.meta.url));
@@ -22,7 +22,7 @@ const tree = fileURLToPath(new URL("./fixtures/command-tree.mjs", import.meta.ur
 export const linux = process.platform === "linux";
 export const windows = process.platform === "win32";
 
-/** A node started as its own process, the way systemd starts it (`mate node run`), against a fake gateway. */
+/** A node started as its own process, the way systemd starts it (`palace node run`), against a fake gateway. */
 export type NodeProcess = {
   /** The gateway the helpers below talk through; a test may swap it for one that replaced it. */
   gateway: FakeGateway;
@@ -60,7 +60,7 @@ export async function startNodeProcess(options: StartOptions = {}): Promise<Node
     await gateway.start();
     onTestFinished(() => gateway.close());
   }
-  const home = options.home ?? realpathSync(mkdtempSync(join(tmpdir(), "mate-node-")));
+  const home = options.home ?? realpathSync(mkdtempSync(join(tmpdir(), "palace-node-")));
   onTestFinished(() => rmSync(home, { recursive: true, force: true }));
   const workspacesRoot = join(home, "agents");
   const configDirectory = nodeConfigDirectory(home);
@@ -76,7 +76,7 @@ export async function startNodeProcess(options: StartOptions = {}): Promise<Node
   const invocation = windows ? [runner, optionsFile] : [main, "node", "run"];
   const [command = process.execPath, ...args] = (options.launch ?? ((argv) => argv))([
     process.execPath,
-    "--conditions=mate-source",
+    "--conditions=palace-source",
     ...invocation,
   ]);
   const child = spawn(command, args, {
@@ -164,7 +164,9 @@ export function running(pid: number): boolean {
 }
 
 export function nodeConfigDirectory(home: string): string {
-  return windows ? join(home, "AppData", "Local", "Mate", "config") : join(home, ".config", "mate");
+  return windows
+    ? join(home, "AppData", "Local", "Palace", "config")
+    : join(home, ".config", "palace");
 }
 
 export function nodeEnvironment(home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -227,7 +229,7 @@ export function readPid(path: string): number {
 
 /** A real directory that is removed when the test ends. */
 export function temporaryDirectory(): string {
-  const directory = realpathSync(mkdtempSync(join(tmpdir(), "mate-node-test-")));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "palace-node-test-")));
   onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
   return directory;
 }

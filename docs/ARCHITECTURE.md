@@ -1,12 +1,14 @@
-# Mate 架构
+# Palace 架构
 
 > 读者：只读过 `README.md` 的工程师。第一次出现的术语都会解释。
 
-## 1. Mate 是什么
+## 1. Palace 是什么
 
-Mate 是几个人共用的小环境：每个人是一个人类账号，角色是管理员或普通人类。他们在里面和若干个持续存在的 AI Agent 同事一起工作。Agent 有稳定的身份，有一个跨频道、私信、讨论串一直延续的上下文，还有自己的工作目录。它能聊天、执行命令、读写文件、设提醒，并委派工作助手。
+Palace 是几个人共用的小环境：每个人是一个人类账号，角色是管理员或普通人类。他们在里面和若干个持续存在的 AI Agent 同事一起工作。Agent 有稳定的身份，有一个跨频道、私信、讨论串一直延续的上下文，还有自己的工作目录。它能聊天、执行命令、读写文件、设提醒，并委派工作助手。
 
-Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 的职责是让这些选择都能做到，能被观察到，并且崩溃之后能接着做。
+原名 Mate。产品展示和外部配置使用 Palace；登录 cookie、Durable 文档与任务的 `mate.*` 名称等已有存储标识保留。改名不增加数据库迁移，安装目录与部署配置的手动切换见 [DEPLOYMENT §5.3](DEPLOYMENT.md#从-mate-升级到-palace)。
+
+Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palace 的职责是让这些选择都能做到，能被观察到，并且崩溃之后能接着做。
 
 ## 2. 设计原则
 
@@ -70,21 +72,21 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Mate 
 
 | 包 | 内容 |
 |---|---|
-| `packages/chat`（`@mate/chat`） | 聊天 app |
-| `packages/runtime`（`@mate/runtime`） | Agent runtime 及其扩展 |
-| `packages/manager`（`@mate/manager`） | Agent Manager 和连接器 |
-| `packages/node-protocol`（`@mate/node-protocol`） | 网关与 node 之间的消息格式，包括工具名和工具结果的形状 |
-| `packages/clock`（`@mate/clock`） | 时钟：`now` 和可中止的 `sleep`，各模块共用，测试里换成可控时钟 |
-| `packages/gateway`（`@mate/gateway`） | node 网关 |
-| `packages/migrations`（`@mate/migrations`） | 迁移：一个存储的结构就是一串按版本递增的迁移（`Migrations`），聊天库和控制库都用它建表和升级 |
-| `packages/control-store`（`@mate/control-store`） | 控制库：几个模块共用 `control.sqlite` 时，各自打开自己的表并按模块迁移结构版本 |
-| `packages/admin`（`@mate/admin`） | 管理模块：Agent 的生命周期和设置、提供商的 API key、模型目录、node 配对、观察 Agent；它打开 Agent Manager，并把 node 网关接成工作区宿主 |
-| `packages/testkit`（`@mate/testkit`） | 测试替身和工具，只给测试用 |
-| `apps/control-plane`（`@mate/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
-| `apps/web`（`@mate/web`） | Vite 网页客户端 |
-| `apps/mobile`（`@mate/mobile`） | Expo 原生 iOS 客户端，包含认证、聊天、管理、Agent 观察、个人资料和原生通知 |
-| `apps/node`（`@mate/node`） | node 进程和 `mate node` CLI |
-| `tests/system`（`@mate/system-tests`） | 起真实控制面和 node 进程的系统场景（MODULE_TESTS 第 12 节） |
+| `packages/chat`（`@palace/chat`） | 聊天 app |
+| `packages/runtime`（`@palace/runtime`） | Agent runtime 及其扩展 |
+| `packages/manager`（`@palace/manager`） | Agent Manager 和连接器 |
+| `packages/node-protocol`（`@palace/node-protocol`） | 网关与 node 之间的消息格式，包括工具名和工具结果的形状 |
+| `packages/clock`（`@palace/clock`） | 时钟：`now` 和可中止的 `sleep`，各模块共用，测试里换成可控时钟 |
+| `packages/gateway`（`@palace/gateway`） | node 网关 |
+| `packages/migrations`（`@palace/migrations`） | 迁移：一个存储的结构就是一串按版本递增的迁移（`Migrations`），聊天库和控制库都用它建表和升级 |
+| `packages/control-store`（`@palace/control-store`） | 控制库：几个模块共用 `control.sqlite` 时，各自打开自己的表并按模块迁移结构版本 |
+| `packages/admin`（`@palace/admin`） | 管理模块：Agent 的生命周期和设置、提供商的 API key、模型目录、node 配对、观察 Agent；它打开 Agent Manager，并把 node 网关接成工作区宿主 |
+| `packages/testkit`（`@palace/testkit`） | 测试替身和工具，只给测试用 |
+| `apps/control-plane`（`@palace/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
+| `apps/web`（`@palace/web`） | Vite 网页客户端 |
+| `apps/mobile`（`@palace/mobile`） | Expo 原生 iOS 客户端，包含认证、聊天、管理、Agent 观察、个人资料和原生通知 |
+| `apps/node`（`@palace/node`） | node 进程和 `palace node` CLI |
+| `tests/system`（`@palace/system-tests`） | 起真实控制面和 node 进程的系统场景（MODULE_TESTS 第 12 节） |
 
 ## 4. 模块
 
@@ -208,7 +210,7 @@ interface ChatApp {
    - 游标是一个不透明字符串，由**纪元**和事件 ID 组成，可以直接用作 SSE 的事件 ID。纪元在新建 `chat.sqlite` 时随机生成，之后不变：数据重置（换了新文件）后纪元不同，旧游标随之作废。
    - 事件保留一天，过期的在之后的写操作里删掉。游标的纪元不对、早于保留的事件、超前于库里最新的事件（例如恢复了旧备份）或者根本不是游标，`liveEvents` 都回答 `resnapshot`，客户端重新拉快照。恢复旧备份只在库里的事件追上客户端的游标之前能被发现；追上之后同一个纪元下的事件 ID 已经指向别的变化，所以恢复备份后应当让浏览器重新加载。
 
-**原生传输。** 订阅和原生通知数据的 Zod 契约在 `@mate/chat/contracts`（4.8）。浏览器继续提交 endpoint 和 keys；iOS 提交 `transport: "apns"`、十六进制 token、`sandbox | production` 环境和本次登记的随机 `binding`。两者共用收件规则和每条消息的持久队列。订阅的自然键是浏览器 endpoint 或 APNs 环境与 token。换账号或换原生 binding 时删除旧订阅再新增，旧队列随之删除，迟到的投递回答不能影响新订阅。原生取消订阅同时匹配账号和 binding，旧的取消请求不能撤销新登记。退出之后才到达的登记请求由 Web 外壳以 401 拒绝（4.7 路由），聊天 app 不另记取消。推送内容增加接收账号 ID，仍然不含消息正文。
+**原生传输。** 订阅和原生通知数据的 Zod 契约在 `@palace/chat/contracts`（4.8）。浏览器继续提交 endpoint 和 keys；iOS 提交 `transport: "apns"`、十六进制 token、`sandbox | production` 环境和本次登记的随机 `binding`。两者共用收件规则和每条消息的持久队列。订阅的自然键是浏览器 endpoint 或 APNs 环境与 token。换账号或换原生 binding 时删除旧订阅再新增，旧队列随之删除，迟到的投递回答不能影响新订阅。原生取消订阅同时匹配账号和 binding，旧的取消请求不能撤销新登记。退出之后才到达的登记请求由 Web 外壳以 401 拒绝（4.7 路由），聊天 app 不另记取消。推送内容增加接收账号 ID，仍然不含消息正文。
 
 聊天库第 5 版把 Web Push 的 endpoint 和 keys 迁为 `subscription_key` 与 `subscription_json`，保留订阅 ID、账号、AUTOINCREMENT 计数和推送队列。升级验证继续使用已发布版本的存储夹具。
 
@@ -311,7 +313,7 @@ configureAgentFile(file, settings) // 和 configure 一样改所有对话的设�
 3. 提交时 `requestId = notice:<最新事件 ID>`，`whenBusy = "steer"`，`replaces = "notice:"`：Agent 正在运行时，通知插在当前这轮工具调用之后；收件箱里还没交给模型的旧通知先被撤回。哪些通知还没交付由 Durable 的提交记录决定，连接器不另记，所以崩溃后重来也最多只有一条未交付的通知。撤回时如果那条恰好已经交给了模型，就照常提交新的。
 4. 把事件位置推进到最新事件 ID（`advanceCursor("chat-inbox", …)`）。
 
-连接器在打开时跑一遍，之后每收到一次这个账号的收件信号跑一遍。同一时间只跑一遍：跑的过程中来的信号，不管几个，都只让它结束后再跑一遍，这一遍读到期间到达的全部事件。一遍出错只报告，事件位置不动，下一个信号重来。runtime 关闭前，Manager 先停掉连接器（取消订阅并等这一遍跑完）。连接器由 `@mate/manager` 的 `connectInbox` 实现，它只需要 runtime 的 `cursor`、`advanceCursor` 和 `submit`。
+连接器在打开时跑一遍，之后每收到一次这个账号的收件信号跑一遍。同一时间只跑一遍：跑的过程中来的信号，不管几个，都只让它结束后再跑一遍，这一遍读到期间到达的全部事件。一遍出错只报告，事件位置不动，下一个信号重来。runtime 关闭前，Manager 先停掉连接器（取消订阅并等这一遍跑完）。连接器由 `@palace/manager` 的 `connectInbox` 实现，它只需要 runtime 的 `cursor`、`advanceCursor` 和 `submit`。
 
 **为什么不会丢、不会重复：** 第 3 步和第 4 步之间崩溃的话，重启后会重新处理同一批事件，生成同一个 `requestId`；`replaces` 不撤回与这次 `requestId` 相同的那条，Durable 去重。整个流程里没有跨库事务，也不需要。
 
@@ -367,7 +369,7 @@ interface AgentManager {
 
 ### 4.5 Node 网关与 Node
 
-**Node** 是一台 Linux、macOS 或 Windows 机器上，以宿主现有账号运行的进程，由 `mate node` CLI 管理。Linux 用 systemd 用户服务，macOS 用 LaunchAgent，Windows 用当前账号登录时启动的计划任务。它只负责执行：在该 node 上属于这个 Agent 的工作区里跑命令、读写文件。node 从不接触模型凭据和对话记录。
+**Node** 是一台 Linux、macOS 或 Windows 机器上，以宿主现有账号运行的进程，由 `palace node` CLI 管理。Linux 用 systemd 用户服务，macOS 用 LaunchAgent，Windows 用当前账号登录时启动的计划任务。它只负责执行：在该 node 上属于这个 Agent 的工作区里跑命令、读写文件。node 从不接触模型凭据和对话记录。
 
 **Node 网关** 在控制面里，负责 node 的配对、认证、心跳，并把工具调用转发过去。
 
@@ -379,7 +381,7 @@ interface AgentManager {
 
 - **文件工具**（`read`、`write`、`edit`）直接用 Durable 自带的工具，跑在限定于本次执行目录的 `NodeExecutionEnv`（**工作区环境**）上：所有调用的根都是该 node 上的 Agent 工作区。参数修复和校验、抛错变成错误结果、诊断附在内容后面，都和 Durable 的 Harness 在本地执行时一样。node 没有 Harness，交给工具的调用接口只提供执行环境、输出和诊断，其余成员（任务、文档、模型）一被访问就报错；Durable 的文件工具不会访问它们。
 
-- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 是 node 账号配置的 Bash 或 zsh（见下面的**命令目录与启动快照**），Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及 POSIX 后台进程仍在运行。PowerShell 在最后一条命令失败时保留原生程序的非零退出码；后续命令成功后不沿用之前的失败码。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@mate/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
+- **`bash` 由 node 自己执行**，不用 Durable 的 `bash` 工具。Durable 的工具和 `NodeExecutionEnv.exec` 把被信号终止折算成 `128+信号` 的退出码、把非零退出变成抛错、不暴露进程组 ID、命令返回后就不再跟踪留下的后台进程，也不标明输出可能不完整，满足不了下面第 5 条。node 用所在系统的 shell 执行命令：Linux 和 macOS 是 node 账号配置的 Bash 或 zsh（见下面的**命令目录与启动快照**），Windows 是 `powershell.exe -NoProfile -NonInteractive -Command`（PowerShell 5.1）。每条命令一个**命令进程组**，结果如实区分正常退出（附 shell 的退出码）、被信号终止（POSIX）、超时被杀、被停止、没能启动，并标明截断、输出可能不完整，以及 POSIX 后台进程仍在运行。PowerShell 在最后一条命令失败时保留原生程序的非零退出码；后续命令成功后不沿用之前的失败码。`bash` 的名字、说明和参数（`command`、以秒计的 `timeout`、`background`）只在 `@palace/node-protocol` 里定义一次：runtime 拿它告诉模型，说明里写的保留量（输出末尾 50KB）也是 node 用的那个常量。时限的默认值和上限也只在这里（`BASH_TIMEOUT_SECONDS`）：runtime 和 node 都用同一个 `parseBashArguments` 解析参数，解析时补上这个模式的默认时限。runtime 先解析，时限不合法就直接以错误结果返回，什么都不发；合法时把解析后的参数转发给 node，node 再解析一次，结果不变。
 
 **接口（给管理模块）：**
 
@@ -418,7 +420,7 @@ type NodeStatusResult = {
 4. **主工作区的初始化与访问目录的准备不同。** 创建 Agent 时显式准备主 node 的工作目录和空的 `MEMORY.md`，已有文件不覆盖；主 node 执行工具前只检查目录存在，缺失时报错，不重建，也不检查或补写 `MEMORY.md`。`visit` 的显式准备和执行前准备共用工作区准备操作，不初始化 `MEMORY.md`。两者的目录路径均由 node 工作区根和 Agent ID 确定。访问目录准备失败则返回错误，不执行工具。浏览工作区只读，不创建目录。
 5. 与架构无关的执行细节：进程组、僵尸进程判断、PID 复用防护、后台子进程占住输出管道时短暂等待后返回并标明、按序列化后的大小检查帧长度。 平台差异由一张表选择；Windows 用 `taskkill /T /F`，只能停止仍挂在活 shell 下的进程。macOS 用进程组存活检测，不区分僵尸或识别 PID 复用。
 6. **谁在等结果，谁决定停。** 停止只有一种方式：调用方中止自己那次调用的 signal，网关就向 node 发这次调用的停止消息，node 杀掉它的命令进程组；命令已经返回、只剩后台进程占着输出时收到停止，也杀掉那些后台进程。暂停 Agent 就是关闭它的 runtime，runtime 中止所有进行中调用的 signal，所以不需要另一个"按 Agent 停止"的入口。node 按连接记录进行中的调用，连接断开停掉这条连接上的所有进行中调用；node 自己关闭时杀掉它启动的所有还有活进程的命令进程组。 各平台能停止的范围见第 5 条；终止失败要报告，并保留句柄供关闭时重试。
-7. **身份被拒绝时退出，网络失败时退避重连。** 网关拒绝 node 的身份或配对令牌时发 `gateway.refused`，直接运行的 node 进程以 78 退出，不重试（`unknown_identity` 而 node 手里有令牌时除外，见第 8 条）；网关因为用法出错结束连接（格式错误、顺序错误、握手超时、内部错误）时发 `gateway.error`，node 和连不上、连接中断时一样，从 250ms 起倍增、最多 10 秒重连。退出还是重连由消息类型决定，node 不维护错误码清单。systemd 用 `RestartPreventExitStatus=78` 停止重启；LaunchAgent 直接执行 `node run --service`，服务入口将不可重试的 78 转为 0，保留错误日志。服务直接执行 node；Windows 计划任务在 node 崩溃后需手动 `mate node start`，不承诺自动重启。
+7. **身份被拒绝时退出，网络失败时退避重连。** 网关拒绝 node 的身份或配对令牌时发 `gateway.refused`，直接运行的 node 进程以 78 退出，不重试（`unknown_identity` 而 node 手里有令牌时除外，见第 8 条）；网关因为用法出错结束连接（格式错误、顺序错误、握手超时、内部错误）时发 `gateway.error`，node 和连不上、连接中断时一样，从 250ms 起倍增、最多 10 秒重连。退出还是重连由消息类型决定，node 不维护错误码清单。systemd 用 `RestartPreventExitStatus=78` 停止重启；LaunchAgent 直接执行 `node run --service`，服务入口将不可重试的 78 转为 0，保留错误日志。服务直接执行 node；Windows 计划任务在 node 崩溃后需手动 `palace node start`，不承诺自动重启。
 8. **先签名，令牌只在"不认识"之后用。** node 每次连接都先用签名认证，只有网关对这次认证明确回答 `unknown_identity`，才改用配对令牌；连不上、连接中断、握手超时都只是重连，下一次仍先用签名。配对令牌只存 SHA-256 哈希，只能用一次，过期作废。配对只会新增 node：已经配对过的 node ID 不能再配对，它的公钥不变，这次用的令牌也不算用掉。
 9. **一个 node 一条连接，调用绑定在连接上。** 同一个 node 新认证的连接关闭旧连接。每个工具调用只接受发出它的那条连接送回的输出和结果；连接结束时，它带着的调用以"结果未知"结束并被忘掉，之后谁送来它的结果都不会交给调用方。
 10. **违规的连接立即结束。** 未认证的连接最多 32 条，超出的直接关闭；单条消息按收到的序列化帧计不超过 1 MiB，超出的由 WebSocket 层关闭；无法解析、不认识的消息、认证前发别的消息、重复认证，网关回一个 `gateway.error` 后关闭连接，并且从这一刻起不再读取这条连接送来的任何东西，node 立即离线。心跳超时（TCP 没断但收不到数据也算）同样结束连接。
@@ -437,9 +439,9 @@ Windows 不变：PowerShell 5.1 不加载 profile，每次都在工作区执行�
 
 **升级顺序。** 控制面先于 node 升级，node 不得比控制面新。新版 node 在认证和配对时声明 `workspaceVisits: true`，网关只在当前认证连接上保存该声明，不落库，也不从历史系统版本推断。缺少声明的连接仍可执行原有主 node 操作；网关拒绝向它发送 `visit` 的准备和工具调用，提示升级目标 node，既不让旧 node 初始化远端 `MEMORY.md`，也不让它在账号主目录执行。新连接替代旧连接时声明随连接替换。准备消息的 `access` 缺省为 `home`，保留旧主 node 调用的含义。
 
-**持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。POSIX 目录和私有文件分别用 0700、0600；Windows 存在当前账号的 `%LOCALAPPDATA%\Mate` 下，依靠该目录对普通账号的默认 ACL 隔离，不用 `chmod` 模拟 Windows 权限。网关的 node 注册表和配对令牌存在**控制库** `data/control.sqlite`，这个文件和 Web 外壳的登录、管理模块的 API key 共用：
-- 每个模块用 `@mate/control-store` 的 `openControlTables(dataDirectory, { module, migrations })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
-- 每个模块只建、只检查自己的表。结构版本记在 `schema_versions` 表里，每个模块一行（网关是 `gateway`）。模块的结构是一份 `Migrations`（`@mate/migrations`）：按版本递增的迁移列表。一个模块的版本比代码新、或不是列表里的版本，只有这个模块拒绝启动，抛出带文件路径的 `ControlStoreIncompatible`；别的模块照常打开。
+**持久化：** node 的身份密钥和配置存在 node 本地，和程序目录分开。POSIX 目录和私有文件分别用 0700、0600；Windows 存在当前账号的 `%LOCALAPPDATA%\Palace` 下，依靠该目录对普通账号的默认 ACL 隔离，不用 `chmod` 模拟 Windows 权限。网关的 node 注册表和配对令牌存在**控制库** `data/control.sqlite`，这个文件和 Web 外壳的登录、管理模块的 API key 共用：
+- 每个模块用 `@palace/control-store` 的 `openControlTables(dataDirectory, { module, migrations })` 打开自己的一条连接，关闭时只关自己的。文件名只在这个包里定义一次。
+- 每个模块只建、只检查自己的表。结构版本记在 `schema_versions` 表里，每个模块一行（网关是 `gateway`）。模块的结构是一份 `Migrations`（`@palace/migrations`）：按版本递增的迁移列表。一个模块的版本比代码新、或不是列表里的版本，只有这个模块拒绝启动，抛出带文件路径的 `ControlStoreIncompatible`；别的模块照常打开。
 - 打开时在同一个事务里把模块带到最新版本：没有记录就跑完整个列表并插入一行；记录在列表里的某个版本，就只跑它之后的迁移并更新这一行。迁移中途失败，事务回滚，存储留在原来的版本，拒绝启动。第一条迁移的建表用不带 `IF NOT EXISTS` 的 `CREATE TABLE`，表名和别的模块撞了同样拒绝启动，不会两个模块悄悄共用一张表。
 - 文件由 `openControlTables` 以 0600 新建（SQLite 的 `-wal`、`-shm` 随主文件的权限），里面有密码哈希、登录会话和 API key；已有的文件不改权限。
 - 每条连接都用 WAL、`synchronous=FULL`、5 秒 busy timeout。WAL 让一个模块开着读事务时别的模块照常提交。`node:sqlite` 是同步的，一个不 await 的事务在进程里别的连接开始事务之前就已结束，所以同一进程里的几条连接从不互相等待。规则是**控制库的事务里不 await**；busy timeout 只给进程外的读写者（备份、`sqlite3` 命令行）留余地。
@@ -512,7 +514,7 @@ interface Admin {
 
 **浏览工作区：** 管理模块按 Agent 文件里的 node ID 调网关的 `browse(nodeId, agentId, path)`，网关发 `gateway.browse`，node 回 `node.browse.result`。浏览不经过 runtime，所以暂停的 Agent 也能看。
 - **只读，限定在工作区里。** 路径和文件工具一样由 node 上的工作区环境解析：相对于工作目录，或者是指向工作目录内的绝对路径；`..`、指向外部的绝对路径、指向外部的符号链接、悬空的符号链接一律以 `outside-workspace` 拒绝。node 只打开、读取、列目录，不写任何东西；打开文件不阻塞，所以 FIFO 以 `unreadable` 拒绝，而不是一直等。路径或工作目录不存在为 `not-found`，node 不会重建工作目录。
-- **结果（listing，形状在 `@mate/node-protocol` 里定义一次）**，`path` 都是相对于工作目录的路径（工作目录本身是 `.`）：目录给出条目，按名字排序，每条是名字和种类（文件、目录、符号链接），文件带大小；文件给出大小和开头的文字；含 NUL 字节的文件只给大小，种类是 `binary`。
+- **结果（listing，形状在 `@palace/node-protocol` 里定义一次）**，`path` 都是相对于工作目录的路径（工作目录本身是 `.`）：目录给出条目，按名字排序，每条是名字和种类（文件、目录、符号链接），文件带大小；文件给出大小和开头的文字；含 NUL 字节的文件只给大小，种类是 `binary`。
 - **上限：** 文件最多返回开头 128 KiB（`BROWSE_FILE_BYTES`），截在完整字符处并标明 `truncated`；目录最多 500 条（`BROWSE_DIRECTORY_ENTRIES`），超出时标明 `truncated`，列出哪些由文件系统决定。这两个数让任何回答按 JSON 转义后的最坏情况仍在网关 1 MiB 的帧上限以内。
 - **离线：** node 不在线、或者回答之前连接断开，网关立即回答 `node-offline`，不排队等待；之后迟到的回答被丢弃。和工具调用一样，回答只认发出请求的那条连接。
 
@@ -520,10 +522,10 @@ interface Admin {
 
 ### 4.7 Web 外壳
 
-**后端（`apps/control-plane`）：** 负责组装、人类的登录和管理（谁能登录、角色、密码）、登录会话 cookie、HTTP 路由、事件流、推送发送器和前端静态文件。入口是 `startControlPlane({ dataDirectory, port?, host?, initialPasswordFile?, initialHandle?, webDirectory?, vapidSubject?, clock?, push? })`，`main.ts` 从环境变量读这些（`MATE_DATA_DIRECTORY`、`MATE_PORT`、`MATE_HOST`、`MATE_INITIAL_PASSWORD_FILE`、`MATE_INITIAL_HANDLE`、`MATE_WEB_DIRECTORY`、`MATE_VAPID_SUBJECT`），收到 SIGTERM 或 SIGINT 时关闭后退出。
+**后端（`apps/control-plane`）：** 负责组装、人类的登录和管理（谁能登录、角色、密码）、登录会话 cookie、HTTP 路由、事件流、推送发送器和前端静态文件。入口是 `startControlPlane({ dataDirectory, port?, host?, initialPasswordFile?, initialHandle?, webDirectory?, vapidSubject?, clock?, push? })`，`main.ts` 从环境变量读这些（`PALACE_DATA_DIRECTORY`、`PALACE_PORT`、`PALACE_HOST`、`PALACE_INITIAL_PASSWORD_FILE`、`PALACE_INITIAL_HANDLE`、`PALACE_WEB_DIRECTORY`、`PALACE_VAPID_SUBJECT`），收到 SIGTERM 或 SIGINT 时关闭后退出。
 
 - **组装。** 先打开外壳自己在控制库里的表（模块名 `shell`），再 `new ChatApp(chat.sqlite, { clock, push })`，建 `Humans`，第一次启动时创建第一个人类（见"登录"），建网关并把 HTTP 服务器上路径为 `/api/nodes/connect` 的 upgrade 交给 `handleUpgrade`（别的路径直接断开），最后 `openAdmin`。关闭时先停止 HTTP 服务（断开所有连接，事件流随之结束），再依次关闭管理模块、网关、聊天 app 和外壳的表。启动中途失败时，已打开的部分按相反顺序关闭。
-- **登录。** 谁能登录由外壳自己的 `humans` 表管（`Humans`，控制库里的模块 `shell`）：每行一个人类，以聊天账号的 `externalId` 为键，带角色（`admin` 或 `member`）、scrypt 密码哈希和是否有效；显示名、handle 和账号种类在聊天账号里，聊天 app 不知道登录和角色，两边靠 `externalId` 对上。登录用 handle 加密码：控制面先让聊天 app 按 handle 找到人类账号（`findHuman`），再检查这个人类的密码。handle 不存在、是 Agent 的、或这个人类已停用，都和密码错了一样回 401 `wrong-password`（状态和正文都相同），并且照样做一次 scrypt 校验（对一个固定的假哈希），所以从回答和耗时都看不出哪些 handle 存在。**第一次启动**（`humans` 表是空的）：从 `initialPasswordFile` 读初始密码（去掉末尾换行，至少 12 字节；没有这个文件就拒绝启动），用 `initialHandle`（`MATE_INITIAL_HANDLE`，缺省 `admin`，要符合聊天账号的 handle 规则，否则拒绝启动）建聊天账号（`externalId: "human:initial"`，`kind: "human"`，显示名同 handle），再插入管理员行；两步都以这个固定的 `externalId` 为键，所以停在两步之间，下一次启动会补完。有了第一个人类之后再也不读这个文件。同时进行的密码校验最多 2 个，更多的按到达顺序排队（先进先出，空出的名额直接交给队首），不拒绝；队列最长 64，超出的立即回 429（`Retry-After: 1`）；排队超过 10 秒仍未轮到的也回 429。不做锁定，也不按客户端计数，所以连续输错再多次，正确的密码也进得来。上限是有意的取舍：几十个并发客户端持续把 64 的队列填满时，一次正确的登录也可能回 429，重试即可；已有的登录会话不受影响，也不会因此被锁定或泄露什么。密码对了之后才开会话，而且这一步要求这个人类仍然有效、密码哈希和角色仍是检查时的那一份（插入会话的语句本身带这个条件），所以在队列里等待期间被改了密码、改了角色或被停用的人类，那次登录回 401 `wrong-password`。登录成功发一个随机令牌，cookie 为 `__Host-mate_session`（`HttpOnly; Secure; SameSite=Lax; Path=/`），库里只存令牌的 SHA-256 和它属于哪个人类；登录会话从登录起 30 天有效，不随使用延长，跨重启保留，并且只对有效的人类有效。退出登录删掉这一行，令牌立即失效，别的登录会话不受影响。**会话是人类权限的快照**：角色变了（改角色，或自己降级）、密码被重置、人类被停用，都结束这个人类的全部登录会话（改自己的密码时当前这个除外），所以降级的管理员开着的管理事件流在下一个事件或心跳以 `login` 结束，旧 cookie 回 401；设成原来就有的角色什么都不改。
+- **登录。** 谁能登录由外壳自己的 `humans` 表管（`Humans`，控制库里的模块 `shell`）：每行一个人类，以聊天账号的 `externalId` 为键，带角色（`admin` 或 `member`）、scrypt 密码哈希和是否有效；显示名、handle 和账号种类在聊天账号里，聊天 app 不知道登录和角色，两边靠 `externalId` 对上。登录用 handle 加密码：控制面先让聊天 app 按 handle 找到人类账号（`findHuman`），再检查这个人类的密码。handle 不存在、是 Agent 的、或这个人类已停用，都和密码错了一样回 401 `wrong-password`（状态和正文都相同），并且照样做一次 scrypt 校验（对一个固定的假哈希），所以从回答和耗时都看不出哪些 handle 存在。**第一次启动**（`humans` 表是空的）：从 `initialPasswordFile` 读初始密码（去掉末尾换行，至少 12 字节；没有这个文件就拒绝启动），用 `initialHandle`（`PALACE_INITIAL_HANDLE`，缺省 `admin`，要符合聊天账号的 handle 规则，否则拒绝启动）建聊天账号（`externalId: "human:initial"`，`kind: "human"`，显示名同 handle），再插入管理员行；两步都以这个固定的 `externalId` 为键，所以停在两步之间，下一次启动会补完。有了第一个人类之后再也不读这个文件。同时进行的密码校验最多 2 个，更多的按到达顺序排队（先进先出，空出的名额直接交给队首），不拒绝；队列最长 64，超出的立即回 429（`Retry-After: 1`）；排队超过 10 秒仍未轮到的也回 429。不做锁定，也不按客户端计数，所以连续输错再多次，正确的密码也进得来。上限是有意的取舍：几十个并发客户端持续把 64 的队列填满时，一次正确的登录也可能回 429，重试即可；已有的登录会话不受影响，也不会因此被锁定或泄露什么。密码对了之后才开会话，而且这一步要求这个人类仍然有效、密码哈希和角色仍是检查时的那一份（插入会话的语句本身带这个条件），所以在队列里等待期间被改了密码、改了角色或被停用的人类，那次登录回 401 `wrong-password`。登录成功发一个随机令牌，cookie 为 `__Host-mate_session`（`HttpOnly; Secure; SameSite=Lax; Path=/`），库里只存令牌的 SHA-256 和它属于哪个人类；登录会话从登录起 30 天有效，不随使用延长，跨重启保留，并且只对有效的人类有效。退出登录删掉这一行，令牌立即失效，别的登录会话不受影响。**会话是人类权限的快照**：角色变了（改角色，或自己降级）、密码被重置、人类被停用，都结束这个人类的全部登录会话（改自己的密码时当前这个除外），所以降级的管理员开着的管理事件流在下一个事件或心跳以 `login` 结束，旧 cookie 回 401；设成原来就有的角色什么都不改。
 - **人类的管理。** 每个人类可以改自己的显示名、handle 和密码；管理员还能添加人类、改人类的角色（包括自己的，只要不是最后一个管理员；改完自己的会话随之结束，前端的下一个请求回 401 就跳到登录页）、重置别人的密码和停用别人。任何时候至少有一个有效的管理员：降级或停用最后一个有效管理员回 409 `last-admin`，什么都不改。停用是永久的（同聊天的 `deactivateAccount`）：先在外壳标记无效并删掉这个人所有的登录会话，再停用聊天账号，所以这个人开着的事件流在下一个事件或心跳发出前就以 `login` 结束，登录也立即不可能；已经标记无效而聊天账号还没停用（中途崩溃）时，重做同一个请求会补完。其消息照常可读。添加人类以管理员给的 `requestId` 幂等：externalId 是 `human:request:<requestId>`，外壳里已有这一行就原样返回这个人类，不再改动（包括这个人后来自己改的名字）；没有就先建聊天账号（handle 被占用在任何外壳写入之前就拒绝），再插入外壳的行，两步之间崩溃，重发同一个请求会补完。
 - **路由。** 除了 `POST /api/login`（`{ handle, password, next? }`，回 `{ next }`：`next` 是站内 `/app` 下的路径时原样返回，否则是 `/app`）和 `POST /api/logout`，`/api/*` 都要登录，未登录回 401。登录会话在整个请求（含请求体）收完之后才查，所以请求体在退出登录之后才收完的请求同样回 401，什么都不改。没有退出登录时，迟到的请求仍按当时的会话执行：例如同一 APNs token 已被另一账号重新登记后，原账号迟到的登记会把它拿回去；这个窗口只有客户端放弃请求后服务器仍在等待请求体的那段时间。页面请求：前端目录里存在的文件（脚本、样式、图标）不需要登录；`/` 跳到 `/app`；`/app` 及其下的页面未登录时跳到 `/login?next=<原地址>`；其余页面路径都回前端的 `index.html`，由前端路由。没有前端目录时页面回 404，API 照常工作。
   - `/api/chat/*` 一个路由对应聊天 app 的一个操作，账号固定为发出请求的人类自己的账号：每个人类读到全部会话，有自己的实时视图、未读摘要和推送订阅。读：`GET snapshot`（可带 `conversation=` 或 `thread=`）、`conversations`、`unread`、`history`（`conversation=`/`thread=`、`before`、`limit`）、`search?q=`。写都带浏览器生成的 `requestId`：`POST read`（读未读，推进这个人类的已读位置）、`messages`、`channels`、`dms`、`conversations/:id/join|leave|archive|invite`、`tasks`、`tasks/:id/change`。发送和任务操作总是关闭新鲜度检查（4.1 规则 2），请求里不接受这一项。推送：`GET push/key`（VAPID 公钥）、`POST push/subscribe`、`POST push/unsubscribe`。
@@ -533,11 +535,11 @@ interface Admin {
   - **跨站防护。** 请求体必须声明 `content-type: application/json`（可带 charset），否则回 415 `unsupported-media-type`：别的站点的表单或不预检的 `fetch` 只能发 `text/plain` 之类，所以带着人类的 cookie 也伪造不出请求。带 `Origin` 头的非 GET 请求，`Origin` 的 host 必须等于请求的 `Host`，否则回 403 `cross-origin`（登录、退出也一样）；没有 `Origin`（脚本、curl）不是浏览器页面发的，放行。路径参数里不合法的百分号编码回 400 `invalid-input`。
   - 请求体交给聊天 app 或管理模块原样解析，外壳只检查它是一个 JSON 对象。拒绝回 `{ error, message }`，`error` 就是 `ChatError`/`AdminError` 的 `reason`，状态码按 reason 固定：`invalid-input`、`invalid-target`、`unknown-model`、`unsupported-thinking-level` 为 400；`not-found`、`unknown-account`、`unknown-agent`、`unknown-node`、`unknown-provider`、`unknown-assistant` 为 404；`not-member`、`inactive-account`、`human-only`、`outside-workspace` 为 403；`archived`、`request-conflict`、`handle-taken`、`name-taken`、`no-credentials`、`agent-closed`、`agent-exists` 为 409；`unreadable` 为 422；`node-offline` 为 503。外壳自己的拒绝：`admin-only`（普通人类调用管理员的路由，在解析请求体之前）403，`wrong-password` 在登录时 401、在改密码时 403，`last-admin` 409，`too-many-attempts` 429，`unknown-account`（`:accountId` 不是人类）404。创建 Agent 在文件改名之前中途失败回 500，`error: "creation-failed"`，带上 `agentId`，客户端用它重做；没有创建任何东西的拒绝（不合法的名字、handle 被占用、ID 已存在）回上面各自的状态，不带 `agentId`。成功的操作回 200 加结果，没有结果的回 204。
 - **事件流。** 用 SSE。`GET /api/chat/events?cursor=<快照的游标>`：每次 `liveEvents` 读到的一批是一个 `events` 事件（数据就是 `{ status, events, cursor, unread }`），SSE 的 id 是这批读到的游标 `cursor`，所以 EventSource 断线重连带着 `Last-Event-ID` 正好从那里接着读（`Last-Event-ID` 优先于 `cursor`）。读完一轮就等 `watchLive` 的信号；读的过程中来的信号让它读完再读一轮。游标接不上时发 `resnapshot` 并关闭，客户端重新拉快照、用新游标重连。每个事件发出之前、读聊天 app 之前都查一次登录会话；会话已过期、已退出登录或这个人类已被停用，就发 `login` 并关闭，之后什么都不发。没有事件可发时，每 25 秒发一行注释作心跳，心跳前同样查会话，所以空闲的流在会话结束后 25 秒内关闭。`GET /api/admin/agents/:id/events` 是 `watchAgent` 的事件流：每批 agent 事件一个 `events` 事件，第一批是快照；观察结束（暂停、删除、控制面关闭）时发 `ended` 并关闭；登录会话的规则相同。Agent 没有打开时在流开始之前就以 409 拒绝。
-- **推送发送器。** VAPID 密钥对在第一次启动时生成，存在外壳的表里，之后不变：浏览器用公钥订阅，换了密钥所有订阅都会失效。`PushSender` 用 `web-push` 发出（加密、VAPID 签名、TTL 一天、请求超时 10 秒），按 RFC 8030 把推送服务的回答交回聊天 app：2xx 送达，404、410 失效，408、429、5xx 重试，其他拒绝；连不上时抛错。VAPID 的联系地址来自 `MATE_VAPID_SUBJECT`，缺省为 `mailto:owner@mate.invalid`。
+- **推送发送器。** VAPID 密钥对在第一次启动时生成，存在外壳的表里，之后不变：浏览器用公钥订阅，换了密钥所有订阅都会失效。`PushSender` 用 `web-push` 发出（加密、VAPID 签名、TTL 一天、请求超时 10 秒），按 RFC 8030 把推送服务的回答交回聊天 app：2xx 送达，404、410 失效，408、429、5xx 重试，其他拒绝；连不上时抛错。VAPID 的联系地址来自 `PALACE_VAPID_SUBJECT`，缺省为 `mailto:owner@palace.invalid`。
 
 **原生推送发送器。** `apns.ts` 用 `@parse/node-apn` 直接访问 APNs，不经过 Expo 推送服务。配置来自 `ControlPlaneOptions.apns` 或 DEPLOYMENT 6.2 的环境变量；不配置时 Web Push 照常运行。`GET /api/chat/push/native` 对已登录人类报告是否配置，并在配置时给出环境。`POST push/subscribe` 接受两种传输；未配置的原生登记回 503，环境不匹配回 409。取消登记不要求 APNs 仍然开启。发送器持有 provider，单次发送（含建立连接）总期限 10 秒，库内重试关闭。只有 `BadDeviceToken`、`Unregistered` 和 `DeviceTokenNotForTopic` 算失效；APNs 的 BadPath 404 和 provider 配置错误是拒绝，保留订阅。429、5xx 和连接失败（包括过期 provider token）重试。APNs 关闭时原生投递被拒绝，订阅保留，重新开启后继续可用。expiry 固定为消息时间加一天，重试不延长；已过期不再交给 APNs。collapse ID 沿用消息 tag。系统提示只有通用文案，用 `loc-key` 指向 app 打包的英文和简体中文字符串（`app.config.ts` 的 `locales`），由 iOS 按系统语言显示；数据带定位与 binding，不含消息正文。
 
-**前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。样式用 Tailwind CSS v4，对话框、菜单、标签页等交互组件用 Base UI，界面原语集中在 `src/shell/ui.tsx`；外观和交互规则见 [界面规范](DESIGN.md)。页面在 `/login` 和 `/app` 下：聊天（`/app`、`/app/c/…`）、搜索、个人资料（`/app/profile`：改显示名和 handle、改密码、退出）、管理（`/app/admin/agents|providers|nodes|humans`，人类页让管理员添加人类、改角色、重置密码、停用）。当前人类来自 `GET /api/me`，导航据此显示名字和头像，普通人类不显示管理入口，直接打开管理地址显示"需要管理员权限"；当前人类自己的账号在实时流里变化时这份数据重新获取。`apps/web` 用 Vite 构建，`MATE_WEB_DIRECTORY` 指向构建产物（`apps/web/dist`）。
+**前端：** 一个网页应用，里面挂两个功能区：聊天和管理。用户感觉是一个应用，实现上是两个互不 import 的前端模块，只共享外壳提供的登录状态、导航和布局。服务端数据统一用一个数据请求库（TanStack Query）获取和缓存，不在页面组件里手写请求和缓存逻辑。样式用 Tailwind CSS v4，对话框、菜单、标签页等交互组件用 Base UI，界面原语集中在 `src/shell/ui.tsx`；外观和交互规则见 [界面规范](DESIGN.md)。页面在 `/login` 和 `/app` 下：聊天（`/app`、`/app/c/…`）、搜索、个人资料（`/app/profile`：改显示名和 handle、改密码、退出）、管理（`/app/admin/agents|providers|nodes|humans`，人类页让管理员添加人类、改角色、重置密码、停用）。当前人类来自 `GET /api/me`，导航据此显示名字和头像，普通人类不显示管理入口，直接打开管理地址显示"需要管理员权限"；当前人类自己的账号在实时流里变化时这份数据重新获取。`apps/web` 用 Vite 构建，`PALACE_WEB_DIRECTORY` 指向构建产物（`apps/web/dist`）。
 
 - **管理操作按 node ID 提交，模型调用按名字选目标。** Node 页显示名字、在线状态和最近一次系统信息；没有报告时显示尚未收到。改名失败贴在名字字段下面，保存成功后同时刷新 node 和 Agent 查询。创建 Agent 的选择项显示名字，提交仍用 node ID；Agent 列表显示从网关读取的 `nodeName`。
 - **Agent 设置页列出全部已配对 node。** 主 node 固定可访问，其他 node 可逐个授权或收回；每行显示操作进度、成功或错误，成功后刷新 Agent 查询。授权操作独立于模型设置表单。
@@ -551,7 +553,7 @@ interface Admin {
 
 ### 4.8 客户端边界
 
-网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑：两端都用的纯逻辑放在所属包不依赖 Node 的 `client` 入口（`@mate/chat/client` 的时间线键、条目合并、提及解析、发送后草稿余下的文字和重连退避；`@mate/admin/client` 的观察归约和 node 配对命令），网页的 Vite 构建和原生端都按 `mate-source` 条件从源码引用；文案仍由各端翻译。API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
+网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑：两端都用的纯逻辑放在所属包不依赖 Node 的 `client` 入口（`@palace/chat/client` 的时间线键、条目合并、提及解析、发送后草稿余下的文字和重连退避；`@palace/admin/client` 的观察归约和 node 配对命令），网页的 Vite 构建和原生端都按 `palace-source` 条件从源码引用；文案仍由各端翻译。API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
 
 移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.config.ts` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。当前覆盖 HTTPS 服务器选择、cookie 登录与恢复、频道和私信、讨论串、搜索、提及、消息任务和未读，以及完整管理、Agent 观察、个人资料与通知设置。分发、签名与真实 APNs 送达仍需 Apple 环境验证。
 
@@ -569,13 +571,13 @@ interface Admin {
 
 离线取消不保证服务器停止发送，也不能收回已由 APNs 接受的通知。此时保留 cleanup 记录，在同一账号再次验证时重试；本机立即禁止旧通知导航并尝试向系统取消注册。重新注册后，旧服务器仍可能送来通用提示，所以界面明确说明取消未确认。真实 APNs 投递需要 Apple 凭据和具备推送能力的签名；simctl 注入只验证原生接收和点击，不证明远程投递。
 
-Web 外壳的登录与人类契约 `Role`、`HumanView`、`LoginInput` 和 `LoginResult` 在控制面的 `@mate/control-plane/contracts`，这个入口只依赖 Zod 和 `@mate/chat/contracts`，不带 Node。控制面、网页和移动端从同一处消费这些类型，移动端在网络边界用 schema 解析响应。
+Web 外壳的登录与人类契约 `Role`、`HumanView`、`LoginInput` 和 `LoginResult` 在控制面的 `@palace/control-plane/contracts`，这个入口只依赖 Zod 和 `@palace/chat/contracts`，不带 Node。控制面、网页和移动端从同一处消费这些类型，移动端在网络边界用 schema 解析响应。
 
 原生聊天由一个登录身份所属的 `MobileChat` 实例持有数据、草稿和未完成发送。频道与讨论串各有草稿；导航、短暂断线和前台重验保留实例，退出或换服务器立即关闭实例、取消请求并清空数据。草稿只在本次登录的内存中保存，不跨 app 重启。发送使用 Expo Crypto 生成请求 ID，响应丢失后的重试沿用同一个 ID；成功后只移除发送覆盖的文字。频道创建、成员操作和任务操作的未确认输入与请求 ID 同样由登录会话持有，关闭并重开界面不会丢失；确认完成或收到明确拒绝后清除。未确认期间先重试原操作，避免用另一份输入产生重复创建。
 
 聊天复用现有 HTTP 路由和 SSE 协议。快照先建立游标，再加载时间线；快照就绪后历史、定位和发送即可使用，不等待原生事件流的首个数据块，实时连接仍单独显示连接中状态；历史加载期间收到的实时条目按序号合并，会话和账号的实时更新原位替换，保持服务端按 ID 的顺序。SSE 通过 `expo/fetch` 流式读取，帧解析使用不依赖平台的 `eventsource-parser`，凭据来自与认证相同的 Foundation cookie 存储；断线带最后一个已应用游标重连，40 秒没有数据或心跳时重新连接。`resnapshot` 重新拉取服务端数据并保留草稿。回到前台先验证登录，等旧流关闭后恢复事件流；后台不推进已读位置。历史读取失败会停止，只有显式重试才重新请求；同一时间线的读取共用进行中的请求，取消定位只停止后续翻页，不中止共用的请求。在当前可见时间线底部阅读时，客户端使用现有 `read` 操作推进已读位置，失败提供重试。
 
-`@mate/chat/contracts` 是不依赖 SQLite 或 Node 的公开契约入口。账号、会话、条目、未读、读取、发送、任务、实时数据和推送订阅形状只在这里定义；聊天 app 内部也从这里导入，不经各模块转发；后端继续消费同一份定义，原生端在网络边界解析它们。`@mate/clock` 同时提供原生入口，聊天重连和超时共用已有时钟接口。
+`@palace/chat/contracts` 是不依赖 SQLite 或 Node 的公开契约入口。账号、会话、条目、未读、读取、发送、任务、实时数据和推送订阅形状只在这里定义；聊天 app 内部也从这里导入，不经各模块转发；后端继续消费同一份定义，原生端在网络边界解析它们。`@palace/clock` 同时提供原生入口，聊天重连和超时共用已有时钟接口。
 
 原生导航使用 Expo Router，消息列表使用 React Native `FlatList`。Markdown 由 `react-native-enriched-markdown` 渲染为原生文本，关闭数学、视频和语法高亮附加模块，不增加编辑或附件上传协议。`/conversation` 接受正整数 `id`（会话 ID）、可选 `thread`（根消息 ID）和 `seq`（目标时间线内序号）。没有 `thread` 时定位频道或私信，存在时定位讨论串；通过现有历史分页加载目标并滚动到可见位置，等目标条目和列表视口完成实际测量后再确认定位，定位完成后保留当前可见位置以接收实时任务变化。加载或定位失败可重试，不可用目标明确提示，离开页面或切换身份取消未完成定位；定位一旦完成、不可用或失败，焦点变化、前台重验和重连都不重新定位；显式重试、换目标或时间线重新加载（resnapshot、重试读取失败的历史）才重新开始。搜索结果缺少会话位置、历史消息缺少完整回复数、任务没有独立列表接口的限制与网页相同。
 Agent Tab 的路径是 `/agents`，Agent 子路由都在 `/agents/**`，Tab 和路由组都只对管理员开放。Agent 详情的「发消息」使用同一登录下的聊天操作打开该 Agent 聊天账号的私信，再进入 `/conversation?id=`，不直接发送消息。来自 Agent 总览时额外传 `sourceAgent=<Agent UUID>`，会话的原生返回按钮先移除这次聊天详情，再用 `navigate` 回到 `/agents/[id]`，禁用跨 Tab 的侧滑返回；普通聊天与讨论串保留默认返回行为。根 Stack 上方保留登录所属的聊天 provider。
@@ -592,11 +594,11 @@ Agent 私信复用聊天页面与同一 `MobileChat`，携带 `sourceAgent` 返�
 
 `ManagementScope` 位于全部已登录 Tab 之上，每次登录只有一个 `ManagementClient` 与 QueryClient，切换 Tab 不创建另一份客户端或缓存。共享 `PresentationAccess` 与当前页面焦点一起控制原生 modal。React Native 在隐藏 modal 后会卸载它的子树，所以短表单、邀请和任务转交的展示草稿由 modal 外的页面持有；这些是本次页面的展示状态；聊天的未确认请求和 UUID 仍只归 `MobileChat`。`ManagementClient` 只给当前服务器和人类的这次登录发 cookie 请求。前台重验时中止旧请求、隐藏并禁止访问管理界面，选择器和危险操作确认页也随访问状态隐藏并禁止交互，但保持当前导航、表单草稿、选择器搜索条件和查询缓存挂载在内存中；连接故障时继续暂停访问，重试验证相同服务器、账号和角色后恢复原页面，重新读取数据和连接观察流；访问一直可用时的身份更新（如保存资料）不重新读取数据，也不重连观察流。登录结束、401 确认失效、服务器、账号或角色改变则关闭这次登录的界面与缓存。已取消请求的迟到响应即使在恢复后也不能交付，不持久化管理数据或草稿。HTTP 401 和 SSE 的 `login` 事件要求认证模块重新验证。资料保存响应经 `HumanView` schema 解析，`MobileAuth.updateHuman(previous, human)` 只更新提交它的同一次登录，不重新清理 cookie；密码修改继续使用服务端保留当前会话的规则。
 
-请求状态用与网页同版本的 TanStack Query，SSE 分帧用 `eventsource-parser`；聊天和管理共用 `http.ts` 的带 cookie JSON 请求和 SSE 读取循环，超时、401 处理和拒绝文案各自持有，长表单的键盘滚动用 Expo 58 对应的 Keyboard Controller。对话记录和模型选项用 React Native `FlatList`；其余小表单用原生输入框、按钮和确认框，不生成表单 schema 或引入整体 UI 框架。管理数据的类型从 `@mate/admin` 推导，个人身份从 `@mate/control-plane/contracts` 取得，不复制服务端协议。
+请求状态用与网页同版本的 TanStack Query，SSE 分帧用 `eventsource-parser`；聊天和管理共用 `http.ts` 的带 cookie JSON 请求和 SSE 读取循环，超时、401 处理和拒绝文案各自持有，长表单的键盘滚动用 Expo 58 对应的 Keyboard Controller。对话记录和模型选项用 React Native `FlatList`；其余小表单用原生输入框、按钮和确认框，不生成表单 schema 或引入整体 UI 框架。管理数据的类型从 `@palace/admin` 推导，个人身份从 `@palace/control-plane/contracts` 取得，不复制服务端协议。
 
 当前不做折叠屏 iPhone Duo 的专用适配，不增加折叠状态处理或专用布局。
 
-移动端依赖和 TypeScript 配置由 `@mate/mobile` 自己持有。它使用 Expo 的 TypeScript 基础配置和默认 Metro workspace 支持，保留 pnpm 的隔离安装；iOS bundle 不包含 `react-dom`，声明它只为让 Expo 的可选 peer 与移动端 React 版本一致，否则 pnpm 会接上网页的版本；不继承服务端的 NodeNext 配置，也不改网页的 React 版本。根 `typecheck` 包含移动端；iOS bundle 检查走独立的 `bundle:check` 命令。移动端没有 `build` 脚本，因此根递归 `build`、控制面构建和 node 发布包都不要求 Xcode 或签名凭据。运行命令见 [开发机运行](DEPLOYMENT.md#6-在开发机上运行)。
+移动端依赖和 TypeScript 配置由 `@palace/mobile` 自己持有。它使用 Expo 的 TypeScript 基础配置和默认 Metro workspace 支持，保留 pnpm 的隔离安装；iOS bundle 不包含 `react-dom`，声明它只为让 Expo 的可选 peer 与移动端 React 版本一致，否则 pnpm 会接上网页的版本；不继承服务端的 NodeNext 配置，也不改网页的 React 版本。根 `typecheck` 包含移动端；iOS bundle 检查走独立的 `bundle:check` 命令。移动端没有 `build` 脚本，因此根递归 `build`、控制面构建和 node 发布包都不要求 Xcode 或签名凭据。运行命令见 [开发机运行](DEPLOYMENT.md#6-在开发机上运行)。
 
 ## 5. 关键流程
 
@@ -653,15 +655,15 @@ data/
 
 搬到另一台 VPS：停掉容器，复制 `data/`，启动。
 
-**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@mate/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5；外壳的第 2 版用 `humans` 和 `sessions` 取代 `owner_password` 和 `owner_sessions`：原来的所有者成为 externalId 为 `owner` 的管理员，密码哈希和登录会话原样保留（已登录的 cookie 继续有效），这个账号的聊天账号本来就是 externalId `owner` 的人类账号，名字和 handle 不变，之后可以自己改。网关的第 2 版为已有 node 加名字和空的系统报告，身份与公钥不变，详见 4.5。admin 的第 2 版新增空的 node 授权表，已有 Agent 仍只访问主 node。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
+**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@palace/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5；外壳的第 2 版用 `humans` 和 `sessions` 取代 `owner_password` 和 `owner_sessions`：原来的所有者成为 externalId 为 `owner` 的管理员，密码哈希和登录会话原样保留（已登录的 cookie 继续有效），这个账号的聊天账号本来就是 externalId `owner` 的人类账号，名字和 handle 不变，之后可以自己改。网关的第 2 版为已有 node 加名字和空的系统报告，身份与公钥不变，详见 4.5。admin 的第 2 版新增空的 node 授权表，已有 Agent 仍只访问主 node。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
 
 ## 7. 部署
 
 - **控制面**：Docker 镜像加单服务 Compose。镜像用 `tsc` 编译 workspace 包，再用 `pnpm deploy --prod` 装入生产依赖；依赖在目标架构上安装，保留包内资源和原生模块。容器以一个专用的无登录系统账号的 UID/GID 运行，数据目录只属于它。node 账号（Agent 命令的身份）读不到模型凭据和对话库，也不在 docker 组里。
-- **node**：完整发布包，自带 Node 运行时和 `mate node` CLI，以宿主现有账号运行。Linux 用 systemd 用户服务，macOS 用当前图形登录账号的 LaunchAgent，Windows 用当前账号的登录计划任务。发布 Linux x64、macOS arm64、Windows x64 三个包，文件名的平台为 `linux`、`darwin`、`win`。发布包是 ustar 归档加旁边的 `.sha256`，装入已钉住官方校验和的 Node 24 二进制、tsdown 打包的程序、启动命令和清单。Windows 的官方 ZIP 只提取运行时与许可证；清单中的平台为 `win32`。CLI 校验平台和架构，不匹配就拒绝。包由管理员自行下载；自动部署仍只升级 Linux 的同机 node。
-- **`mate node` 不记"做到哪一步"**（第 11 节第 1 条）。程序目录（POSIX 的 `~/.local/lib/mate-node`、Windows 的 `%LOCALAPPDATA%\Mate\program`）由暂存目录改名放入、改名挪开再删，所以要么是完整的某个版本，要么不存在；`install`、`update`、`uninstall` 只看程序目录、`mate` 命令、服务定义和服务状态这几样现有状态决定做什么，配置、身份和工作区在程序目录之外，它们从不碰。清单同时说明程序目录里哪些文件是 Mate 的：有别的文件时 `update` 和 `uninstall` 拒绝，不删别人的东西。`install` 从不启动服务，`update` 只在服务完全停止时动手，之后也不启动。状态到动作的完整对照见 DEPLOYMENT §3.2。
+- **node**：完整发布包，自带 Node 运行时和 `palace node` CLI，以宿主现有账号运行。Linux 用 systemd 用户服务，macOS 用当前图形登录账号的 LaunchAgent，Windows 用当前账号的登录计划任务。发布 Linux x64、macOS arm64、Windows x64 三个包，文件名的平台为 `linux`、`darwin`、`win`。发布包是 ustar 归档加旁边的 `.sha256`，装入已钉住官方校验和的 Node 24 二进制、tsdown 打包的程序、启动命令和清单。Windows 的官方 ZIP 只提取运行时与许可证；清单中的平台为 `win32`。CLI 校验平台和架构，不匹配就拒绝。包由管理员自行下载；自动部署仍只升级 Linux 的同机 node。
+- **`palace node` 不记"做到哪一步"**（第 11 节第 1 条）。程序目录（POSIX 的 `~/.local/lib/palace-node`、Windows 的 `%LOCALAPPDATA%\Palace\program`）由暂存目录改名放入、改名挪开再删，所以要么是完整的某个版本，要么不存在；`install`、`update`、`uninstall` 只看程序目录、`palace` 命令、服务定义和服务状态这几样现有状态决定做什么，配置、身份和工作区在程序目录之外，它们从不碰。清单同时说明程序目录里哪些文件是 Palace 的：有别的文件时 `update` 和 `uninstall` 拒绝，不删别人的东西。`install` 从不启动服务，`update` 只在服务完全停止时动手，之后也不启动。状态到动作的完整对照见 DEPLOYMENT §3.2。
 
-Mate 不创建用户、不切换身份、不安装系统软件、不配置 linger。Agent 自己在命令里写 `sudo` 的话，能不能成功由宿主的 sudo 策略决定。
+Palace 不创建用户、不切换身份、不安装系统软件、不配置 linger。Agent 自己在命令里写 `sudo` 的话，能不能成功由宿主的 sudo 策略决定。
 
 ## 8. 测试策略
 
@@ -699,7 +701,7 @@ Mate 不创建用户、不切换身份、不安装系统软件、不配置 linge
 - 每个 Agent 一个主上下文，跨频道、讨论串、私信延续；不同 Agent 的上下文互相独立。
 - 模型的普通输出不发到任何地方，发言只通过发送工具。
 - 不设 token、费用、run 次数配额。
-- 不做逐条命令审批，不做 Mate 自己的提权。
+- 不做逐条命令审批，不做 Palace 自己的提权。
 - 不限制 Agent 读同事的工作区，只在提示里请它不要读。
 - 不使用 `pi-coding-agent`。
 - 几个人共用，每人自己的登录；角色只有管理员和普通人类两种（管理员管理 Agent、提供商和 API key、node 和其他人类，普通人类只聊天）；网页中英双语并适配手机，原生移动端根据设备偏好显示简体中文或英文。

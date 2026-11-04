@@ -1,7 +1,7 @@
 import type { ServerResponse } from "node:http";
-import type { AgentEvent, EventWatch } from "@mate/admin";
-import type { ChatApp } from "@mate/chat";
-import type { Clock } from "@mate/clock";
+import type { AgentEvent, EventWatch } from "@palace/admin";
+import type { ChatApp } from "@palace/chat";
+import type { Clock } from "@palace/clock";
 import type { Humans } from "./humans.ts";
 
 /**

@@ -1,4 +1,4 @@
-import type { Clock } from "@mate/clock";
+import type { Clock } from "@palace/clock";
 
 type Sleeper = { readonly at: number; readonly wake: () => void };
 

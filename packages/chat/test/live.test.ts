@@ -2,8 +2,8 @@ import { once } from "node:events";
 import { copyFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
-import type { Clock } from "@mate/clock";
-import { FakeClock, temporaryDirectory } from "@mate/testkit";
+import type { Clock } from "@palace/clock";
+import { FakeClock, temporaryDirectory } from "@palace/testkit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatApp, LiveEvent, LiveSnapshot, TimelineRef } from "../src/index.ts";
 import { openAppAt, refusalReason, rid } from "./support.ts";
@@ -113,7 +113,7 @@ describe("3.9 live event stream", () => {
     const count = 100;
     const writer = new Worker(new URL("./concurrent-writer.ts", import.meta.url), {
       workerData: { file, author: ada, timeline: general, count },
-      execArgv: ["--conditions=mate-source"],
+      execArgv: ["--conditions=palace-source"],
     });
     const exit = once(writer, "exit").then(
       ([code]: unknown[]) => code,

@@ -1,4 +1,4 @@
-import { Migrations } from "@mate/migrations";
+import { Migrations } from "@palace/migrations";
 import { describe, expect, it } from "vitest";
 
 const list = new Migrations([

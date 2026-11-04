@@ -1,4 +1,4 @@
-import type { Clock } from "@mate/clock";
+import type { Clock } from "@palace/clock";
 import { z } from "zod";
 import type { Actor } from "./accounts.ts";
 import {

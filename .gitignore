@@ -8,6 +8,7 @@ coverage/
 data/
 *.log
 docs/reference/raft-*.md
+palace.local.json
 mate.local.json
 .worktrees/
 

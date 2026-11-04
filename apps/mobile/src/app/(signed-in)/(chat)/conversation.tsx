@@ -5,8 +5,8 @@ import { router, Stack, useIsFocused, useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AppState, FlatList, KeyboardAvoidingView, Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { Entry, TimelineRef } from "@mate/chat/contracts";
-import { accountName, timelineKey } from "@mate/chat/client";
+import type { Entry, TimelineRef } from "@palace/chat/contracts";
+import { accountName, timelineKey } from "@palace/chat/client";
 import { conversationLabel, operationKey } from "../../../chat";
 import {
   ConversationActionsContent,

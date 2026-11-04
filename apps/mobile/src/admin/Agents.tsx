@@ -1,5 +1,5 @@
 import { t, listText } from "../i18n";
-import type { AgentView, CatalogModel, NodeStatusResult } from "@mate/admin";
+import type { AgentView, CatalogModel, NodeStatusResult } from "@palace/admin";
 import { router, Stack } from "expo-router";
 import type { ReactNode } from "react";
 import { View } from "react-native";

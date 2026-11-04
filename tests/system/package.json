@@ -1,11 +1,11 @@
 {
-  "name": "@mate/system-tests",
+  "name": "@palace/system-tests",
   "private": true,
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "@mate/testkit": "workspace:*"
+    "@palace/testkit": "workspace:*"
   }
 }

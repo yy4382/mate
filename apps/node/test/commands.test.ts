@@ -1,4 +1,4 @@
-import { BASH_TIMEOUT_SECONDS } from "@mate/node-protocol";
+import { BASH_TIMEOUT_SECONDS } from "@palace/node-protocol";
 import {
   chmodSync,
   existsSync,

@@ -1,5 +1,5 @@
 import { t, thinkingText } from "../i18n";
-import type { CatalogModel } from "@mate/admin";
+import type { CatalogModel } from "@palace/admin";
 import { useState, type ReactNode } from "react";
 import type { AgentSettingsInput } from "./client";
 import { Button, Caption, Field, Row, Section, Select, Sheet } from "../ui";

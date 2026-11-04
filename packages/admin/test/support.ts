@@ -2,8 +2,8 @@ import { createPrivateKey, generateKeyPairSync, randomUUID, sign } from "node:cr
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { ChatApp } from "@mate/chat";
-import { createNodeGateway } from "@mate/gateway";
+import { ChatApp } from "@palace/chat";
+import { createNodeGateway } from "@palace/gateway";
 import type {
   GatewayBrowse,
   GatewayRunTool,
@@ -11,8 +11,8 @@ import type {
   NodeAccess,
   NodeSystem,
   ToolResult,
-} from "@mate/node-protocol";
-import { FakeClock, FakeNode, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
+} from "@palace/node-protocol";
+import { FakeClock, FakeNode, ScriptedProvider, temporaryDirectory } from "@palace/testkit";
 import { onTestFinished } from "vitest";
 import { openAdmin, type Admin, type AgentEvent } from "../src/index.ts";
 

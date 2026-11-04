@@ -15,7 +15,7 @@ import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { AgentStateDoc, type AgentUsage } from "./agent-state.ts";
 import { AssistantsDoc, assistants } from "./assistants.ts";
 import { chatExtension, type ChatPort } from "./chat-tools.ts";
-import { systemClock, type Clock } from "@mate/clock";
+import { systemClock, type Clock } from "@palace/clock";
 import { historyExtension } from "./history.ts";
 import { Lifetime, guardDatabase } from "./lifetime.ts";
 import { agentModels, type CredentialsLookup, type ModelResolver } from "./models.ts";

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { onTestFinished, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { FakeNode } from "@mate/testkit";
+import { FakeNode } from "@palace/testkit";
 import {
   eventually,
   never,

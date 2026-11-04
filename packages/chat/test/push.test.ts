@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { FakeClock, temporaryDirectory } from "@mate/testkit";
+import { FakeClock, temporaryDirectory } from "@palace/testkit";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { ChatApp, PushOutcome, TimelineRef } from "../src/index.ts";
 import {

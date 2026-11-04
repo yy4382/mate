@@ -1,6 +1,6 @@
-import { passwordTooShort } from "@mate/control-plane/passwords";
+import { passwordTooShort } from "@palace/control-plane/passwords";
 import { roleText, t } from "../i18n";
-import { HumanView, Role, type HumanView as Human } from "@mate/control-plane/contracts";
+import { HumanView, Role, type HumanView as Human } from "@palace/control-plane/contracts";
 import { randomUUID } from "expo-crypto";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";

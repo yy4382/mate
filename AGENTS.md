@@ -1,4 +1,4 @@
-# Mate
+# Palace
 
 - CODE AS SOURCE OF TRUTH. If documentation or this memory file conflict with code behaviour, obey the code. If you find a disagreement between code and documentation, search along git history/ GitHub issues and PR for context, and let the user decide.
 - Read `docs/ARCHITECTURE.md` before any design or code change, and `docs/MODULE_TESTS.md` before writing tests, and `docs/DESIGN.md` before changing the web UI.
@@ -21,6 +21,6 @@
 | Understand the reasons behind both the existing design and the new requirement before deciding what to change. | Trace actual calls to verify each concept's purpose, state ownership, and lifecycle; consult the original issue or PR when needed. Explain the observable outcome the user needs to change. Names and the latest implementation alone are not enough. |
 | Shared paths or code do not imply shared responsibilities or lifecycles. | Before reusing code, compare creation, use, recovery, and failure behavior. Let responsibilities determine what is shared; reducing branches is not the goal. |
 | Every behavior change needs a basis in the requirements. | Review the entire diff, including production code, protocols, tests, prompts, and documentation. Distinguish user requirements, necessary implementation changes, and assumptions. Convenience does not authorize expanding scope. |
-| Tests protect requirements; they must not turn the current implementation into new requirements. | Explain whose behavior each assertion protects. Legitimate refactoring or unrelated initialization content should not break it. A dependency's guarantees do not automatically become Mate's testing responsibility. |
+| Tests protect requirements; they must not turn the current implementation into new requirements. | Explain whose behavior each assertion protects. Legitimate refactoring or unrelated initialization content should not break it. A dependency's guarantees do not automatically become Palace's testing responsibility. |
 | When the user points out an example, examine the shared premise behind the mistake. | Revisit every change affected by that premise, including tests and documentation. Do not fix only the named location or replace the mistake with an excessive restriction in the opposite direction. |
 | Passing tests and favorable reviews do not prove that the requirements were understood correctly. | Independently verify the basis for the requirements. Give independent reviewers the original goal and code entry points without steering their conclusions with the implementer's explanation. Distinguish verified facts, inferences, and unverified claims in reports. |

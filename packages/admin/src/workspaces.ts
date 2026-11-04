@@ -1,5 +1,5 @@
-import type { NodeGateway } from "@mate/gateway";
-import type { WorkspaceHost } from "@mate/manager";
+import type { NodeGateway } from "@palace/gateway";
+import type { WorkspaceHost } from "@palace/manager";
 import type { AdminStore } from "./store.ts";
 
 export function gatewayWorkspaces(

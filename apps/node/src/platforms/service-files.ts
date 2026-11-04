@@ -25,7 +25,7 @@ export function writeServiceFile(path: string, content: string | Buffer): boolea
   const bytes = typeof content === "string" ? Buffer.from(content) : content;
   if (lstatOrUndefined(path) !== undefined && readFileSync(path).equals(bytes)) return false;
   mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.mate-tmp`;
+  const temporary = `${path}.palace-tmp`;
   writeFileSync(temporary, bytes, { mode: 0o600 });
   renameSync(temporary, path);
   return true;

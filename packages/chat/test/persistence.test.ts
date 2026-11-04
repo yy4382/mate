@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { temporaryDirectory } from "@mate/testkit";
+import { temporaryDirectory } from "@palace/testkit";
 import { openAppAt, rid } from "./support.ts";
 
 describe("the chat store survives a restart", () => {

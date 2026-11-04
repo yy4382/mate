@@ -5,9 +5,9 @@ import { EXIT_DO_NOT_RESTART } from "./types.ts";
 import { markedFileOwnership, reportToStderr, writeServiceFile } from "./service-files.ts";
 import type { BundleLayout, Layout, ServiceManager, ServiceState } from "./types.ts";
 
-const SERVICE = "mate-node.service";
+const SERVICE = "palace-node.service";
 const HEADER =
-  "# Written by `mate node`, which replaces this file. Put local changes in a drop-in.";
+  "# Written by `palace node`, which replaces this file. Put local changes in a drop-in.";
 
 function systemctl(...args: string[]): string {
   const result = spawnSync("systemctl", ["--user", ...args], { encoding: "utf8" });
@@ -27,11 +27,11 @@ function quotedPath(path: string): string {
 export function systemd(paths: Layout, bundle: BundleLayout): ServiceManager {
   const unit = `${HEADER}
 [Unit]
-Description=Mate node
+Description=Palace node
 
 [Service]
 Type=exec
-ExecStart=${quotedPath(join(paths.program, bundle.runtime))} ${quotedPath(join(paths.program, "lib/mate.mjs"))} node run --service
+ExecStart=${quotedPath(join(paths.program, bundle.runtime))} ${quotedPath(join(paths.program, "lib/palace.mjs"))} node run --service
 Restart=on-failure
 RestartSec=5s
 RestartPreventExitStatus=${EXIT_DO_NOT_RESTART}
@@ -87,7 +87,7 @@ WantedBy=default.target
   function requireOwned(): ServiceState {
     const { state } = read();
     if (state.ownership === "foreign")
-      throw new Error(`${paths.unit} is not Mate's service; it was left alone.`);
+      throw new Error(`${paths.unit} is not Palace's service; it was left alone.`);
     return state;
   }
 
@@ -96,7 +96,7 @@ WantedBy=default.target
     install() {
       const { state } = read();
       if (state.ownership === "foreign")
-        return [`Left ${paths.unit} alone: Mate did not write it.`];
+        return [`Left ${paths.unit} alone: Palace did not write it.`];
       if (!writeServiceFile(paths.unit, unit)) return [];
       systemctl("daemon-reload");
       return [`Wrote ${paths.unit}.`];
@@ -104,7 +104,7 @@ WantedBy=default.target
     uninstall() {
       const { state } = read();
       if (state.ownership === "foreign")
-        return [`Left ${paths.unit} and the service it defines alone: Mate did not write it.`];
+        return [`Left ${paths.unit} and the service it defines alone: Palace did not write it.`];
       const report: string[] = [];
       if (state.loaded) {
         systemctl("disable", "--now", SERVICE);
@@ -120,7 +120,7 @@ WantedBy=default.target
     start() {
       const state = requireOwned();
       if (state.ownership === "absent")
-        throw new Error(`${paths.unit} is missing; run \`mate node install <bundle>\` again.`);
+        throw new Error(`${paths.unit} is missing; run \`palace node install <bundle>\` again.`);
       systemctl("enable", "--now", SERVICE);
       return ["Started and enabled the node service; it starts again at login or boot."];
     },
@@ -128,7 +128,7 @@ WantedBy=default.target
       const state = requireOwned();
       if (!state.loaded) return ["No node service is installed; nothing to stop."];
       systemctl("disable", "--now", SERVICE);
-      return ["Stopped and disabled the node service; it stays stopped until `mate node start`."];
+      return ["Stopped and disabled the node service; it stays stopped until `palace node start`."];
     },
     logs(lines, follow) {
       const result = spawnSync(

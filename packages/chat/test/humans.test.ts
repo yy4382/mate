@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { FakeClock, temporaryDirectory } from "@mate/testkit";
+import { FakeClock, temporaryDirectory } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 import type { ChatApp, LiveEvent, TimelineRef } from "../src/index.ts";
 import {

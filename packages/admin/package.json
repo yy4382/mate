@@ -1,16 +1,16 @@
 {
-  "name": "@mate/admin",
+  "name": "@palace/admin",
   "private": true,
   "type": "module",
   "exports": {
     ".": {
-      "mate-source": "./src/index.ts",
+      "palace-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     },
     "./client": {
       "react-native": "./src/client.ts",
-      "mate-source": "./src/client.ts",
+      "palace-source": "./src/client.ts",
       "types": "./dist/src/client.d.ts",
       "default": "./dist/src/client.js"
     }
@@ -20,17 +20,17 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@mate/chat": "workspace:*",
-    "@mate/clock": "workspace:*",
-    "@mate/control-store": "workspace:*",
-    "@mate/gateway": "workspace:*",
-    "@mate/manager": "workspace:*",
-    "@mate/migrations": "workspace:*",
-    "@mate/node-protocol": "workspace:*",
-    "@mate/runtime": "workspace:*",
+    "@palace/chat": "workspace:*",
+    "@palace/clock": "workspace:*",
+    "@palace/control-store": "workspace:*",
+    "@palace/gateway": "workspace:*",
+    "@palace/manager": "workspace:*",
+    "@palace/migrations": "workspace:*",
+    "@palace/node-protocol": "workspace:*",
+    "@palace/runtime": "workspace:*",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@mate/testkit": "workspace:*"
+    "@palace/testkit": "workspace:*"
   }
 }

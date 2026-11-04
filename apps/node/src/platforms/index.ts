@@ -37,6 +37,6 @@ export const platforms: Record<PlatformId, Platform> = {
 
 export function currentPlatform(): Platform {
   const platform = platforms[process.platform as PlatformId];
-  if (platform === undefined) throw new Error(`Mate node does not support ${process.platform}`);
+  if (platform === undefined) throw new Error(`Palace node does not support ${process.platform}`);
   return platform;
 }

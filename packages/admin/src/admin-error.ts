@@ -8,7 +8,7 @@ import type { z } from "zod";
  * - `agent-exists`: creating with the ID of an Agent that exists.
  * - `unknown-node`: no paired node has that ID.
  * - `name-taken`: another node has that name.
- * - `unknown-provider`: the provider is not one Mate offers.
+ * - `unknown-provider`: the provider is not one Palace offers.
  * - `no-credentials`: the provider has no API key, so its models cannot be chosen.
  * - `unknown-model`: the provider's catalog has no such model.
  * - `unsupported-thinking-level`: the model does not accept that thinking level. It is refused, never lowered.

@@ -75,7 +75,7 @@
     "deactivate": "Deactivate",
     "allTheirLoginSessionsWillEndImmediatelyAnd": "All their login sessions will end immediately and they will be permanently unable to sign in. Their messages will remain.",
     "humans": "Humans",
-    "peopleWhoCanSignInToMateAdministrators": "People who can sign in to Mate. Administrators also manage Agents, providers, nodes, and other humans. Regular humans use chat.",
+    "peopleWhoCanSignInToMateAdministrators": "People who can sign in to Palace. Administrators also manage Agents, providers, nodes, and other humans. Regular humans use chat.",
     "resetNamed": "Reset {{name}}'s password",
     "deactivateNamed": "Deactivate {{name}}?",
     "setRole": "Set role to {{role}}"
@@ -281,7 +281,7 @@
     "incorrectHandleOrPassword": "Incorrect handle or password.",
     "tooManySigninAttemptsTryAgainLater": "Too many sign-in attempts. Try again later.",
     "signinFailedPleaseTryAgain": "Sign-in failed. Please try again.",
-    "signInToMate": "Sign in to Mate",
+    "signInToMate": "Sign in to Palace",
     "password": "Password",
     "signIn": "Sign in"
   },
@@ -299,7 +299,7 @@
     "atLeast12BytesChangingItSignsYou": "At least 12 bytes. Changing it signs you out of other browsers.",
     "confirmNewPassword": "Confirm new password",
     "profile": "Profile",
-    "yourNameAndSigninDetailsInMate": "Your name and sign-in details in Mate.",
+    "yourNameAndSigninDetailsInMate": "Your name and sign-in details in Palace.",
     "password": "Password",
     "loginSession": "Login session",
     "signOut": "Sign out"

@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FakeNode } from "@mate/testkit";
+import { FakeNode } from "@palace/testkit";
 import { WebSocket } from "ws";
 import { newIdentity, startGateway, within } from "./support.ts";
 

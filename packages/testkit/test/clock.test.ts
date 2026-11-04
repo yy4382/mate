@@ -1,4 +1,4 @@
-import { systemClock, type Clock } from "@mate/clock";
+import { systemClock, type Clock } from "@palace/clock";
 import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
 import { FakeClock } from "../src/index.ts";

@@ -9,13 +9,13 @@ import {
 } from "./service-files.ts";
 import type { BundleLayout, Layout, ServiceManager, ServiceState } from "./types.ts";
 
-const MARKER = "Written by mate node.";
+const MARKER = "Written by palace node.";
 const QUERY = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $sid = $identity.User.Value
-$name = 'Mate node ' + $sid
+$name = 'Palace node ' + $sid
 $scheduler = New-Object -ComObject 'Schedule.Service'
 $scheduler.Connect()
 $folder = $scheduler.GetFolder('\\')
@@ -112,7 +112,7 @@ function quotedArgument(value: string): string {
 
 export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
   const runtime = join(paths.program, bundle.runtime);
-  const script = join(paths.program, "lib/mate.mjs");
+  const script = join(paths.program, "lib/palace.mjs");
   const argumentsText = `${quotedArgument(script)} node run --service`;
   const log = join(paths.data, "node.log");
 
@@ -182,7 +182,7 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
   function stop(): string[] {
     const before = read();
     if (before.state.ownership === "foreign")
-      throw new Error(`${paths.unit} is not Mate's service; it was left alone.`);
+      throw new Error(`${paths.unit} is not Palace's service; it was left alone.`);
     if (!before.state.loaded) return ["No node service is installed; nothing to stop."];
     schtasks("/Change", "/TN", before.snapshot.name, "/DISABLE");
     const { snapshot, state } = read();
@@ -217,7 +217,7 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
           endError ?? new Error("The node task has not stopped; its program was left in place.")
         );
     }
-    return ["Stopped and disabled the node service; it stays stopped until `mate node start`."];
+    return ["Stopped and disabled the node service; it stays stopped until `palace node start`."];
   }
 
   return {
@@ -225,7 +225,7 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
     install() {
       const { snapshot, state } = read();
       if (state.ownership === "foreign")
-        return [`Left ${paths.unit} and ${snapshot.name} alone: Mate did not write them.`];
+        return [`Left ${paths.unit} and ${snapshot.name} alone: Palace did not write them.`];
       const task = `<?xml version="1.0" encoding="UTF-16"?>
 <!-- ${MARKER} -->
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -252,14 +252,14 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
       if (writeServiceFile(paths.unit, bytes)) report.push(`Wrote ${paths.unit}.`);
       if (state.activity === "stopped") {
         schtasks("/Create", "/TN", snapshot.name, "/XML", paths.unit, "/F");
-        report.push(`Registered ${snapshot.name}; it is disabled until \`mate node start\`.`);
+        report.push(`Registered ${snapshot.name}; it is disabled until \`palace node start\`.`);
       }
       return report;
     },
     uninstall() {
       const { snapshot, state } = read();
       if (state.ownership === "foreign")
-        return [`Left ${paths.unit} and the service it defines alone: Mate did not write it.`];
+        return [`Left ${paths.unit} and the service it defines alone: Palace did not write it.`];
       const report: string[] = [];
       if (state.loaded) {
         report.push(...stop());
@@ -274,9 +274,9 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
     start() {
       const { snapshot, state } = read();
       if (state.ownership === "foreign")
-        throw new Error(`${paths.unit} is not Mate's service; it was left alone.`);
+        throw new Error(`${paths.unit} is not Palace's service; it was left alone.`);
       if (!state.loaded)
-        throw new Error("The Mate task is missing; run `mate node install <bundle>` again.");
+        throw new Error("The Palace task is missing; run `palace node install <bundle>` again.");
       schtasks("/Change", "/TN", snapshot.name, "/ENABLE");
       if (state.activity !== "running") schtasks("/Run", "/TN", snapshot.name);
       return ["Started and enabled the node service; it starts again when this account logs in."];
@@ -287,12 +287,12 @@ export function scheduler(paths: Layout, bundle: BundleLayout): ServiceManager {
         process.stdout.write(`No node log exists yet (${log}).\n`);
         return 0;
       }
-      const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $inputData = $env:MATE_SERVICE_INPUT | ConvertFrom-Json; Get-Content -LiteralPath $inputData.path -Encoding UTF8 -Tail $inputData.lines ${follow ? "-Wait" : ""}`;
+      const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $inputData = $env:PALACE_SERVICE_INPUT | ConvertFrom-Json; Get-Content -LiteralPath $inputData.path -Encoding UTF8 -Tail $inputData.lines ${follow ? "-Wait" : ""}`;
       const result = spawnSync(
         "powershell.exe",
         ["-NoProfile", "-NonInteractive", "-Command", script],
         {
-          env: { ...process.env, MATE_SERVICE_INPUT: JSON.stringify({ path: log, lines }) },
+          env: { ...process.env, PALACE_SERVICE_INPUT: JSON.stringify({ path: log, lines }) },
           stdio: "inherit",
           windowsHide: true,
         },

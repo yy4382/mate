@@ -26,7 +26,7 @@ export function Mark({ className }: { className?: string }) {
         className,
       )}
     >
-      M
+      P
     </span>
   );
 }
@@ -162,7 +162,7 @@ function Pages() {
           className="hidden h-14 shrink-0 items-center gap-2 px-4 text-sm font-semibold text-foreground no-underline md:flex"
         >
           <Mark />
-          Mate
+          Palace
         </Link>
         <MainNav />
         <div

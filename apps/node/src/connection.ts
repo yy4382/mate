@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { hostname, release } from "node:os";
 import { WebSocket } from "ws";
-import type { Clock } from "@mate/clock";
+import type { Clock } from "@palace/clock";
 import {
   GatewayMessageSchema,
   NodeRequestSchema,
@@ -9,7 +9,7 @@ import {
   type GatewayRunTool,
   type NodeRequest,
   type NodeSystem,
-} from "@mate/node-protocol";
+} from "@palace/node-protocol";
 import type { Executor } from "./executor.ts";
 import { signChallenge, type NodeIdentity } from "./identity.ts";
 

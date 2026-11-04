@@ -1,10 +1,10 @@
 {
-  "name": "@mate/runtime",
+  "name": "@palace/runtime",
   "private": true,
   "type": "module",
   "exports": {
     ".": {
-      "mate-source": "./src/index.ts",
+      "palace-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     }
@@ -17,12 +17,12 @@
     "@earendil-works/chord": "1.1.0",
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-durable": "1.1.0",
-    "@mate/clock": "workspace:*",
-    "@mate/node-protocol": "workspace:*",
+    "@palace/clock": "workspace:*",
+    "@palace/node-protocol": "workspace:*",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@mate/chat": "workspace:*",
-    "@mate/testkit": "workspace:*"
+    "@palace/chat": "workspace:*",
+    "@palace/testkit": "workspace:*"
   }
 }

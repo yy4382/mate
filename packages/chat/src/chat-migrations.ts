@@ -1,4 +1,4 @@
-import { Migrations } from "@mate/migrations";
+import { Migrations } from "@palace/migrations";
 
 /**
  * The chat database schema as an ascending list of migrations (ARCHITECTURE section 6). A new store runs all of them;

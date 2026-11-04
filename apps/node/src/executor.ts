@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Clock } from "@mate/clock";
+import type { Clock } from "@palace/clock";
 import {
   parseBashArguments,
   type GatewayBrowse,
@@ -8,7 +8,7 @@ import {
   type NodeBrowseOutcome,
   type NodeAccess,
   type ToolResult,
-} from "@mate/node-protocol";
+} from "@palace/node-protocol";
 import { browseWorkspace } from "./browse.ts";
 import { Commands } from "./commands.ts";
 import { runFileTool } from "./files.ts";

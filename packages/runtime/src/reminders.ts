@@ -7,7 +7,7 @@ import {
   type Conversation,
   type Harness,
 } from "@earendil-works/pi-durable";
-import type { Clock } from "@mate/clock";
+import type { Clock } from "@palace/clock";
 
 type Reminder = { id: string; at: number; note: string };
 

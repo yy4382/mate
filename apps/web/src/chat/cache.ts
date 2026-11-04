@@ -1,4 +1,4 @@
-import { mergeEntries, timelineKey, type TimelineKey } from "@mate/chat/client";
+import { mergeEntries, timelineKey, type TimelineKey } from "@palace/chat/client";
 import { QueryClient } from "@tanstack/react-query";
 import type {
   AccountView,

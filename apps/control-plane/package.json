@@ -1,17 +1,17 @@
 {
-  "name": "@mate/control-plane",
+  "name": "@palace/control-plane",
   "private": true,
   "type": "module",
   "exports": {
     "./contracts": {
       "react-native": "./src/contracts.ts",
-      "mate-source": "./src/contracts.ts",
+      "palace-source": "./src/contracts.ts",
       "types": "./dist/src/contracts.d.ts",
       "default": "./dist/src/contracts.js"
     },
     "./passwords": {
       "react-native": "./src/passwords.ts",
-      "mate-source": "./src/passwords.ts",
+      "palace-source": "./src/passwords.ts",
       "types": "./dist/src/passwords.d.ts",
       "default": "./dist/src/passwords.js"
     }
@@ -21,18 +21,18 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@mate/admin": "workspace:*",
-    "@mate/chat": "workspace:*",
-    "@mate/clock": "workspace:*",
-    "@mate/control-store": "workspace:*",
-    "@mate/gateway": "workspace:*",
-    "@mate/migrations": "workspace:*",
+    "@palace/admin": "workspace:*",
+    "@palace/chat": "workspace:*",
+    "@palace/clock": "workspace:*",
+    "@palace/control-store": "workspace:*",
+    "@palace/gateway": "workspace:*",
+    "@palace/migrations": "workspace:*",
     "@parse/node-apn": "8.1.0",
     "web-push": "3.6.7",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@mate/testkit": "workspace:*",
+    "@palace/testkit": "workspace:*",
     "@types/web-push": "3.6.4"
   }
 }

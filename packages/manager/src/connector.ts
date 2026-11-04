@@ -1,6 +1,6 @@
-import type { ChatApp, UnreadSummary } from "@mate/chat";
-import type { Clock } from "@mate/clock";
-import { CHAT_READ_UNREAD, type AgentRuntime, type ChatTimeline } from "@mate/runtime";
+import type { ChatApp, UnreadSummary } from "@palace/chat";
+import type { Clock } from "@palace/clock";
+import { CHAT_READ_UNREAD, type AgentRuntime, type ChatTimeline } from "@palace/runtime";
 
 /** What the connector needs of a runtime: its inbox and its position in the chat inbox events. */
 export type NoticeTarget = Pick<AgentRuntime, "cursor" | "advanceCursor" | "submit">;

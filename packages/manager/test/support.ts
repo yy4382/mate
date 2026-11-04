@@ -1,6 +1,6 @@
-import { ChatApp, type TimelineRef } from "@mate/chat";
-import type { AgentSettings, WorkspacePort } from "@mate/runtime";
-import { FakeClock, FakeWorkspace, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
+import { ChatApp, type TimelineRef } from "@palace/chat";
+import type { AgentSettings, WorkspacePort } from "@palace/runtime";
+import { FakeClock, FakeWorkspace, ScriptedProvider, temporaryDirectory } from "@palace/testkit";
 import { join } from "node:path";
 import { onTestFinished } from "vitest";
 import {
@@ -10,7 +10,7 @@ import {
   type WorkspaceHost,
 } from "../src/index.ts";
 
-export { FakeWorkspace, toolText as text } from "@mate/testkit";
+export { FakeWorkspace, toolText as text } from "@palace/testkit";
 
 export const settings: AgentSettings = { model: { provider: "openai", modelId: "gpt-4.1" } };
 

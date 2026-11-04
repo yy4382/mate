@@ -1,4 +1,4 @@
-import { systemClock, type Clock } from "@mate/clock";
+import { systemClock, type Clock } from "@palace/clock";
 import { connect } from "./connection.ts";
 import { Executor } from "./executor.ts";
 import { loadOrCreateNodeIdentity } from "./identity.ts";

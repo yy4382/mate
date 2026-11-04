@@ -4,7 +4,7 @@ set -e
 case "$1 $2" in
   "pull --quiet") echo "pulled $3" ;;
   "compose up")
-    image=$(sed -n 's/^MATE_IMAGE=//p' .env)
+    image=$(sed -n 's/^PALACE_IMAGE=//p' .env)
     echo "$image" >/run/plane
     echo "migrated by $image" >data/schema ;;
   "compose down") rm -f /run/plane ;;

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ServerEvent } from "@mate/testkit";
+import type { ServerEvent } from "@palace/testkit";
 import {
   chatSend,
   longCommand,
