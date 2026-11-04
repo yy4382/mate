@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
+import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
 import { ApnsConfig } from "./apns.ts";
 import { startControlPlane } from "./control-plane.ts";
@@ -55,8 +56,16 @@ if (env.PALACE_APNS_KEY_STDIN) {
       }
     }
     if (!key) throw new Error("incomplete APNs key input");
+    const privateKey = createPrivateKey(key);
+    if (
+      privateKey.asymmetricKeyType !== "ec" ||
+      privateKey.asymmetricKeyDetails?.namedCurve !== "prime256v1"
+    ) {
+      throw new Error("APNs requires an EC P-256 private key");
+    }
+    key = Buffer.from(privateKey.export({ format: "pem", type: "pkcs8" }));
   } catch {
-    console.error("palace control plane: could not read APNs private key from stdin");
+    console.error("palace control plane: could not load APNs private key from stdin");
     process.exit(2);
   } finally {
     clearTimeout(timer);
@@ -90,10 +99,6 @@ const controlPlane = await startControlPlane({
   webDirectory: env.PALACE_WEB_DIRECTORY,
   vapidSubject: env.PALACE_VAPID_SUBJECT,
   apns: apns?.data,
-}).catch((error: unknown) => {
-  if (!env.PALACE_APNS_KEY_STDIN) throw error;
-  console.error("palace control plane: startup failed with APNs stdin credentials");
-  process.exit(2);
 });
 console.log(`palace control plane listening on ${controlPlane.url}`);
 

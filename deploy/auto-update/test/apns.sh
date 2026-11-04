@@ -23,13 +23,6 @@ echo $((count + 1)) >"$APNS_FIXTURE/fetches"
 if [ -e "$APNS_FIXTURE/unavailable" ]; then echo 'secret-diagnostic-marker' >&2; exit 1; fi
 if [ -e "$APNS_FIXTURE/invalid" ]; then echo invalid; else echo "test-key-$((count + 1))"; fi
 STUB
-cat >"$fixture/bin/openssl" <<'STUB'
-#!/bin/bash
-set -eu
-input=$(cat)
-[[ "$input" = test-key-* ]] || exit 1
-if [ "$*" = 'pkey -text_pub -noout' ]; then echo 'ASN1 OID: prime256v1'; fi
-STUB
 cat >"$fixture/bin/swapon" <<'STUB'
 #!/bin/bash
 if [ -e "$APNS_FIXTURE/swap" ]; then echo /swap; fi
@@ -43,7 +36,6 @@ set -eu
 case "$1 $2" in
   'compose create') echo created >>"$APNS_FIXTURE/actions" ;;
   'compose ps') echo abcdef012345 ;;
-  'inspect abcdef012345') echo 'no true false' ;;
   'start --attach') cat >"$APNS_FIXTURE/received" ;;
   'stop --time') echo stopped >>"$APNS_FIXTURE/actions" ;;
   *) exit 1 ;;
@@ -53,17 +45,19 @@ chmod +x "$fixture/bin/"*
 export PATH="$fixture/bin:$PATH"
 # An inherited exported variable must never turn the new private key into Docker's environment.
 export apns_private_key=inherited OP_SERVICE_ACCOUNT_TOKEN=inherited OP_CONNECT_TOKEN=inherited OP_CONNECT_HOST=inherited
-/t/palace-apns check "$fixture/config" >"$fixture/output" 2>&1
-[ ! -e "$fixture/actions" ]
-/t/palace-apns run "$fixture/config" >>"$fixture/output" 2>&1
+/t/palace-apns "$fixture/config" >"$fixture/output" 2>&1
+[ "$(cat "$fixture/received")" = test-key-1 ]
+/t/palace-apns "$fixture/config" >>"$fixture/output" 2>&1
 [ "$(cat "$fixture/received")" = test-key-2 ]
-/t/palace-apns run "$fixture/config" >>"$fixture/output" 2>&1
-[ "$(cat "$fixture/received")" = test-key-3 ]
 [ "$(grep -c stopped "$fixture/actions")" = 2 ]
-for failure in unavailable invalid swap; do
+touch "$fixture/invalid"
+/t/palace-apns "$fixture/config" >>"$fixture/output" 2>&1
+[ "$(cat "$fixture/received")" = invalid ]
+rm "$fixture/invalid"
+for failure in unavailable swap; do
   before=$(cat "$fixture/actions")
   touch "$fixture/$failure"
-  if /t/palace-apns run "$fixture/config" >>"$fixture/output" 2>&1; then
+  if /t/palace-apns "$fixture/config" >>"$fixture/output" 2>&1; then
     echo "FAIL APNs $failure was accepted" >&2
     exit 1
   fi

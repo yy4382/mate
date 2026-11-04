@@ -5,7 +5,13 @@ echo "$*" >>/run/systemctl-actions
 . /etc/palace-deploy.env
 cd "$PALACE_PLANE_DIR"
 case "$1" in
-  start) docker compose up -d --wait ;;
+  start)
+    if [ -e /run/apns-unavailable-once ]; then
+      rm /run/apns-unavailable-once
+      exit 1
+    fi
+    docker compose up -d --wait
+    ;;
   stop) docker compose down ;;
   *) exit 1 ;;
 esac

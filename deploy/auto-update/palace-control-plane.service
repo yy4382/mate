@@ -7,7 +7,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=notify
 NotifyAccess=all
-ExecStart=/usr/local/sbin/palace-apns run /etc/palace-apns.env
+ExecStart=/usr/local/sbin/palace-apns /etc/palace-apns.env
 Restart=always
 RestartSec=10
 TimeoutStartSec=90

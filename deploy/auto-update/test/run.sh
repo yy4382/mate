@@ -25,12 +25,6 @@ PALACE_NODE_CONNECT_WAIT=2
 EOF
 mkdir -p /var/lib/palace-deploy/bundles
 install -m 0755 /t/test/stubs/systemctl /usr/local/bin/
-cat >/usr/local/sbin/palace-apns <<'CHECK'
-#!/bin/bash
-[ "$1" = check ] && [ -n "$2" ] || exit 2
-[ ! -e /run/apns-unavailable ]
-CHECK
-chmod 0755 /usr/local/sbin/palace-apns
 fails=0
 check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=1; fi; }
 bundle() { head -c 1000 /dev/urandom >"/tmp/palace-node-$1-linux-x64.tar.gz"; }
@@ -70,14 +64,12 @@ check "only the running and previous bundles are kept" '[ "$(ls /var/lib/palace-
 check "the log has every deploy" '[ "$(grep -c "deploy " /var/lib/palace-deploy/deploy.log)" -ge 7 ]'
 cat >>/etc/palace-deploy.env <<EOF
 PALACE_PLANE_SERVICE=palace-control-plane.service
-PALACE_APNS_CONFIG=/etc/palace-apns.env
 EOF
 bundle 0.7.0
-touch /run/apns-unavailable
+touch /run/apns-unavailable-once
 before=$(state)
 deploy 0.7.0; code=$?
-check "credential preflight failure leaves the running deployment untouched" '[ $code != 0 ] && [ "$(state)" = "$before" ] && [ ! -e /run/systemctl-actions ]'
-rm /run/apns-unavailable
+check "a credential fetch failure during startup rolls back through systemd" '[ $code = 1 ] && [ "$(state)" = "$before" ] && grep -q "rolled back" /tmp/out && [ "$(grep -c "start palace-control-plane.service" /run/systemctl-actions)" = 2 ]'
 deploy 0.7.0; code=$?
 check "systemd deployments use the configured service" '[ $code = 0 ] && [ "$(state)" = "repo/plane:0.7.0 0.7.0 migrated by repo/plane:0.7.0 active" ] && grep -qx "start palace-control-plane.service" /run/systemctl-actions'
 bundle 0.8.0-bad

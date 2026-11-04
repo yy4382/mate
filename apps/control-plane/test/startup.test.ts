@@ -96,6 +96,28 @@ it.each([
   expect(plane.output()).not.toContain("listening on");
 });
 
+it.each(["secp384r1", "secp256k1"])(
+  "rejects a %s private key without exposing it",
+  async (namedCurve) => {
+    const { privateKey: otherKey } = generateKeyPairSync("ec", {
+      namedCurve,
+      privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      publicKeyEncoding: { format: "pem", type: "spki" },
+    });
+    const plane = launch(otherKey);
+    expect(await plane.exited).toBe(2);
+    expect(plane.output()).toContain("could not load APNs private key from stdin");
+    expect(plane.output()).not.toContain(otherKey.trim());
+  },
+);
+
+it("preserves unrelated startup diagnostics with stdin credentials", async () => {
+  const plane = launch(privateKey, { PALACE_DATA_DIRECTORY: "/dev/null/data" });
+  expect(await plane.exited).not.toBe(0);
+  expect(plane.output()).toMatch(/ENOTDIR|EEXIST/);
+  expect(plane.output()).not.toContain(privateKey.trim());
+});
+
 it("rejects simultaneous file and stdin sources before starting", async () => {
   const plane = launch(privateKey, { PALACE_APNS_KEY_FILE: "/unused.p8" });
   expect(await plane.exited).toBe(2);

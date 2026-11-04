@@ -109,9 +109,6 @@ fi
 OLD_BUNDLE=$(bundle_of "$OLD_VERSION")
 [ -f "$OLD_BUNDLE" ] || { echo "no bundle of the running node $OLD_VERSION at $OLD_BUNDLE to roll back to" >&2; exit 1; }
 docker pull --quiet "$NEW_IMAGE"
-if [ -n "${PALACE_PLANE_SERVICE:-}" ]; then
-  /usr/local/sbin/palace-apns check "${PALACE_APNS_CONFIG:?set PALACE_APNS_CONFIG}"
-fi
 
 BACKUP=""
 rollback() {

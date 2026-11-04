@@ -321,9 +321,9 @@ echo "restrict,command=\"/usr/local/sbin/palace-deploy\" $(cat palace-deploy-key
 
 ### 5.6 从 1Password 通过标准输入提供 APNs 私钥
 
-需要避免在服务器文件系统保存 APNs `.p8` 时，可以让宿主机上的 systemd 管理控制面。每次启动由 `palace-apns` 使用 1Password CLI 读取 Document，在内存中验证 EC P-256 私钥，再通过匿名管道交给容器的标准输入。`PALACE_APNS_KEY_STDIN=1` 让控制面接收这份 PKCS#8 PEM 输入；读到 `-----END PRIVATE KEY-----` 就开始启动，不等待 Docker 关闭标准输入。原有 `PALACE_APNS_KEY_FILE` 仍适用于文件部署，两种输入不能同时设置。
+需要避免在服务器文件系统保存 APNs `.p8` 时，可以让宿主机上的 systemd 管理控制面。每次启动由 `palace-apns` 使用 1Password CLI 读取一次 Document，成功后通过匿名管道交给容器的标准输入，由控制面解析并验证 EC P-256 私钥。`PALACE_APNS_KEY_STDIN=1` 让控制面接收这份 PKCS#8 PEM 输入；读到 `-----END PRIVATE KEY-----` 就开始启动，不等待 Docker 关闭标准输入。原有 `PALACE_APNS_KEY_FILE` 仍适用于文件部署，两种输入不能同时设置。
 
-这个模式要求 Linux、Docker Compose、systemd、1Password CLI 2.18+、OpenSSL 和关闭 swap。宿主脚本及容器都禁用 core dump。私钥不会写入文件、命令参数、Compose 环境变量或 Docker 容器配置。root 仍能读取进程内存。Service Account token 是宿主机持久凭据，由 root 持有，容器只收到 APNs 私钥。
+这个模式要求 Linux、Docker Compose、systemd、1Password CLI 2.18+ 和关闭 swap。宿主脚本及容器都禁用 core dump。私钥不会写入文件、命令参数、Compose 环境变量或 Docker 容器配置。root 仍能读取进程内存。Service Account token 是宿主机持久凭据，由 root 持有，容器只收到 APNs 私钥。
 
 首次启用前，先通过原有 Compose 部署流程发布并验证支持 `PALACE_APNS_KEY_STDIN` 的控制面版本，之后才安装以下脚本、启用 override 和 systemd。启用此模式后，后续部署的回退镜像也必须支持 stdin 输入；若要回退到不支持的旧镜像，须先停止 systemd 服务，移除 stdin override 和 `PALACE_PLANE_SERVICE` 配置，恢复原有 Compose 管理方式。
 
@@ -338,23 +338,21 @@ install -m 0644 deploy/auto-update/palace-control-plane.service /etc/systemd/sys
 编辑 `/etc/palace-apns.env`，填入实际控制面目录、vault ID 和 Document ID。将 `deploy/control-plane/compose.apns.yaml` 合并到部署目录的 `compose.override.yaml`，保留已有 override 设置。它设置 `restart: "no"`、`stdin_open: true`、`tty: false`，并禁用容器 core dump。在 Compose 的 `.env` 中填写非私钥配置 `PALACE_APNS_KEY_ID`、`PALACE_APNS_TEAM_ID` 和 `PALACE_APNS_TOPIC`。这个示例使用 production APNs。
 
 ```sh
-/usr/local/sbin/palace-apns check /etc/palace-apns.env
 systemctl daemon-reload
 # 在实际控制面部署目录中执行。首次切换先停止 Docker 管理的旧容器。
 docker compose down
 systemctl enable --now palace-control-plane.service
 ```
 
-`check` 只验证取密钥能力和私钥格式。`run` 在取密钥成功后用 Compose 创建控制面容器，附加标准输入并运行它。systemd 在输入准备好后收到 ready 通知，自动部署的健康检查从这时开始。容器退出时，systemd 重新运行整个流程并取新密钥。服务器重启也走相同流程。只对这个服务使用 systemd 管理重启，其他容器继续使用各自策略。
+`palace-apns /etc/palace-apns.env` 在取密钥成功后用 Compose 创建控制面容器，附加标准输入并运行它。取密钥的输出暂存在未导出的 shell 变量中；只有 1Password 命令成功后才交给 Docker，避免把失败请求的部分输出作为私钥传入。systemd 在输入准备好后收到 ready 通知，自动部署的健康检查从这时开始。容器退出时，systemd 重新运行整个流程并取新密钥。服务器重启也走相同流程。只对这个服务使用 systemd 管理重启，其他容器继续使用各自策略。
 
 自动部署的 `/etc/palace-deploy.env` 增加：
 
 ```sh
 PALACE_PLANE_SERVICE=palace-control-plane.service
-PALACE_APNS_CONFIG=/etc/palace-apns.env
 ```
 
-新版本部署先执行一次 `check`，失败时保留正在运行的服务。随后停止 systemd 服务并按 5.5 备份、更新、启动、检查和回退。启动和回退都会重新取密钥，因此预检查成功后若 1Password 失去连接，启动或回退仍可能失败。服务会每 10 秒重试。已经运行的 Palace 不依赖后续 1Password 请求；它异常退出或主机重启后，需要 1Password 可用才能恢复。相同版本的部署保持原有 no-op 行为。手动轮换密钥使用 `systemctl restart palace-control-plane.service`。
+新版本部署停止 systemd 服务并按 5.5 备份、更新、启动、检查和回退。取密钥失败就是启动失败，会触发部署回退；回退也需要重新取密钥，因此 1Password 持续不可用时回退同样无法启动。服务会每 10 秒重试。已经运行的 Palace 不依赖后续 1Password 请求；它异常退出或主机重启后，需要 1Password 可用才能恢复。相同版本的部署保持原有 no-op 行为。手动轮换密钥使用 `systemctl restart palace-control-plane.service`。
 
 更换 Apple key 时，同时更新 1Password Document 和 Compose 中的 Key ID。需要更改 topic、team 或环境时同步修改对应配置。部署配置更新也应先提交 Git，再安装到服务器。查看状态使用 `systemctl status palace-control-plane` 和 `journalctl -u palace-control-plane`，不要输出 token、Document 内容或私钥环境。
 
