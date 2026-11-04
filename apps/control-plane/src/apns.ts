@@ -7,13 +7,16 @@ import {
 } from "@palace/chat/contracts";
 import { z } from "zod";
 
-export const ApnsConfig = z.object({
-  keyFile: z.string().min(1),
+const apnsFields = {
   keyId: z.string().regex(/^[A-Z0-9]{10}$/),
   teamId: z.string().regex(/^[A-Z0-9]{10}$/),
   topic: z.string().min(1).max(255),
   environment: ApnsEnvironment,
-});
+};
+export const ApnsConfig = z.union([
+  z.object({ ...apnsFields, keyFile: z.string().min(1), key: z.never().optional() }),
+  z.object({ ...apnsFields, key: z.instanceof(Buffer), keyFile: z.never().optional() }),
+]);
 export type ApnsConfig = z.output<typeof ApnsConfig>;
 
 /** Optional TLS connection settings let boundary tests use a local APNs service. */
@@ -28,7 +31,7 @@ export function openApns(options: ApnsOptions, now: () => number) {
   const config = ApnsConfig.parse(options);
   const providerOptions: apn.ProviderOptions = {
     ...options.connection,
-    token: { key: config.keyFile, keyId: config.keyId, teamId: config.teamId },
+    token: { key: config.key ?? config.keyFile, keyId: config.keyId, teamId: config.teamId },
     production: config.environment === "production",
     // Palace's durable queue owns retries, including Retry-After responses.
     connectionRetryLimit: 0,

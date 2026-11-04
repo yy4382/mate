@@ -49,6 +49,17 @@ node_version() { mate_node status | sed -n 's/^Program: \([^ ]*\) .*/\1/p'; }
 plane_image() { sed -n 's/^PALACE_IMAGE=//p' "$PALACE_PLANE_DIR/.env"; }
 set_image() { sed -i "s|^PALACE_IMAGE=.*|PALACE_IMAGE=$1|" "$PALACE_PLANE_DIR/.env"; }
 compose() { (cd "$PALACE_PLANE_DIR" && docker compose "$@"); }
+plane_down() {
+  if [ -n "${PALACE_PLANE_SERVICE:-}" ]; then systemctl stop "$PALACE_PLANE_SERVICE"; fi
+  compose down
+}
+plane_up() {
+  if [ -n "${PALACE_PLANE_SERVICE:-}" ]; then
+    systemctl start "$PALACE_PLANE_SERVICE"
+  else
+    compose up -d --wait
+  fi
+}
 # Hands the bundle to the node account, which `palace node update` runs as.
 update_node() {
   local copy
@@ -98,6 +109,9 @@ fi
 OLD_BUNDLE=$(bundle_of "$OLD_VERSION")
 [ -f "$OLD_BUNDLE" ] || { echo "no bundle of the running node $OLD_VERSION at $OLD_BUNDLE to roll back to" >&2; exit 1; }
 docker pull --quiet "$NEW_IMAGE"
+if [ -n "${PALACE_PLANE_SERVICE:-}" ]; then
+  /usr/local/sbin/palace-apns check "${PALACE_APNS_CONFIG:?set PALACE_APNS_CONFIG}"
+fi
 
 BACKUP=""
 rollback() {
@@ -105,13 +119,13 @@ rollback() {
   trap - ERR
   set +e
   mate_node stop
-  compose down
+  plane_down
   if [ -n "$BACKUP" ]; then
     rm -rf "$PALACE_PLANE_DIR/data"
     cp -a "$BACKUP" "$PALACE_PLANE_DIR/data"
   fi
   set_image "$OLD_IMAGE"
-  compose up -d --wait
+  plane_up
   [ "$(node_version)" = "$OLD_VERSION" ] || update_node "$OLD_BUNDLE"
   mate_node start
   wait_healthy && echo "rolled back; $OLD_VERSION is running" >&2 || echo "ROLLBACK FAILED; see docker compose logs" >&2
@@ -121,7 +135,7 @@ trap rollback ERR
 
 echo "== stop node $OLD_VERSION and the control plane"
 mate_node stop
-compose down
+plane_down
 copy=$PALACE_PLANE_DIR/backups/before-$VERSION-$(date +%Y%m%d-%H%M%S)
 echo "== back up data to $copy"
 cp -a "$PALACE_PLANE_DIR/data" "$copy"
@@ -130,7 +144,7 @@ BACKUP=$copy
 
 echo "== start control plane $NEW_IMAGE"
 set_image "$NEW_IMAGE"
-compose up -d --wait
+plane_up
 wait_healthy || { compose logs --tail 50; false; }
 
 echo "== update and start node"

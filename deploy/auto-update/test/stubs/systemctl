@@ -1,0 +1,11 @@
+#!/bin/bash
+set -eu
+[ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] || { echo 'credential leaked to systemctl' >&2; exit 1; }
+echo "$*" >>/run/systemctl-actions
+. /etc/palace-deploy.env
+cd "$PALACE_PLANE_DIR"
+case "$1" in
+  start) docker compose up -d --wait ;;
+  stop) docker compose down ;;
+  *) exit 1 ;;
+esac
