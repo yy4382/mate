@@ -5,7 +5,7 @@ const SYSTEM = {
   platform: "linux",
   arch: "arm64",
   hostname: "Build.Server",
-  osRelease: "6.8.0-mate",
+  osRelease: "6.8.0-palace",
   version: "v0.1.0-alpha.3",
 };
 

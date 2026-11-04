@@ -10,7 +10,7 @@ import {
   type Observation,
   type ObservationNote,
   type ToolCall,
-} from "@mate/admin/client";
+} from "@palace/admin/client";
 import { useClient, useManagementAccess, useResource } from "./session";
 import { useTheme } from "../theme";
 import { Button, Caption, Copy, Empty, Row, Section, Select, Sheet, styles } from "../ui";

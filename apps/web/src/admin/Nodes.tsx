@@ -1,5 +1,5 @@
 import { t, locale } from "../i18n.ts";
-import { pairingCommand } from "@mate/admin/client";
+import { pairingCommand } from "@palace/admin/client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Link2, Pencil, Server } from "lucide-react";
 import { useEffect, useState } from "react";

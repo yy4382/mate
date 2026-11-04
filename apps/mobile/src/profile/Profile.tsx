@@ -1,4 +1,4 @@
-import { passwordTooShort } from "@mate/control-plane/passwords";
+import { passwordTooShort } from "@palace/control-plane/passwords";
 import { roleText, t } from "../i18n";
 import { router, Stack } from "expo-router";
 import { useState } from "react";

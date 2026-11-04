@@ -1,4 +1,4 @@
-import type { ScriptedRequest } from "@mate/testkit";
+import type { ScriptedRequest } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "../src/index.ts";
 import { testAgent, text, within } from "./support.ts";

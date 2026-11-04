@@ -1,5 +1,5 @@
 import { describe, expect, it, onTestFinished } from "vitest";
-import { FakeGateway } from "@mate/testkit";
+import { FakeGateway } from "@palace/testkit";
 import { host, writeBundle, type Host, type SpawnedMate } from "./cli-support.ts";
 import { eventually } from "./support.ts";
 

@@ -41,7 +41,7 @@ async function notificationWorker(mode: string): Promise<string> {
 export default defineConfig(({ mode }) => ({
   base: "/",
   // Workspace packages' client entries are built from source, like the tests and the native app do.
-  resolve: { conditions: ["mate-source", ...defaultClientConditions] },
+  resolve: { conditions: ["palace-source", ...defaultClientConditions] },
   plugins: [
     react(),
     tailwindcss(),
@@ -78,6 +78,6 @@ export default defineConfig(({ mode }) => ({
   build: { outDir: "dist", emptyOutDir: true },
   server: {
     host: "127.0.0.1",
-    proxy: { "/api": process.env.MATE_CONTROL_PLANE_ORIGIN ?? "http://127.0.0.1:8787" },
+    proxy: { "/api": process.env.PALACE_CONTROL_PLANE_ORIGIN ?? "http://127.0.0.1:8787" },
   },
 }));

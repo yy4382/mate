@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { FakeNode } from "@mate/testkit";
+import { FakeNode } from "@palace/testkit";
 import { deferred, eventually, never, startGateway, text, toolResult, within } from "./support.ts";
 
 describe("node gateway connections (MODULE_TESTS 7)", () => {

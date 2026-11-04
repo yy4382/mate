@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { systemClock, type Clock } from "@mate/clock";
+import { systemClock, type Clock } from "@palace/clock";
 import { z } from "zod";
 import {
   accountByExternalId,

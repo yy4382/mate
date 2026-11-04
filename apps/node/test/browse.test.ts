@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BROWSE_DIRECTORY_ENTRIES, BROWSE_FILE_BYTES } from "@mate/node-protocol";
+import { BROWSE_DIRECTORY_ENTRIES, BROWSE_FILE_BYTES } from "@palace/node-protocol";
 import { connectedNode, temporaryDirectory, windows, type NodeProcess } from "./support.ts";
 
 const browse = (node: NodeProcess, agentId: string, path: string) =>

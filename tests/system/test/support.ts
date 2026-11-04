@@ -9,7 +9,7 @@ import {
   ScriptedProvider,
   type ScriptedRequest,
   type ScriptedRequestBody,
-} from "@mate/testkit";
+} from "@palace/testkit";
 import { onTestFailed, onTestFinished, vi } from "vitest";
 
 const controlPlaneMain = fileURLToPath(
@@ -31,12 +31,16 @@ type Child = {
   readonly output: () => string;
 };
 
-/** Start `node --conditions=mate-source <main> <args>` as its own process and collect what it prints. */
+/** Start `node --conditions=palace-source <main> <args>` as its own process and collect what it prints. */
 function launch(main: string, args: string[], env: Record<string, string>): Child {
-  const process = spawn(globalThis.process.execPath, ["--conditions=mate-source", main, ...args], {
-    env: { ...globalThis.process.env, ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const process = spawn(
+    globalThis.process.execPath,
+    ["--conditions=palace-source", main, ...args],
+    {
+      env: { ...globalThis.process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   let output = "";
   for (const stream of [process.stdout, process.stderr])
     stream.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
@@ -75,9 +79,9 @@ class ControlPlaneProcess {
 
   constructor(data: string, passwordFile: string) {
     this.#env = {
-      MATE_DATA_DIRECTORY: data,
-      MATE_HOST: "127.0.0.1",
-      MATE_INITIAL_PASSWORD_FILE: passwordFile,
+      PALACE_DATA_DIRECTORY: data,
+      PALACE_HOST: "127.0.0.1",
+      PALACE_INITIAL_PASSWORD_FILE: passwordFile,
     };
   }
 
@@ -87,7 +91,7 @@ class ControlPlaneProcess {
 
   /** Start it and resolve once it listens. */
   async start(): Promise<void> {
-    const child = launch(controlPlaneMain, [], { ...this.#env, MATE_PORT: String(this.port) });
+    const child = launch(controlPlaneMain, [], { ...this.#env, PALACE_PORT: String(this.port) });
     this.#child = child;
     this.port = await Promise.race([
       until(() => {
@@ -122,7 +126,7 @@ class ControlPlaneProcess {
   }
 }
 
-/** The node as its own process: `mate node run` with a config in a home directory of its own. */
+/** The node as its own process: `palace node run` with a config in a home directory of its own. */
 class NodeProcess {
   readonly home: string;
   readonly workspacesRoot: string;
@@ -131,9 +135,9 @@ class NodeProcess {
   constructor(home: string, controlPlaneUrl: string, pairingToken: string) {
     this.home = home;
     this.workspacesRoot = join(home, "agents");
-    mkdirSync(join(home, ".config/mate"), { recursive: true });
+    mkdirSync(join(home, ".config/palace"), { recursive: true });
     writeFileSync(
-      join(home, ".config/mate/node.json"),
+      join(home, ".config/palace/node.json"),
       JSON.stringify({ controlPlaneUrl, workspacesRoot: this.workspacesRoot, pairingToken }),
     );
     this.#child = launch(nodeMain, ["node", "run"], { HOME: home });
@@ -178,12 +182,12 @@ export type System = Awaited<ReturnType<typeof startSystem>>;
 
 /**
  * The whole system as real processes: the control plane (main.ts) on a temporary data directory, one node
- * (`mate node run`) paired with it over HTTP, and a scripted model provider in this process that the owner's provider
+ * (`palace node run`) paired with it over HTTP, and a scripted model provider in this process that the owner's provider
  * credentials point at. With `proxied`, the node reaches the control plane through a proxy the test can cut. Everything
  * is stopped, and its output printed if the test failed, when the test ends.
  */
 export async function startSystem(options: { proxied?: boolean } = {}) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "mate-system-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "palace-system-")));
   onTestFinished(() => rmSync(root, { recursive: true, force: true }));
   const passwordFile = join(root, "initial-password");
   writeFileSync(passwordFile, `${PASSWORD}\n`, { mode: 0o600 });

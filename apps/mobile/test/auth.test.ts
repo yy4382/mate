@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MobileAuth, type AuthPlatform } from "../src/auth.ts";
 
-const server = "https://mate.example.com";
+const server = "https://palace.example.com";
 const human = { accountId: 7, handle: "sam", displayName: "小山", role: "member", active: true };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
@@ -54,26 +54,26 @@ describe("mobile authentication public interface", () => {
     const auth = new MobileAuth(p.port);
     await auth.start();
     for (const address of [
-      "http://mate.example.com",
-      "https://name:secret@mate.example.com",
-      "https://mate.example.com/app",
-      "https://mate.example.com/?key=value",
-      "https://mate.example.com/#section",
+      "http://palace.example.com",
+      "https://name:secret@palace.example.com",
+      "https://palace.example.com/app",
+      "https://palace.example.com/?key=value",
+      "https://palace.example.com/#section",
       "https://",
     ]) {
       await auth.changeServer(address);
       expect(auth.getSnapshot().kind).toBe("server");
       expect(p.preferences).toBeNull();
     }
-    await auth.changeServer("  https://mate.example.com/  ");
+    await auth.changeServer("  https://palace.example.com/  ");
     expect(p.preferences).toEqual({ server, restore: false });
     expect(p.calls).toEqual([]);
   });
 
   it.each([
-    "https://mate.example.com",
-    "https://mate.example.com/",
-    " HTTPS://MATE.EXAMPLE.COM:443/ ",
+    "https://palace.example.com",
+    "https://palace.example.com/",
+    " HTTPS://PALACE.EXAMPLE.COM:443/ ",
   ])("canonicalizes the HTTPS origin %s", async (address) => {
     const p = platform();
     const auth = new MobileAuth(p.port);
@@ -238,7 +238,7 @@ describe("mobile authentication public interface", () => {
     const auth = new MobileAuth(p.port);
     await auth.start();
     const write = p.port.write;
-    const next = "https://mate.example.com:8443";
+    const next = "https://palace.example.com:8443";
     p.port.write = () => {
       throw new Error("settings unavailable");
     };

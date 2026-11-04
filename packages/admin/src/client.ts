@@ -2,7 +2,7 @@
  * Pure helpers both clients run on what the control plane serves: the observation reducer over an Agent's event stream,
  * and the node pairing command. Node-free, so the web and native apps import it at runtime.
  */
-import type { AgentEvent, SnapshotEvent } from "@mate/runtime";
+import type { AgentEvent, SnapshotEvent } from "@palace/runtime";
 
 export type Entry = SnapshotEvent["entries"][number];
 type Block = Extract<NonNullable<Entry["model"]>[number], { role: "assistant" }>["content"][number];
@@ -198,4 +198,4 @@ export function observeEvents(state: Observation, events: AgentEvent[] | "ended"
 
 /** The command an operator runs on a node's machine to pair it with this control plane. */
 export const pairingCommand = (controlPlane: string, pairingToken: string) =>
-  `mate node configure --control-plane ${controlPlane} --pairing-token ${pairingToken}`;
+  `palace node configure --control-plane ${controlPlane} --pairing-token ${pairingToken}`;

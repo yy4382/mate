@@ -2,7 +2,7 @@ import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { Pause, Play, Trash2 } from "lucide-react";
 import { useState } from "react";
-import type { AgentView } from "@mate/admin";
+import type { AgentView } from "@palace/admin";
 import { del, post } from "../shell/api.ts";
 import { ConfirmDialog, Menu, MenuItem } from "../shell/ui.tsx";
 import { adminKeys } from "./data.ts";

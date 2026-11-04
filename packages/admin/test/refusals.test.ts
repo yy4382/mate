@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { AgentCreationFailed } from "@mate/manager";
+import { AgentCreationFailed } from "@palace/manager";
 import { describe, expect, it } from "vitest";
 import { AdminError } from "../src/index.ts";
 import { environment, settings } from "./support.ts";

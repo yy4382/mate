@@ -10,12 +10,12 @@ import type { Layout, Ownership } from "./platforms/types.ts";
 
 export type { Layout } from "./platforms/types.ts";
 
-const SCRATCH = /^\.mate-node-(staging|old)-/;
+const SCRATCH = /^\.palace-node-(staging|old)-/;
 
 type Program =
   | { kind: "absent" }
   | { kind: "installed"; manifest: Manifest; unlisted: string[] }
-  /** A directory at the program path without a manifest Mate can read. */
+  /** A directory at the program path without a manifest Palace can read. */
   | { kind: "foreign" };
 
 function readProgram(layout: Layout): Program {
@@ -48,7 +48,7 @@ export async function update(bundle: string, layout: Layout): Promise<string[]> 
   const state = service.inspect();
   if (state.activity !== "stopped") {
     throw new Error(
-      `The node service is ${state.description}. Stop it with \`mate node stop\` first; nothing was changed.`,
+      `The node service is ${state.description}. Stop it with \`palace node stop\` first; nothing was changed.`,
     );
   }
   const report = [await place(bundle, layout, program, "replace")];
@@ -72,7 +72,7 @@ export function uninstall(layout: Layout): string[] {
     report.push(`Removed ${layout.program}.`);
   }
   removeScratch(layout);
-  if (report.length === 0) report.push("Mate node is not installed; nothing to remove.");
+  if (report.length === 0) report.push("Palace node is not installed; nothing to remove.");
   const workspaces = safeConfig(layout)?.workspacesRoot;
   report.push(
     `Kept the config (${layout.config}), the node identity (${layout.data})${workspaces === undefined ? "" : ` and the workspaces (${workspaces})`}.`,
@@ -82,11 +82,11 @@ export function uninstall(layout: Layout): string[] {
 
 export function start(layout: Layout): string[] {
   if (readProgram(layout).kind !== "installed") {
-    throw new Error("Mate node is not installed; run `mate node install <bundle>` first.");
+    throw new Error("Palace node is not installed; run `palace node install <bundle>` first.");
   }
   if (readConfig(layout.config) === undefined) {
     throw new Error(
-      `${layout.config} is missing; run \`mate node configure --control-plane <url> --pairing-token <token>\` first.`,
+      `${layout.config} is missing; run \`palace node configure --control-plane <url> --pairing-token <token>\` first.`,
     );
   }
   return currentPlatform().service(layout).start();
@@ -152,26 +152,26 @@ async function place(
   removeScratch(layout);
   const parent = dirname(layout.program);
   mkdirSync(parent, { recursive: true });
-  const staging = mkdtempSync(join(parent, ".mate-node-staging-"));
+  const staging = mkdtempSync(join(parent, ".palace-node-staging-"));
   try {
     const incoming = await unpackBundle(bundle, staging);
     if (program.kind !== "installed") {
       renameSync(staging, layout.program);
-      return `Installed Mate node ${incoming.version} in ${layout.program}.`;
+      return `Installed Palace node ${incoming.version} in ${layout.program}.`;
     }
     const installed = program.manifest.version;
     if (installed === incoming.version) {
-      return `Mate node ${installed} is already installed in ${layout.program}.`;
+      return `Palace node ${installed} is already installed in ${layout.program}.`;
     }
     if (otherVersion === "keep") {
       throw new Error(
-        `Mate node ${installed} is installed; use \`mate node update ${bundle}\` to change it to ${incoming.version}. Nothing was changed.`,
+        `Palace node ${installed} is installed; use \`palace node update ${bundle}\` to change it to ${incoming.version}. Nothing was changed.`,
       );
     }
     const old = moveAside(layout);
     renameSync(staging, layout.program);
     rmSync(old, { recursive: true, force: true });
-    return `Updated Mate node from ${installed} to ${incoming.version} in ${layout.program}.`;
+    return `Updated Palace node from ${installed} to ${incoming.version} in ${layout.program}.`;
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
@@ -184,22 +184,24 @@ function nextSteps(layout: Layout): string[] {
     return ["The node service is running; it keeps the version it started with until restarted."];
   }
   if (service.activity !== "stopped") {
-    return [`The node service is ${service.description}. Use \`mate node status\` to inspect it.`];
+    return [
+      `The node service is ${service.description}. Use \`palace node status\` to inspect it.`,
+    ];
   }
   return [
     ...(config === undefined
       ? [
-          "Next: mate node configure --control-plane <url> --pairing-token <token> [--workspaces <dir>]",
+          "Next: palace node configure --control-plane <url> --pairing-token <token> [--workspaces <dir>]",
         ]
       : []),
-    "The node service is stopped. Start it with `mate node start`.",
+    "The node service is stopped. Start it with `palace node start`.",
   ];
 }
 
 function refuseForeignProgram(layout: Layout, program: Program): void {
   if (program.kind === "foreign") {
     throw new Error(
-      `${layout.program} exists but has no Mate manifest, so Mate will not touch it. Move or delete it, then run the command again; nothing was changed.`,
+      `${layout.program} exists but has no Palace manifest, so Palace will not touch it. Move or delete it, then run the command again; nothing was changed.`,
     );
   }
 }
@@ -207,7 +209,7 @@ function refuseForeignProgram(layout: Layout, program: Program): void {
 function refuseUnlisted(layout: Layout, program: Program): void {
   if (program.kind === "installed" && program.unlisted.length > 0) {
     throw new Error(
-      `${layout.program} holds files Mate did not install: ${program.unlisted.join(", ")}. Move them out, then run the command again; nothing was changed.`,
+      `${layout.program} holds files Palace did not install: ${program.unlisted.join(", ")}. Move them out, then run the command again; nothing was changed.`,
     );
   }
 }
@@ -217,7 +219,7 @@ function refuseUnlisted(layout: Layout, program: Program): void {
  * leaves only scratch, which the next command removes.
  */
 function moveAside(layout: Layout): string {
-  const old = mkdtempSync(join(dirname(layout.program), ".mate-node-old-"));
+  const old = mkdtempSync(join(dirname(layout.program), ".palace-node-old-"));
   renameSync(layout.program, join(old, "program"));
   return old;
 }
@@ -227,7 +229,7 @@ function removeScratch(layout: Layout): void {
   for (const name of readdirOrEmpty(parent)) {
     if (SCRATCH.test(name)) rmSync(join(parent, name), { recursive: true, force: true });
   }
-  rmSync(`${layout.unit}.mate-tmp`, { force: true });
+  rmSync(`${layout.unit}.palace-tmp`, { force: true });
 }
 
 function describeProgram(layout: Layout, program: Program): string {
@@ -235,13 +237,13 @@ function describeProgram(layout: Layout, program: Program): string {
     case "absent":
       return `not installed (${layout.program})`;
     case "foreign":
-      return `${layout.program} exists but has no Mate manifest`;
+      return `${layout.program} exists but has no Palace manifest`;
     case "installed": {
       const { version, platform, arch } = program.manifest;
       const extra =
         program.unlisted.length === 0
           ? ""
-          : `; files Mate did not install: ${program.unlisted.join(", ")}`;
+          : `; files Palace did not install: ${program.unlisted.join(", ")}`;
       return `${version} (${platform}-${arch}) in ${layout.program}${extra}`;
     }
   }
@@ -254,7 +256,7 @@ function describeOwnership(path: string, ownership: Ownership): string {
     case "mate":
       return path;
     case "foreign":
-      return `${path} (not Mate's; left alone)`;
+      return `${path} (not Palace's; left alone)`;
   }
 }
 

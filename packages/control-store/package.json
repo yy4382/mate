@@ -1,10 +1,10 @@
 {
-  "name": "@mate/control-store",
+  "name": "@palace/control-store",
   "private": true,
   "type": "module",
   "exports": {
     ".": {
-      "mate-source": "./src/index.ts",
+      "palace-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     }
@@ -14,10 +14,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@mate/migrations": "workspace:*",
+    "@palace/migrations": "workspace:*",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@mate/testkit": "workspace:*"
+    "@palace/testkit": "workspace:*"
   }
 }

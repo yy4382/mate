@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { NodeRejectedError, startNode } from "@mate/node";
+import { NodeRejectedError, startNode } from "@palace/node";
 
 const options = JSON.parse(readFileSync(process.argv[2]!, "utf8"));
 const stopped = new AbortController();

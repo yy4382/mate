@@ -1,9 +1,9 @@
-import type { HumanView, Role } from "@mate/control-plane/contracts";
+import type { HumanView, Role } from "@palace/control-plane/contracts";
 import { t } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
 import { describe, get } from "./api.ts";
 
-export type { HumanView, Role } from "@mate/control-plane/contracts";
+export type { HumanView, Role } from "@palace/control-plane/contracts";
 
 export const ROLE_LABEL: Record<Role, string> = {
   admin: t("humans.administrator"),

@@ -1,6 +1,6 @@
 import { t } from "../i18n.ts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { AgentView } from "@mate/admin";
+import type { AgentView } from "@palace/admin";
 import { del, put } from "../shell/api.ts";
 import {
   Badge,

@@ -19,7 +19,7 @@ const canChoosePids =
   ]).status === 0;
 
 /** Set by `pnpm test:linux`, whose container is meant to allow it: there a missing capability fails, not skips. */
-const required = process.env["MATE_REQUIRE_PID_NAMESPACE"] === "1";
+const required = process.env["PALACE_REQUIRE_PID_NAMESPACE"] === "1";
 
 describe("node process groups and PID reuse (MODULE_TESTS 8.1)", () => {
   it.runIf(canChoosePids || required)(

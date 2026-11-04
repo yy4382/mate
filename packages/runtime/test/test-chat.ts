@@ -1,5 +1,5 @@
-import { ChatApp } from "@mate/chat";
-import { temporaryDirectory } from "@mate/testkit";
+import { ChatApp } from "@palace/chat";
+import { temporaryDirectory } from "@palace/testkit";
 import { join } from "node:path";
 import { onTestFinished } from "vitest";
 import type { ChatPort } from "../src/index.ts";

@@ -65,7 +65,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm typecheck
-      - run: pnpm --filter @mate/mobile bundle:check
+      - run: pnpm --filter @palace/mobile bundle:check
 
   test:
     name: vitest
@@ -90,7 +90,7 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - run: pnpm --filter @mate/web exec playwright install chromium-headless-shell
+      - run: pnpm --filter @palace/web exec playwright install chromium-headless-shell
       # The node and system suites run in the test-linux jobs, in the container they are written for.
       - run: pnpm test --exclude 'apps/node/**' --exclude 'tests/system/**'
 
@@ -114,7 +114,7 @@ jobs:
       - run: pnpm test:linux apps/node tests/system --shard=${{ matrix.shard }}/2
 
   deploy-script:
-    name: mate-deploy
+    name: palace-deploy
     if: github.ref_type != 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -158,9 +158,9 @@ jobs:
       - run: pnpm bundle:node 0.0.0-ci-update --platform ${{ matrix.platform }} --out dist/node-update-bundles
       - run: pnpm test apps/node --maxWorkers=2 --testTimeout=60000
         env:
-          MATE_TEST_BUNDLE_DIRECTORY: dist/node-bundles
-          MATE_TEST_UPDATE_BUNDLE_DIRECTORY: dist/node-update-bundles
-          MATE_TEST_NATIVE_SERVICE: "1"
+          PALACE_TEST_BUNDLE_DIRECTORY: dist/node-bundles
+          PALACE_TEST_UPDATE_BUNDLE_DIRECTORY: dist/node-update-bundles
+          PALACE_TEST_NATIVE_SERVICE: "1"
 
   # Runs even when a check fails, so that it fails too instead of being skipped.
   checks:
@@ -239,10 +239,10 @@ jobs:
           echo "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
       - name: Build the control-plane image
         run: |
-          image="ghcr.io/${GITHUB_REPOSITORY,,}-control-plane"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/palace-control-plane"
           docker buildx create --use
           docker buildx build --file deploy/control-plane/Dockerfile --platform linux/amd64 \
-            --build-arg "MATE_VERSION=${VERSION#v}" --tag "$image:${VERSION#v}" \
+            --build-arg "PALACE_VERSION=${VERSION#v}" --tag "$image:${VERSION#v}" \
             --push=${{ startsWith(github.ref, 'refs/tags/v') }} .
       - name: Publish the node bundles
         if: startsWith(github.ref, 'refs/tags/v')
@@ -250,7 +250,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release create "$VERSION" dist/node-bundles/* --title "$VERSION" --generate-notes
 
-  # Runs deploy/auto-update/mate-deploy on the production host through its forced-command SSH key
+  # Runs deploy/auto-update/palace-deploy on the production host through its forced-command SSH key
   # (DEPLOYMENT.md 5.5). The host, key and host key live only in the production environment's secrets;
   # until DEPLOY_HOST is set there, the job does nothing.
   deploy:
@@ -276,7 +276,7 @@ jobs:
         if: steps.configured.outputs.yes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "mate-node-${VERSION#v}-linux-x64.tar.gz"
+        run: gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "palace-node-${VERSION#v}-linux-x64.tar.gz"
       - name: Upgrade the host
         if: steps.configured.outputs.yes == 'true'
         env:
@@ -288,6 +288,6 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy
           chmod 0600 ~/.ssh/deploy
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          bundle="mate-node-${VERSION#v}-linux-x64.tar.gz"
+          bundle="palace-node-${VERSION#v}-linux-x64.tar.gz"
           sha=$(sha256sum "$bundle" | cut -d' ' -f1)
           ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o BatchMode=yes "$HOST" "deploy ${VERSION#v} $sha" < "$bundle"

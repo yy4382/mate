@@ -3,7 +3,7 @@ import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { Bot, MessageSquare, Plus } from "lucide-react";
 import { useState } from "react";
-import type { AgentView, CatalogModel } from "@mate/admin";
+import type { AgentView, CatalogModel } from "@palace/admin";
 import { ApiError, post } from "../shell/api.ts";
 import { HANDLE_PATTERN } from "../shell/humans.ts";
 import { Link } from "../shell/router.tsx";

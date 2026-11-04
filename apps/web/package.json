@@ -1,5 +1,5 @@
 {
-  "name": "@mate/web",
+  "name": "@palace/web",
   "private": true,
   "type": "module",
   "scripts": {
@@ -22,10 +22,10 @@
     "tailwindcss": "4.3.3"
   },
   "devDependencies": {
-    "@mate/admin": "workspace:*",
-    "@mate/chat": "workspace:*",
-    "@mate/control-plane": "workspace:*",
-    "@mate/testkit": "workspace:*",
+    "@palace/admin": "workspace:*",
+    "@palace/chat": "workspace:*",
+    "@palace/control-plane": "workspace:*",
+    "@palace/testkit": "workspace:*",
     "@tailwindcss/vite": "4.3.3",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",

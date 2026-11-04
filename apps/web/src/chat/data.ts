@@ -1,4 +1,4 @@
-import { accountName, mergeEntries, timelineKey, timelineQuery } from "@mate/chat/client";
+import { accountName, mergeEntries, timelineKey, timelineQuery } from "@palace/chat/client";
 import { t, locale } from "../i18n.ts";
 import { queryOptions, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { get } from "../shell/api.ts";

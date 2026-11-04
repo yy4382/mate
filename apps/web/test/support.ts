@@ -9,7 +9,7 @@ import {
   type BrowserContext,
   type Page,
 } from "playwright";
-import { FakeClock, FakeNode, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
+import { FakeClock, FakeNode, ScriptedProvider, temporaryDirectory } from "@palace/testkit";
 import { build } from "vite";
 import { onTestFinished } from "vitest";
 import { startControlPlane, type ControlPlane } from "../../control-plane/src/control-plane.ts";
@@ -24,7 +24,7 @@ let built: Promise<string> | undefined;
 /** The frontend, built once by this worker with Vite into a temporary directory the control plane serves. */
 export function webDirectory(): Promise<string> {
   built ??= (async () => {
-    const outDir = mkdtempSync(join(tmpdir(), "mate-web-"));
+    const outDir = mkdtempSync(join(tmpdir(), "palace-web-"));
     process.once("exit", () => rmSync(outDir, { recursive: true, force: true }));
     await build({
       root: appDirectory,
@@ -247,7 +247,7 @@ export async function startSite(): Promise<Site> {
   return site;
 }
 
-/** A fresh browser context (no cookies) on `site`; closed when the test finishes. Avatar images from DiceBear are answered locally, unless screenshots are being taken (`MATE_SCREENS`). */
+/** A fresh browser context (no cookies) on `site`; closed when the test finishes. Avatar images from DiceBear are answered locally, unless screenshots are being taken (`PALACE_SCREENS`). */
 export async function newPage(
   site: Site,
   viewport: { width: number; height: number } = { width: 1280, height: 800 },
@@ -255,7 +255,7 @@ export async function newPage(
 ): Promise<{ page: Page; context: BrowserContext }> {
   const context = await (await chromiumBrowser()).newContext({ viewport, locale });
   onTestFinished(() => context.close());
-  if (process.env.MATE_SCREENS === undefined)
+  if (process.env.PALACE_SCREENS === undefined)
     await context.route("https://api.dicebear.com/**", (route) =>
       route.fulfill({
         contentType: "image/svg+xml",

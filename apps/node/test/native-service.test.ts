@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
-import { FakeGateway } from "@mate/testkit";
+import { FakeGateway } from "@palace/testkit";
 import { expect, it, onTestFinished } from "vitest";
 import { hostPaths } from "./cli-support.ts";
 import {
@@ -16,7 +16,7 @@ import {
   windows,
 } from "./support.ts";
 
-const nativeService = process.env["MATE_TEST_NATIVE_SERVICE"] === "1";
+const nativeService = process.env["PALACE_TEST_NATIVE_SERVICE"] === "1";
 
 it.runIf(nativeService)(
   "the published bundle installs a native service, reports its real link, manually restarts a crashed Windows node, stops its process tree and does not retry identity refusal (dedicated CI account only)",
@@ -28,7 +28,7 @@ it.runIf(nativeService)(
       expect(existsSync(path), `native smoke requires an account without ${path}`).toBe(false);
     }
 
-    const directory = resolve(process.env["MATE_TEST_BUNDLE_DIRECTORY"]!);
+    const directory = resolve(process.env["PALACE_TEST_BUNDLE_DIRECTORY"]!);
     const target = `${windows ? "win" : "darwin"}-${process.arch}`;
     const bundles = readdirSync(directory).filter((file) => file.endsWith(`-${target}.tar.gz`));
     expect(bundles, "one real release bundle for this host").toHaveLength(1);
@@ -36,9 +36,9 @@ it.runIf(nativeService)(
     const extraction = temporaryDirectory();
     const unpacked = spawnSync("tar", ["-xzf", bundle, "-C", extraction], { encoding: "utf8" });
     expect(unpacked.status, unpacked.stderr).toBe(0);
-    const program = join(extraction, "mate-node");
+    const program = join(extraction, "palace-node");
     const runtime = join(program, windows ? "node/node.exe" : "node/bin/node");
-    const script = join(program, "lib/mate.mjs");
+    const script = join(program, "lib/palace.mjs");
     let installed = false;
     const fromBundle = (...args: string[]) =>
       spawnSync(runtime, [script, "node", ...args], { encoding: "utf8" });
@@ -55,14 +55,14 @@ it.runIf(nativeService)(
       const result = mate(...args);
       expect(
         result.status,
-        `mate node ${args.join(" ")}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+        `palace node ${args.join(" ")}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
       ).toBe(0);
       return result.stdout;
     };
 
     const initial = ok("status");
     expect(initial).toContain("Unit: missing");
-    expect(initial).not.toContain("not Mate's");
+    expect(initial).not.toContain("not Palace's");
     expect(initial).not.toContain("Service: unknown");
     expect(initial).toContain("Link: none");
 
@@ -123,7 +123,7 @@ it.runIf(nativeService)(
     const task = `
 $ErrorActionPreference = 'Stop'
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$name = 'Mate node ' + $sid
+$name = 'Palace node ' + $sid
 $scheduler = New-Object -ComObject 'Schedule.Service'
 $scheduler.Connect()
 $folder = $scheduler.GetFolder('\\')
@@ -150,7 +150,7 @@ if ($node.ExitCode -ne 1) { throw "Expected node exit 1, got $($node.ExitCode)" 
       ok("start");
       await eventually(
         () => gateway.authentications > authentications,
-        "mate node start reconnects after the crashed Windows task",
+        "palace node start reconnects after the crashed Windows task",
         30_000,
       );
       await eventually(
@@ -184,7 +184,7 @@ if ($node.ExitCode -ne 1) { throw "Expected node exit 1, got $($node.ExitCode)" 
     );
     expect(ok("status")).toContain("Link: none");
 
-    const updateDirectory = resolve(process.env["MATE_TEST_UPDATE_BUNDLE_DIRECTORY"]!);
+    const updateDirectory = resolve(process.env["PALACE_TEST_UPDATE_BUNDLE_DIRECTORY"]!);
     const updates = readdirSync(updateDirectory).filter((file) =>
       file.endsWith(`-${target}.tar.gz`),
     );

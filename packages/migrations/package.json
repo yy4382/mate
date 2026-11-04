@@ -1,10 +1,10 @@
 {
-  "name": "@mate/migrations",
+  "name": "@palace/migrations",
   "private": true,
   "type": "module",
   "exports": {
     ".": {
-      "mate-source": "./src/index.ts",
+      "palace-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
     }

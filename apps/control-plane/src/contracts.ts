@@ -1,4 +1,4 @@
-import { Id } from "@mate/chat/contracts";
+import { Id } from "@palace/chat/contracts";
 import { z } from "zod";
 
 /** What a human may do: an admin manages Agents, providers, nodes and other humans; a member only chats. */

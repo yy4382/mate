@@ -1,5 +1,10 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { FakeWorkspace, FaultyDatabase, ScriptedProvider, temporaryDirectory } from "@mate/testkit";
+import {
+  FakeWorkspace,
+  FaultyDatabase,
+  ScriptedProvider,
+  temporaryDirectory,
+} from "@palace/testkit";
 import { join } from "node:path";
 import { onTestFinished } from "vitest";
 import {
@@ -12,7 +17,7 @@ import {
   type CredentialsLookup,
 } from "../src/index.ts";
 
-export { FakeClock, FakeWorkspace, toolText as text } from "@mate/testkit";
+export { FakeClock, FakeWorkspace, toolText as text } from "@palace/testkit";
 
 export const defaultSettings: AgentSettings = { model: { provider: "openai", modelId: "gpt-4.1" } };
 

@@ -7,10 +7,10 @@ describe("the gateway package run from source", () => {
     const loaded = execFileSync(
       process.execPath,
       [
-        "--conditions=mate-source",
+        "--conditions=palace-source",
         "--input-type=module",
         "--eval",
-        'const gateway = await import("@mate/gateway"); console.log(typeof gateway.createNodeGateway);',
+        'const gateway = await import("@palace/gateway"); console.log(typeof gateway.createNodeGateway);',
       ],
       { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8" },
     );

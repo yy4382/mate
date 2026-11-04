@@ -1,7 +1,7 @@
 import { t, listText } from "./i18n";
 import { Linking, Text, View } from "react-native";
 import { EnrichedMarkdownText } from "react-native-enriched-markdown";
-import type { AccountView } from "@mate/chat/contracts";
+import type { AccountView } from "@palace/chat/contracts";
 import { useTheme } from "./theme";
 
 export function MessageBody({

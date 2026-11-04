@@ -1,22 +1,22 @@
 import type { ExpoConfig } from "expo/config";
 
-const environment = process.env.MATE_IOS_APNS_ENVIRONMENT ?? "sandbox";
+const environment = process.env.PALACE_IOS_APNS_ENVIRONMENT ?? "sandbox";
 if (environment !== "sandbox" && environment !== "production")
-  throw new Error("MATE_IOS_APNS_ENVIRONMENT must be sandbox or production");
+  throw new Error("PALACE_IOS_APNS_ENVIRONMENT must be sandbox or production");
 
 /** The lock-screen text for the control plane's push alert `loc-key`; iOS shows it while JS cannot run. */
 const pushAlert = (text: string) => ({ ios: { "Localizable.strings": { MATE_PUSH_ALERT: text } } });
 
 export default (): ExpoConfig => ({
-  name: "Mate",
-  slug: "mate-mobile",
+  name: "Palace",
+  slug: "palace-mobile",
   version: "0.0.0",
-  scheme: "mate",
+  scheme: "palace",
   platforms: ["ios"],
   userInterfaceStyle: "automatic",
   icon: "./assets/icon.png",
   ios: {
-    bundleIdentifier: "dev.yyang.mate",
+    bundleIdentifier: "dev.yyang.palace",
     deploymentTarget: "27.0",
     icon: { light: "./assets/icon.png", dark: "./assets/icon-dark.png" },
   },

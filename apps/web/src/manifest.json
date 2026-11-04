@@ -1,6 +1,6 @@
 {
-  "name": "Mate",
-  "short_name": "Mate",
+  "name": "Palace",
+  "short_name": "Palace",
   "start_url": "/app",
   "scope": "/",
   "display": "standalone",

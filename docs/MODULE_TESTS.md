@@ -1,4 +1,4 @@
-# Mate 模块边界测试说明
+# Palace 模块边界测试说明
 
 > 配套文档：[ARCHITECTURE.md](ARCHITECTURE.md)。读这份之前请先读架构文档的第 2、4 节。
 
@@ -333,7 +333,7 @@
 - 三个平台都证明 node 正常关闭时清理仍在运行的命令。POSIX 还检查命令已经返回的后台进程组。
 - 修改或删除工作目录里的 `MEMORY.md`，不影响之后的命令执行。
 - 主工作目录不存在时，所有工具报错且不重建。显式准备主工作区会创建缺失的空 MEMORY.md，已有文件不覆盖。访问工作区在显式准备和执行前准备时均不初始化 MEMORY.md。工作区路径是普通文件时访问工具失败，移除冲突后重试成功。重复准备及重连保留已有文件；远端用户自行创建再删除的 MEMORY.md 不会补写。
-- 运行中的 node 握手成功后，`mate node status`（假服务管理器报告这个真实子进程的身份）显示 `Link: connected since <时间>`；网关消失后显示 `Link: disconnected since <时间>`。网关连不上时从启动起就是 `disconnected`。
+- 运行中的 node 握手成功后，`palace node status`（假服务管理器报告这个真实子进程的身份）显示 `Link: connected since <时间>`；网关消失后显示 `Link: disconnected since <时间>`。网关连不上时从启动起就是 `disconnected`。
 - 身份被拒绝时，node 退出，退出码是用户服务不会重启的那个（§9），不会无限重试；网络失败或网关以协议错误（例如握手超时）结束连接时，按退避重连。
 
 ### 8.4 浏览工作区
@@ -346,24 +346,24 @@
 
 ## 9. Node 管理 CLI
 
-**边界：** `mate node` 命令行，以及它读的发布包和它留在 HOME 里的文件（布局见 DEPLOYMENT §3.2）。测试以子进程运行 CLI，不 import 它的内部文件。
+**边界：** `palace node` 命令行，以及它读的发布包和它留在 HOME 里的文件（布局见 DEPLOYMENT §3.2）。测试以子进程运行 CLI，不 import 它的内部文件。
 
 **替身：** CLI 通过宿主平台的假服务命令观察系统状态：Linux 的 systemctl/journalctl、macOS 的 launchctl、Windows 的 schtasks 与结构化任务查询。它们记录操作并按服务定义和测试状态回答。配置、身份和程序都放在临时账号目录（Windows 同时设置 USERPROFILE 和 LOCALAPPDATA）；测试自己写同格式的发布包。所有断言经过公开 CLI，不能直接测试平台适配器私有函数。
 
-**没有可续做的状态机（ARCHITECTURE §11 第 1 条）。** 每个命令只看现有状态：程序目录（不存在 / Mate 的某个版本 / 没有清单，不是 Mate 的）、`mate` 命令和服务定义（不存在 / Mate 的 / 别人的）、服务状态。所以"中断后重跑"的测试构造的是中断可能留下的状态（程序目录已挪开但新的还没放好、半个暂存目录、单元已删程序还在），再加一个在解包中途真的 SIGKILL 的测试。
+**没有可续做的状态机（ARCHITECTURE §11 第 1 条）。** 每个命令只看现有状态：程序目录（不存在 / Palace 的某个版本 / 没有清单，不是 Palace 的）、`palace` 命令和服务定义（不存在 / Palace 的 / 别人的）、服务状态。所以"中断后重跑"的测试构造的是中断可能留下的状态（程序目录已挪开但新的还没放好、半个暂存目录、单元已删程序还在），再加一个在解包中途真的 SIGKILL 的测试。
 
-- 首次 `install` 放好程序目录、`mate` 命令和单元文件，不启用也不启动服务；`start` 之后服务被启用并运行。没有配置时 `start` 拒绝。
+- 首次 `install` 放好程序目录、`palace` 命令和单元文件，不启用也不启动服务；`start` 之后服务被启用并运行。没有配置时 `start` 拒绝。
 - 重复 `install` 保留程序，不启动、重启或启用服务；Windows 停止任务的定义重新注册，更新过的服务参数会生效。
 - 已装了另一个版本时 `install` 拒绝（提示用 `update`），不做任何改动。
 - `update` 在服务运行、正在启动或停止、等待重启、状态不明时拒绝。Windows 的任务仍启用、可能再次触发时也拒绝。
 - `update` 在服务停止时换上新版本，服务保持停止；配置、身份、工作区逐字节不变。
 - `update` 死在"旧程序目录已挪开、新的还没放好"之间，或留下半个暂存目录，重跑同一个命令完成更新，不留下暂存目录。
 - `update` 在校验或解包发布包时被 SIGKILL，已装的程序目录原样不变；重跑完成更新。
-- `uninstall` 停用并停止服务，删除程序目录、`mate` 命令和单元文件，保留配置、身份和工作区；再跑一次报告没有可删的东西，不改动任何文件。
+- `uninstall` 停用并停止服务，删除程序目录、`palace` 命令和单元文件，保留配置、身份和工作区；再跑一次报告没有可删的东西，不改动任何文件。
 - `uninstall` 死在"单元已删"或"删程序目录到一半"之后，重跑完成卸载。
-- 程序目录里有 Mate 没装的文件或目录时，`update` 和 `uninstall` 拒绝，列出它们，不做任何改动；`status` 也报告它们。
-- 不是 Mate 写的服务定义和命令，`install` 和 `uninstall` 都不碰，并在输出里报告；`uninstall` 对这样的单元定义的服务也只读状态，不停用它。
-- 发布包校验和不对、缺 `.sha256`、含符号链接、硬链接、特殊文件、含 `..` 的路径、绝对路径、`mate-node/` 之外的路径、清单没列的文件、缺清单列的文件、平台或架构不匹配时，拒绝；已安装的东西不变，首次安装不留下任何文件。
+- 程序目录里有 Palace 没装的文件或目录时，`update` 和 `uninstall` 拒绝，列出它们，不做任何改动；`status` 也报告它们。
+- 不是 Palace 写的服务定义和命令，`install` 和 `uninstall` 都不碰，并在输出里报告；`uninstall` 对这样的单元定义的服务也只读状态，不停用它。
+- 发布包校验和不对、缺 `.sha256`、含符号链接、硬链接、特殊文件、含 `..` 的路径、绝对路径、`palace-node/` 之外的路径、清单没列的文件、缺清单列的文件、平台或架构不匹配时，拒绝；已安装的东西不变，首次安装不留下任何文件。
 - 没有用户管理器时，`install`、`update`、`uninstall` 拒绝，不做任何改动。
 - 管理命令以 root 运行时拒绝（Linux 上用 `unshare -r` 得到 UID 0）。`node run` 不检查，它只由用户服务启动。
 - `configure` 在 POSIX 写出权限 0600 的配置，Windows 写在账号的 LOCALAPPDATA 下，不用 mode 位冒充 ACL 检查。不带 `--pairing-token` 再写一次就去掉令牌；地址不是 http(s)/ws(s) 时拒绝，原文件不变。
@@ -409,7 +409,7 @@
 - 登录后的跳转只接受站内 `/app` 路径。
 - 连续输错密码不会把人类锁在外面；同时进行的密码校验最多 2 个，多的排队而不拒绝：几个客户端循环输错密码时，正确的密码仍然被检查并登录成功；队列满（64）时返回 429，排队超过 10 秒的也返回 429。
 - 初始密码文件只在第一次启动时读取。
-- 第一次启动按 `MATE_INITIAL_HANDLE` 建一个管理员（不给时叫 `admin`），这个管理员用 handle（不分大小写）加初始密码登录；重启不会多出一个人类；初始 handle 不合法时拒绝启动。
+- 第一次启动按 `PALACE_INITIAL_HANDLE` 建一个管理员（不给时叫 `admin`），这个管理员用 handle（不分大小写）加初始密码登录；重启不会多出一个人类；初始 handle 不合法时拒绝启动。
 - 密码错、handle 不存在、handle 是 Agent 的、人类已被停用，这四种登录得到完全相同的拒绝（状态码和正文相同，不设 cookie）。
 - 会话令牌只以哈希形式存储；退出登录后这个令牌立即失效。
 - 请求体在退出登录之后才收完的请求回 401，什么都不改。测试做法：带 `Expect: 100-continue` 发请求头，收到 100 说明控制面已收下这个请求，再退出登录，然后补完请求体。
@@ -537,9 +537,9 @@
 8. Agent 派生一个工作助手执行命令，助手完成后汇报，Agent 把结果发到频道。
 9. Agent 访问第二个 node：管理员授权前被拒绝，授权后准备工作区，不初始化 MEMORY.md，在自己的工作区内执行命令和读写编辑文件，实际 pwd 与工作区一致，主 node 文件独立，收回后再次被拒绝。离线授权在首次在线调用时准备工作区；重连和重复授权不改写已有文件。
 
-**实现。** 九个场景在 `tests/system/test/`（pnpm 包 `@mate/system-tests`，根 `vitest` 的 include 里有 `tests/*/test`）：场景 1 到 3 在 `chat.test.ts`，4 到 6 在 `recovery.test.ts`，7 和 8 在 `agents.test.ts`，9 在 `node-visits.test.ts`，进程夹具在 `support.ts` 的 `startSystem()`。测试名字以场景号开头，场景 9 另含离线授权和重连测试。
+**实现。** 九个场景在 `tests/system/test/`（pnpm 包 `@palace/system-tests`，根 `vitest` 的 include 里有 `tests/*/test`）：场景 1 到 3 在 `chat.test.ts`，4 到 6 在 `recovery.test.ts`，7 和 8 在 `agents.test.ts`，9 在 `node-visits.test.ts`，进程夹具在 `support.ts` 的 `startSystem()`。测试名字以场景号开头，场景 9 另含离线授权和重连测试。
 
-- 控制面用 `node --conditions=mate-source apps/control-plane/src/main.ts` 启动，环境变量同部署；node 用 `mate node run`，HOME 是临时目录，配置里的配对令牌来自管理员经 HTTP 生成的令牌。模型提供商的凭据由管理员经 HTTP 保存，`baseUrl` 指向这个进程里的脚本化提供商。管理员用 `HumanBrowser`（`@mate/testkit`，控制面测试共用）。
+- 控制面用 `node --conditions=palace-source apps/control-plane/src/main.ts` 启动，环境变量同部署；node 用 `palace node run`，HOME 是临时目录，配置里的配对令牌来自管理员经 HTTP 生成的令牌。模型提供商的凭据由管理员经 HTTP 保存，`baseUrl` 指向这个进程里的脚本化提供商。管理员用 `HumanBrowser`（`@palace/testkit`，控制面测试共用）。
 - 不用 sleep。等待的都是可观察的状态：长命令在 Agent 的工作区里写 `started`，测试看到它才继续，要它结束时写 `release`；其余是轮询 HTTP（node 在线、频道里出现某条消息）。要卡在某个时刻的事（场景 3 里管理员在 Agent 读完之后、发言之前写）放在脚本化提供商的步骤里做：步骤收到请求时，先让测试发 HTTP，再给出回答。
 - 场景 4：看到 `started` 后 SIGKILL 控制面，在同一个数据目录和端口上重启；命令把自己的运行次数追加到 `runs.log`，Agent 重启后用 `cat runs.log` 确认只有一次。node 的重连是真实的退避重连。
 - 场景 5：node 经网络代理连到控制面，用 `disconnect` 模式断开（`blackhole` 要等 30 秒的心跳超时，且走的是同一条"连接丢失"路径）；断开时命令在网关的在途调用上以"结果未知"结束，node 停掉命令的进程组，恢复后 node 重连，新命令正常执行。
@@ -551,12 +551,12 @@
 
 ## 13. 自动部署
 
-**边界：** `deploy/auto-update/mate-deploy`（DEPLOYMENT 5.5），从它的命令行和标准输入驱动，只看部署后机器上的状态：`.env` 里的镜像、node 装的版本、数据目录的内容、node 服务是否在运行、备份和留下的发布包。`deploy/auto-update/test.sh` 在干净的 x86_64 Debian 13 容器里以 root 跑，CI 里是单独的 `mate-deploy` 任务。等待健康和等待 node 连上（`MATE_HEALTH_WAIT`、`MATE_NODE_CONNECT_WAIT`）的秒数在测试里调到 2 秒。
+**边界：** `deploy/auto-update/palace-deploy`（DEPLOYMENT 5.5），从它的命令行和标准输入驱动，只看部署后机器上的状态：`.env` 里的镜像、node 装的版本、数据目录的内容、node 服务是否在运行、备份和留下的发布包。`deploy/auto-update/test.sh` 在干净的 x86_64 Debian 13 容器里以 root 跑，CI 里是单独的 `palace-deploy` 任务。等待健康和等待 node 连上（`PALACE_HEALTH_WAIT`、`PALACE_NODE_CONNECT_WAIT`）的秒数在测试里调到 2 秒。
 
-**替身：** `docker`、`curl` 和 `mate node` 是把"正在运行的版本"记在文件里的替身：`compose up` 起 `.env` 里的镜像并改写数据目录（像一次迁移），版本名带 `bad` 的控制面永远不健康，带 `nostart` 的 node 启动后服务在运行但 `status` 永远是 `Link: none`（连不上控制面）；其余版本启动后是 `Link: connected`。`runuser`、`flock` 和文件操作都是真的。
+**替身：** `docker`、`curl` 和 `palace node` 是把"正在运行的版本"记在文件里的替身：`compose up` 起 `.env` 里的镜像并改写数据目录（像一次迁移），版本名带 `bad` 的控制面永远不健康，带 `nostart` 的 node 启动后服务在运行但 `status` 永远是 `Link: none`（连不上控制面）；其余版本启动后是 `Link: connected`。`runuser`、`flock` 和文件操作都是真的。
 
 - 部署正在运行的版本什么都不改；`deploy <版本> <sha256>` 以外的命令被拒绝；标准输入的发布包和 sha256 不符时拒绝，什么都不改。
 - 正常的新版本：镜像、node 版本都换成它，服务在运行，部署前的数据有一份备份。
 - 控制面起来后不健康：镜像换回原来的，数据目录换回部署前的备份，node 仍是原版本并在运行，以失败退出。
 - node 启动后一直连不上控制面（`Link: connected` 在等待时间内没出现）：打印 node 日志，同样全部回退，node 换回原来的发布包。
-- 回退之后还能部署更新的版本；只留最近 `MATE_KEEP_BACKUPS` 份备份和新旧两个发布包；每次部署都记进日志。
+- 回退之后还能部署更新的版本；只留最近 `PALACE_KEEP_BACKUPS` 份备份和新旧两个发布包；每次部署都记进日志。

@@ -2,7 +2,7 @@ import { statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FakeClock, storeFixture, temporaryDirectory } from "@mate/testkit";
+import { FakeClock, storeFixture, temporaryDirectory } from "@palace/testkit";
 import { ChatApp, ChatStoreIncompatible } from "../src/index.ts";
 import { FakePushService, openAppAt, rid } from "./support.ts";
 

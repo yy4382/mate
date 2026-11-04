@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { PushNotice, PushOutcome } from "@mate/chat";
-import type { WebPushSubscription } from "@mate/chat/contracts";
+import type { PushNotice, PushOutcome } from "@palace/chat";
+import type { WebPushSubscription } from "@palace/chat/contracts";
 import webPush from "web-push";
 import { z } from "zod";
 

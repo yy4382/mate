@@ -1,4 +1,4 @@
-import { ScriptedProvider } from "@mate/testkit";
+import { ScriptedProvider } from "@palace/testkit";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { openApp, startSite } from "./support.ts";
 

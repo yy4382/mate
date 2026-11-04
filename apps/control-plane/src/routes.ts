@@ -1,6 +1,6 @@
-import type { Admin } from "@mate/admin";
-import type { ChatApp } from "@mate/chat";
-import { PushSubscription } from "@mate/chat/contracts";
+import type { Admin } from "@palace/admin";
+import type { ChatApp } from "@palace/chat";
+import { PushSubscription } from "@palace/chat/contracts";
 import type { ApnsConfig } from "./apns.ts";
 import type { Role } from "./contracts.ts";
 import { streamAgent, streamLive, type EventStream } from "./event-stream.ts";

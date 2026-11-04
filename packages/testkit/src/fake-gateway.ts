@@ -8,7 +8,7 @@ import {
   type NodeBrowseOutcome,
   type ToolName,
   type ToolResult,
-} from "@mate/node-protocol";
+} from "@palace/node-protocol";
 import { randomBytes } from "node:crypto";
 import http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";

@@ -1,6 +1,6 @@
 import { t } from "../i18n";
-import type { NodeStatusResult } from "@mate/admin";
-import { pairingCommand } from "@mate/admin/client";
+import type { NodeStatusResult } from "@palace/admin";
+import { pairingCommand } from "@palace/admin/client";
 import * as Clipboard from "expo-clipboard";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";

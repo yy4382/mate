@@ -75,7 +75,7 @@
     "deactivate": "停用",
     "allTheirLoginSessionsWillEndImmediatelyAnd": "他会立即退出所有登录，也不能再登录，无法恢复。他发过的消息会保留。",
     "humans": "人类",
-    "peopleWhoCanSignInToMateAdministrators": "能登录 Mate 的人。管理员还能管理 Agent、提供商、node 和其他人类，普通人类只聊天。",
+    "peopleWhoCanSignInToMateAdministrators": "能登录 Palace 的人。管理员还能管理 Agent、提供商、node 和其他人类，普通人类只聊天。",
     "resetNamed": "重置 {{name}} 的密码",
     "deactivateNamed": "停用 {{name}}？",
     "setRole": "设为{{role}}"
@@ -281,7 +281,7 @@
     "incorrectHandleOrPassword": "Handle 或密码不对。",
     "tooManySigninAttemptsTryAgainLater": "尝试的人太多了，请稍后再试。",
     "signinFailedPleaseTryAgain": "登录失败，请重试。",
-    "signInToMate": "登录 Mate",
+    "signInToMate": "登录 Palace",
     "password": "密码",
     "signIn": "登录"
   },
@@ -299,7 +299,7 @@
     "atLeast12BytesChangingItSignsYou": "至少 12 个字节。改完后，你在其他浏览器上的登录会退出。",
     "confirmNewPassword": "确认新密码",
     "profile": "个人资料",
-    "yourNameAndSigninDetailsInMate": "你在 Mate 里的名字和登录方式。",
+    "yourNameAndSigninDetailsInMate": "你在 Palace 里的名字和登录方式。",
     "password": "密码",
     "loginSession": "登录状态",
     "signOut": "退出登录"

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { get } from "node:http";
 import { join } from "node:path";
-import { temporaryDirectory } from "@mate/testkit";
+import { temporaryDirectory } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 import { environment } from "./support.ts";
 
@@ -155,8 +155,8 @@ describe("the web client", () => {
     mkdirSync(directory);
     writeFileSync(join(directory, "..", "secret"), "outside the client");
     mkdirSync(join(directory, "assets"));
-    writeFileSync(join(directory, "index.html"), "<!doctype html><title>Mate</title>");
-    writeFileSync(join(directory, "assets", "app.js"), "console.log('mate')");
+    writeFileSync(join(directory, "index.html"), "<!doctype html><title>Palace</title>");
+    writeFileSync(join(directory, "assets", "app.js"), "console.log('palace')");
     return directory;
   }
 
@@ -170,7 +170,7 @@ describe("the web client", () => {
       "text/javascript; charset=utf-8",
     ]);
     expect((await browser.get("/login")).text, "the login page is the app").toContain(
-      "<title>Mate",
+      "<title>Palace",
     );
     expect((await browser.get("/")).headers.get("location")).toBe("/app");
     expect((await browser.get("/app/chat")).status, "pages need login").toBe(302);
@@ -179,7 +179,7 @@ describe("the web client", () => {
 
     await browser.logInAdmin();
     const page = await browser.get("/app/chat/general");
-    expect([page.status, page.text]).toEqual([200, "<!doctype html><title>Mate</title>"]);
+    expect([page.status, page.text]).toEqual([200, "<!doctype html><title>Palace</title>"]);
   });
 
   it("answers pages with 404 when the client is not built, and the API still works", async () => {

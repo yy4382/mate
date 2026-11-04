@@ -1,4 +1,4 @@
-import type { Role } from "@mate/control-plane/contracts";
+import type { Role } from "@palace/control-plane/contracts";
 import "@formatjs/intl-locale/polyfill.js";
 import "@formatjs/intl-pluralrules/polyfill.js";
 import "@formatjs/intl-pluralrules/locale-data/en.js";

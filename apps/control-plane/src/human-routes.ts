@@ -1,4 +1,4 @@
-import { AccountNames, type ChatApp } from "@mate/chat";
+import { AccountNames, type ChatApp } from "@palace/chat";
 import { z } from "zod";
 import { Role, type HumanView } from "./contracts.ts";
 import { NewPassword, type HumanRecord, type Humans } from "./humans.ts";

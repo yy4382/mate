@@ -1,4 +1,4 @@
-import type { GatewayBrowse, NodeBrowseOutcome } from "@mate/node-protocol";
+import type { GatewayBrowse, NodeBrowseOutcome } from "@palace/node-protocol";
 import { describe, expect, it } from "vitest";
 import { eventually, startGateway, within } from "./support.ts";
 

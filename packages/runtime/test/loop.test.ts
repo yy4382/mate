@@ -1,5 +1,5 @@
-import { bashTool } from "@mate/node-protocol";
-import { ScriptedProvider } from "@mate/testkit";
+import { bashTool } from "@palace/node-protocol";
+import { ScriptedProvider } from "@palace/testkit";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { testChat } from "./test-chat.ts";
 import { defaultSettings, testAgent, text } from "./support.ts";

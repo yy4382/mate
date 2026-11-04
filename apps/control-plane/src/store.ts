@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { openControlTables } from "@mate/control-store";
-import { Migrations } from "@mate/migrations";
+import { openControlTables } from "@palace/control-store";
+import { Migrations } from "@palace/migrations";
 
 /**
  * The Web shell's own tables in the control store: who may log in and as what (`humans`), the hashes of live session

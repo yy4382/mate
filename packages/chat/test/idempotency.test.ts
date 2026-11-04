@@ -1,4 +1,4 @@
-import { FakeClock } from "@mate/testkit";
+import { FakeClock } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 import {
   FakePushService,

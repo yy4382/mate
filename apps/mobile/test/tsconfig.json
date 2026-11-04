@@ -2,7 +2,7 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "types": ["node"],
-    "customConditions": ["mate-source"],
+    "customConditions": ["palace-source"],
     "lib": ["ES2024", "DOM"],
     "allowImportingTsExtensions": true
   },

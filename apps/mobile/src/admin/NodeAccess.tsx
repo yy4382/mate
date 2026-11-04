@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { NodeStatusResult } from "@mate/admin";
+import type { NodeStatusResult } from "@palace/admin";
 import { View } from "react-native";
 import type { ReadableAgent } from "./Agents";
 import { Button, Caption, Copy, Loading, Row, Section } from "../ui";

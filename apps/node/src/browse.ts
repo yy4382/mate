@@ -6,7 +6,7 @@ import {
   BROWSE_DIRECTORY_ENTRIES,
   BROWSE_FILE_BYTES,
   type NodeBrowseOutcome,
-} from "@mate/node-protocol";
+} from "@palace/node-protocol";
 import { WorkspaceEnv } from "./files.ts";
 
 const context = BACKGROUND_CONTEXT;

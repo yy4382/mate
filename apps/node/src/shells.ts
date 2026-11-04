@@ -1,7 +1,7 @@
 import { statSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { basename, join } from "node:path";
-import type { BashArguments, ToolResult } from "@mate/node-protocol";
+import type { BashArguments, ToolResult } from "@palace/node-protocol";
 import { Commands } from "./commands.ts";
 import {
   commandReplay,

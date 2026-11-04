@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { hostname, release } from "node:os";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, onTestFinished } from "vitest";
-import { createNodeGateway } from "@mate/gateway";
-import { FakeClock, FakeNode, NetworkProxy } from "@mate/testkit";
+import { createNodeGateway } from "@palace/gateway";
+import { FakeClock, FakeNode, NetworkProxy } from "@palace/testkit";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { loadOrCreateNodeIdentity, signChallenge, startNode } from "@mate/node";
+import { loadOrCreateNodeIdentity, signChallenge, startNode } from "@palace/node";
 import { eventually, temporaryDirectory } from "./support.ts";
 
 /** Real time throughout: the node's handshake timeout and backoff run on the system clock, kept short here. */

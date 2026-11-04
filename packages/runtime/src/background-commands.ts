@@ -8,7 +8,7 @@ import {
   type TaskRuntime,
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
-import type { BashArguments } from "@mate/node-protocol";
+import type { BashArguments } from "@palace/node-protocol";
 import { deliverInput } from "./assistants.ts";
 import type { WorkspacePort, WorkspaceToolResult } from "./workspace-tools.ts";
 

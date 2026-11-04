@@ -1,6 +1,6 @@
 import { t } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
-import type { AgentView, CatalogModel, NodeStatusResult, ProviderView } from "@mate/admin";
+import type { AgentView, CatalogModel, NodeStatusResult, ProviderView } from "@palace/admin";
 import { get } from "../shell/api.ts";
 import type { HumanView } from "../shell/humans.ts";
 

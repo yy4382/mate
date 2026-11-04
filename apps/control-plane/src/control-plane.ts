@@ -1,10 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { openAdmin } from "@mate/admin";
-import { ChatApp, type PushSender } from "@mate/chat";
-import { systemClock, type Clock } from "@mate/clock";
-import { createNodeGateway } from "@mate/gateway";
+import { openAdmin } from "@palace/admin";
+import { ChatApp, type PushSender } from "@palace/chat";
+import { systemClock, type Clock } from "@palace/clock";
+import { createNodeGateway } from "@palace/gateway";
 import { LoginInput, type LoginResult } from "./contracts.ts";
 import { EventStream } from "./event-stream.ts";
 import { Frontend } from "./frontend.ts";
@@ -30,7 +30,7 @@ const SESSION_COOKIE = "__Host-mate_session";
 const NODE_CONNECT_PATH = "/api/nodes/connect";
 /** The pages behind login; everything the client routes lives under it. */
 const APP_PATH = "/app";
-const BASE = "http://mate.invalid";
+const BASE = "http://palace.invalid";
 
 export type ControlPlaneOptions = {
   readonly dataDirectory: string;
@@ -73,7 +73,7 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
     const keys = vapidKeys(store);
     const apns = options.apns && openApns(options.apns, () => clock.now());
     if (apns) closers.push(() => apns.close());
-    const web = webPushSender(keys, options.vapidSubject ?? "mailto:owner@mate.invalid");
+    const web = webPushSender(keys, options.vapidSubject ?? "mailto:owner@palace.invalid");
     const chat = new ChatApp(join(dataDirectory, "chat.sqlite"), {
       clock,
       push:

@@ -1,4 +1,4 @@
-import type { ChatErrorReason } from "@mate/chat";
+import type { ChatErrorReason } from "@palace/chat";
 import {
   accountName,
   liveRetryDelay,
@@ -7,9 +7,9 @@ import {
   timelineKey,
   timelineQuery,
   unsentText,
-} from "@mate/chat/client";
+} from "@palace/chat/client";
 import { t, listText } from "./i18n";
-import { systemClock, type Clock } from "@mate/clock";
+import { systemClock, type Clock } from "@palace/clock";
 import { readEvents, sendJson } from "./http";
 import {
   ConversationView,
@@ -22,7 +22,7 @@ import {
   type AccountView,
   type TimelineRef,
   type UnreadSummary,
-} from "@mate/chat/contracts";
+} from "@palace/chat/contracts";
 import { z } from "zod";
 
 type Pending = {

@@ -1,7 +1,7 @@
 import { t } from "../i18n.ts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import type { ProviderView } from "@mate/admin";
+import type { ProviderView } from "@palace/admin";
 import { del, put } from "../shell/api.ts";
 import {
   Badge,
