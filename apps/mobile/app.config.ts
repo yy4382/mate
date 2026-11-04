@@ -14,7 +14,12 @@ export default (): ExpoConfig => ({
   scheme: "mate",
   platforms: ["ios"],
   userInterfaceStyle: "automatic",
-  ios: { bundleIdentifier: "dev.yyang.mate", deploymentTarget: "27.0" },
+  icon: "./assets/icon.png",
+  ios: {
+    bundleIdentifier: "dev.yyang.mate",
+    deploymentTarget: "27.0",
+    icon: { light: "./assets/icon.png", dark: "./assets/icon-dark.png" },
+  },
   locales: {
     en: pushAlert("You have a new direct message or mention."),
     "zh-Hans": pushAlert("你有新的私信或提及。"),

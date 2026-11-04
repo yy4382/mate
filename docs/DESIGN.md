@@ -9,6 +9,7 @@
 - **样式：Tailwind CSS v4。** 只写工具类，不写新的 CSS 规则。`src/shell/theme.css` 是唯一的样式文件，里面只有设计变量（`@theme`）、暗色模式的变量覆盖和极少的全局基础样式。
 - **交互组件：Base UI（`@base-ui/react`）。** 对话框、确认框、菜单、标签页、提示用它，不自己写焦点管理、键盘操作和弹层定位。
 - **图标：lucide-react。** 界面上不出现 emoji。只有图标没有文字的按钮必须带 `aria-label`。
+- **应用标志：猫脸。** Figma 导出保存在 `apps/mobile/assets/logo-black.svg` 与 `logo-white.svg`。网页 favicon、安装图标与 iOS app 图标从 858×848 的导出左右各裁去 5px，生成正方形；浅色版本为米白底黑猫，暗色版本为黑底米白猫。网页 favicon 跟随系统深浅模式，安装图标使用浅色版本并声明为 `any`。iOS 通过 app config 的 `ios.icon.light` 和 `ios.icon.dark` 提供两种外观，系统负责图标的圆角裁切。
 - **字体：Geist 和 Geist Mono**（`@fontsource-variable`），中文回落到系统字体（PingFang SC、Noto Sans SC、微软雅黑）。
 - **原语集中在 `src/shell/ui.tsx`。** 按钮、输入框、卡片、徽章、对话框、菜单、标签页等都从这里引入。页面里不直接拼按钮或输入框的样式，需要新变体就加到原语里。
 - **类名用 `cx` 拼。** 它经过 tailwind-merge，所以传给原语的 `className` 一定覆盖原语自己的同类样式（颜色、高度、内边距），不需要 `!important`。
