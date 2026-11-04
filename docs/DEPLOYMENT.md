@@ -412,7 +412,33 @@ iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模�
 
 认证沿用控制面的 Secure HttpOnly cookie，无需 bearer API 或 CORS 配置。启动和从后台回到前台重新验证登录，权限弹窗的 inactive → active 不触发重验；连接失败可重试，401 需要重新登录。退出与换服务器会先尝试撤销旧服务器上的会话，再清理 app 的原生 cookie；离线退出仅保证关闭本机访问，并提示远端撤销未确认。地址与恢复标记存在 Expo SQLite 键值设置中，不保存密码。正常使用后的重启恢复依赖原生 cookie 存储，不保证登录后立即强杀的持久化。`expo-sqlite` 和 `@preeternal/react-native-cookie-manager` 需要用上述 `ios` 命令构建开发版或 Release 包，Expo Go 不能验证这个 app 的 cookie 清理集成。
 
-`dev.yyang.palace` 是当前 iOS bundle identifier。签名使用对应的 App ID 和 provisioning profile，控制面的 `PALACE_APNS_TOPIC` 也必须与它一致。签名与自用分发方式仍待确认，本阶段不添加公开应用商店发布自动化。根 `pnpm build` 只构建已有网页和服务端包，移动端不参与控制面镜像或 node 发布包的构建。
+`dev.yyang.palace` 是当前 iOS bundle identifier。签名使用对应的 App ID 和 provisioning profile，控制面的 `PALACE_APNS_TOPIC` 也必须与它一致。自用分发使用本地 Xcode Archive 和 TestFlight，首个 `0.1.0 (1)` 已上传。根 `pnpm build` 构建已有网页和服务端包。移动端按下面的独立流程归档。
+
+#### 归档并上传 TestFlight
+
+Mac 需要项目指定的 pnpm、完整 Xcode 和 CocoaPods。先在 Xcode 的 Settings → Accounts 登录有权管理 Palace 签名的 Apple Developer 账号。确认待发布代码已提交，包括 `apps/mobile/app.config.ts` 的 `version` 和 `ios.buildNumber`。每次上传使用新的 build number，当前配置为 `0.1.0 (2)`。
+
+从仓库根目录运行，将 Team ID 换成签名团队的实际值。
+
+```sh
+PALACE_APPLE_TEAM_ID=YOUR_TEAM_ID ./scripts/archive-ios.sh
+```
+
+脚本只构建运行时的 Git `HEAD`，未提交或未跟踪的改动不会进入发布包。每次运行都在 `artifacts/ios/release.XXXXXX/` 导出独立源码，使用锁定的 JS 依赖生成 iOS 工程，再执行 Release 设备归档。`PALACE_IOS_APNS_ENVIRONMENT=production` 同时用于 prebuild 和 Xcode 内嵌配置。Pods 和 Xcode 使用 pnpm 配置指定的 Node。自动签名允许 Xcode 获取或更新 provisioning profile，钥匙串可能要求本机确认。
+
+每个发布目录保留以下内容。
+
+- `commit.txt` 记录构建的完整 Git commit，`app-config.json` 保存实际 Expo 配置。
+- `toolchain.txt` 记录 Xcode、CocoaPods、Node 和 pnpm 版本，`Podfile.lock` 记录本次原生依赖解析结果。
+- `archive.log` 保存 Xcode 归档日志，`Palace.xcarchive` 包含应用和 dSYMs。
+- `source/` 包含源码快照、安装的依赖和生成工程，`DerivedData/` 包含编译中间产物。
+- `symbols/` 保留官方 React Native 和 Hermes dSYM 下载包及解包结果。脚本根据安装的 React Native 版本和 Hermes 的 `HERMES_VERSION_NAME` 下载设备符号，逐个核对 `React`、`ReactNativeDependencies`、`hermesvm` 的 UUID 与归档二进制一致，再复制到 archive 的 `dSYMs/`。
+
+看到 `Archive ready` 后，用 Xcode Organizer 打开打印出的 `Palace.xcarchive`，选择 Distribute App → App Store Connect 并确认上传。上传后在 App Store Connect 等待处理完成，再把 build 加入 TestFlight 测试组。app config 的 `ITSAppUsesNonExemptEncryption=false` 记录已确认的加密声明，当前 app 使用系统提供的 HTTPS 和 CryptoKit。以后增加加密实现时重新核对声明。
+
+上传记录可用 `ios-testflight-*` 标签指向 `commit.txt` 中的提交。这类标签只用于追溯。§5.5 的服务端发布由 `v*` 标签触发，iOS 记录标签不会触发服务端部署。
+
+确认上传和排查完成后，可清理该发布目录内的 `source/`、`DerivedData/` 和 `symbols/`。保留实际上传的 `Palace.xcarchive` 及其中的完整 `dSYMs/`，同时保留 commit、配置、工具版本、Pod 锁文件和归档日志。Pods 在生成工程时解析，日后重建可能得到不同原生依赖，实际上传的 archive 是对应 build 的二进制记录。
 
 ### 6.2 原生 iOS 通知
 
@@ -431,10 +457,10 @@ iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模�
 | `PALACE_APNS_TOPIC` | 签名 app 的 bundle identifier，当前为 `dev.yyang.palace` |
 | `PALACE_APNS_ENVIRONMENT` | `sandbox` 或 `production`，不从 `NODE_ENV` 猜测 |
 
-app config 的输入 `PALACE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`。它同时设置 Expo 通知插件的 entitlement mode 和 app 订阅的环境。正式签名包使用 `production`；Xcode archive 也会把 entitlement 改为 production，构建输入必须与之匹配。改变输入后重新 prebuild 并正常构建，不修改生成的二进制。服务器拒绝环境不匹配的登记；app 拒绝服务器公布的环境与自己不一致。
+app config 的输入 `PALACE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`。它同时设置 Expo 通知插件的 entitlement mode 和 app 订阅的环境。正式签名包使用 `production`；Organizer 按 App Store Connect 分发签名时会把 entitlement 改为 production，构建输入必须与之匹配。本地 Archive 可以使用 development entitlement。改变输入后重新 prebuild 并正常构建，不修改生成的二进制。服务器拒绝环境不匹配的登记；app 拒绝服务器公布的环境与自己不一致。
 
 `apns.ts` 的 provider 连接由进程持有，关闭时释放。单次投递总期限 10 秒，库内重试关闭。暂时失败仍按聊天队列的退避计划重试，过期 provider token 也重试。只有 token 失效相关的拒绝才删除设备订阅，provider 配置错误不清理 token。APNs 的 expiry 固定为消息时间加一天；队列重试不延长它。已过期的消息不再交给 APNs。collapse ID 沿用消息 tag，通知数据不含消息正文。系统提示使用通用文案，点击数据带随机登记 binding，app 只在这次登记所属的服务器和账号下打开它，避免在错误身份下打开旧通知。
 
 关闭通知、退出、换服务器和登录失效会尝试取消服务器登记，再清 cookie，并向 iOS 取消本机注册、清除已展示通知。离线时无法保证旧服务器立即停止或撤回已交给 APNs 的通知；界面说明取消未确认。退出之后才到达的登记请求回 401；重新开启和 token 轮换使用新 binding。未确认的旧 token 取消记录独立于当前登记保存，token 轮换和新登记不会覆盖它们；下次同一服务器和账号恢复验证、刷新或退出时重试，只有服务端确认后才删除。重新允许注册之后仍可能收到旧服务器的通用提示；旧数据不会打开当前其他账号或服务器的会话。
 
-实际远程投递仍需操作者确认付费 Apple Developer 资格，提供 APNs 凭据，并生成具有 Push Notifications capability 的签名 app。本任务不创建或修改 Apple Developer、EAS 账号或资源，不接触真实 key 内容，不向真实账号发送测试通知。普通 iOS 27 模拟器的正常构建、系统权限界面和 `simctl push` 注入可验证本机行为；模拟注入不是 APNs 或真机投递证明。没有凭据和签名之前，真实 APNs 投递保持未验证。
+Palace 的 Apple Developer App ID、Push Notifications capability、签名和 App Store Connect 记录已配置，本地 Release 归档已上传 TestFlight。控制面按上表配置 APNs 凭据，TestFlight 使用 `production` 环境。在真机登录并开启通知后，通过实际私信或提及验证远程送达。普通 iOS 27 模拟器的构建、系统权限界面和 `simctl push` 注入只覆盖本机行为，真实 APNs 送达需单独验证。
