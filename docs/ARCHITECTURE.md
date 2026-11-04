@@ -557,7 +557,7 @@ interface Admin {
 
 网页客户端继续使用 Vite；原生移动客户端在 `apps/mobile` 使用 Expo 和 Expo Router。两者属于同一个 pnpm workspace，共用根锁文件，面向同一个控制面。页面、导航、平台存储和通知集成分别留在各自的 app。只有实际复用出现时才提取客户端操作和数据逻辑：两端都用的纯逻辑放在所属包不依赖 Node 的 `client` 入口（`@palace/chat/client` 的时间线键、条目合并、提及解析、发送后草稿余下的文字和重连退避；`@palace/admin/client` 的观察归约和 node 配对命令），网页的 Vite 构建和原生端都按 `palace-source` 条件从源码引用；文案仍由各端翻译。API 契约保持单一来源，不为移动端复制一套定义，也不预建空的共享包。
 
-移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.config.ts` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。当前覆盖 HTTPS 服务器选择、cookie 登录与恢复、频道和私信、讨论串、搜索、提及、消息任务和未读，以及完整管理、Agent 观察、个人资料与通知设置。分发、签名与真实 APNs 送达仍需 Apple 环境验证。
+移动端是自用的 iOS 客户端，只支持 iOS 27 及以上版本；`app.config.ts` 的 `ios.deploymentTarget` 将最低版本写入生成的 Xcode 工程和 CocoaPods 配置。当前覆盖 HTTPS 服务器选择、cookie 登录与恢复、频道和私信、讨论串、搜索、提及、消息任务和未读，以及完整管理、Agent 观察、个人资料与通知设置。分发使用本地 Xcode 签名归档并上传 TestFlight，production APNs 使用与签名相同的 bundle identifier。归档流程与真机通知验证见 [DEPLOYMENT §6.1–6.2](DEPLOYMENT.md#61-原生移动客户端)。
 
 移动端入口 `apps/mobile/index.ts` 在加载路由之前同步读取 `expo-localization` 的设备语言偏好。按顺序匹配中文或英文，所有 zh 变体使用简体中文，en 变体使用英文，无匹配时回退英文。`i18next` 的端内 JSON 资源随构建打包，界面直接调用模块级 `t`，插值与复数由库处理，日期、数字和列表由匹配 locale 的 Intl 格式化，Hermes 缺少的 `Intl.Locale`、`Intl.PluralRules` 和 `Intl.ListFormat` 由 FormatJS 按依赖顺序同步提供，复数与列表只打包中英文数据。iOS 配置声明英文和简体中文；系统改语言后重启 app，不增加前台监听、应用语言选择器或持久化语言覆盖。用户与 Agent 内容、协议值和服务器通知 payload 保持原文。
 

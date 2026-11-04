@@ -17,8 +17,9 @@ export default (): ExpoConfig => ({
   icon: "./assets/icon.png",
   ios: {
     bundleIdentifier: "dev.yyang.palace",
-    buildNumber: "1",
+    buildNumber: "2",
     deploymentTarget: "27.0",
+    infoPlist: { ITSAppUsesNonExemptEncryption: false },
     icon: { light: "./assets/icon.png", dark: "./assets/icon-dark.png" },
   },
   locales: {
