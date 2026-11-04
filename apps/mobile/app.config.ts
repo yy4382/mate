@@ -10,13 +10,14 @@ const pushAlert = (text: string) => ({ ios: { "Localizable.strings": { MATE_PUSH
 export default (): ExpoConfig => ({
   name: "Palace",
   slug: "palace-mobile",
-  version: "0.0.0",
+  version: "0.1.0",
   scheme: "palace",
   platforms: ["ios"],
   userInterfaceStyle: "automatic",
   icon: "./assets/icon.png",
   ios: {
     bundleIdentifier: "dev.yyang.palace",
+    buildNumber: "1",
     deploymentTarget: "27.0",
     icon: { light: "./assets/icon.png", dark: "./assets/icon-dark.png" },
   },
