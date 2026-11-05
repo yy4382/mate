@@ -1,30 +1,14 @@
+import { accountName } from "@palace/chat/client";
 import { t, locale } from "../i18n.ts";
+import { AccountAvatar } from "../shell/AccountAvatar.tsx";
 import { useQueryClient } from "@tanstack/react-query";
 import { Hash, Lock, Plus, Search } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { post } from "../shell/api.ts";
 import { Link, chatPath, navigate, useRoute } from "../shell/router.tsx";
-import {
-  Avatar,
-  Badge,
-  Button,
-  Dialog,
-  ErrorLine,
-  Field,
-  Input,
-  Select,
-  Tabs,
-  cx,
-} from "../shell/ui.tsx";
+import { Badge, Button, Dialog, ErrorLine, Field, Input, Select, Tabs, cx } from "../shell/ui.tsx";
 import { keys } from "./cache.ts";
-import {
-  avatarOf,
-  conversationLabel,
-  useMe,
-  useAccounts,
-  useConversations,
-  useUnread,
-} from "./data.ts";
+import { conversationLabel, useMe, useAccounts, useConversations, useUnread } from "./data.ts";
 import type { AccountView, ConversationView } from "./types.ts";
 
 function KindIcon({
@@ -38,7 +22,9 @@ function KindIcon({
 }) {
   if (conversation.kind === "dm") {
     const otherId = conversation.members.find((id) => id !== me);
-    return <Avatar size="xs" {...avatarOf(accounts, otherId ?? 0)} />;
+    return (
+      <AccountAvatar size="xs" accountId={otherId} name={accountName(accounts, otherId ?? 0)} />
+    );
   }
   return conversation.kind === "private" ? <Lock aria-hidden /> : <Hash aria-hidden />;
 }

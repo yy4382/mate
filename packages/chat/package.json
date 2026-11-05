@@ -28,6 +28,7 @@
   "dependencies": {
     "@palace/clock": "workspace:*",
     "@palace/migrations": "workspace:*",
+    "sharp": "0.35.5",
     "zod": "4.6.5"
   },
   "devDependencies": {

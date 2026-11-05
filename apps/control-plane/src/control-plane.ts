@@ -7,6 +7,7 @@ import { systemClock, type Clock } from "@palace/clock";
 import { createNodeGateway } from "@palace/gateway";
 import { LoginInput, type LoginResult } from "./contracts.ts";
 import { EventStream } from "./event-stream.ts";
+import { avatarRoutes } from "./avatar-routes.ts";
 import { Frontend } from "./frontend.ts";
 import { humanRoutes } from "./human-routes.ts";
 import {
@@ -105,6 +106,7 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
     const routes = [
       ...chatRoutes(chat, keys.publicKey, options.apns),
       ...humanRoutes(chat, humans),
+      ...avatarRoutes(chat),
       ...adminRoutes(admin),
     ];
     const frontend =
@@ -158,6 +160,18 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
         lastEventId: typeof lastEventId === "string" ? lastEventId : undefined,
       };
       if ("json" in route) return sendJson(response, 200, await route.json(input));
+      if ("binary" in route) {
+        const { bytes, contentType, cacheControl } = route.binary(input);
+        response
+          .writeHead(200, {
+            "content-type": contentType,
+            "content-length": bytes.byteLength,
+            "cache-control": cacheControl,
+            "x-content-type-options": "nosniff",
+          })
+          .end(bytes);
+        return;
+      }
       await route.stream(input, new EventStream(response, humans, session.token, clock));
       response.end();
     }

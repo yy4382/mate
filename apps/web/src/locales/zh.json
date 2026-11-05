@@ -299,7 +299,7 @@
     "atLeast12BytesChangingItSignsYou": "至少 12 个字节。改完后，你在其他浏览器上的登录会退出。",
     "confirmNewPassword": "确认新密码",
     "profile": "个人资料",
-    "yourNameAndSigninDetailsInMate": "你在 Palace 里的名字和登录方式。",
+    "yourNameAndSigninDetailsInMate": "你在 Palace 里的头像、名字和登录方式。",
     "password": "密码",
     "loginSession": "登录状态",
     "signOut": "退出登录"

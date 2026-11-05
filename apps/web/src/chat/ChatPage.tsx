@@ -1,4 +1,6 @@
+import { accountName } from "@palace/chat/client";
 import { t } from "../i18n.ts";
+import { AccountAvatar } from "../shell/AccountAvatar.tsx";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
@@ -14,7 +16,6 @@ import { useEffect, useState } from "react";
 import { post } from "../shell/api.ts";
 import { Link, chatPath, navigate, useRoute } from "../shell/router.tsx";
 import {
-  Avatar,
   Button,
   ConfirmDialog,
   Dialog,
@@ -27,7 +28,7 @@ import {
   buttonClass,
 } from "../shell/ui.tsx";
 import { keys } from "./cache.ts";
-import { avatarOf, conversationLabel, useAccounts, useConversations, useMe } from "./data.ts";
+import { conversationLabel, useAccounts, useConversations, useMe } from "./data.ts";
 import { Timeline } from "./Timeline.tsx";
 import type { ConversationView } from "./types.ts";
 
@@ -121,7 +122,11 @@ function Header({
         </Link>
         <span className="text-muted [&_svg]:size-5">
           {conversation.kind === "dm" ? (
-            <Avatar size="sm" {...avatarOf(accounts, otherId ?? 0)} />
+            <AccountAvatar
+              size="sm"
+              accountId={otherId}
+              name={accountName(accounts, otherId ?? 0)}
+            />
           ) : conversation.kind === "private" ? (
             <Lock aria-hidden />
           ) : (
