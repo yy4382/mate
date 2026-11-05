@@ -72,7 +72,6 @@ PALACE_SCREENS=/tmp/palace-screens pnpm vitest run apps/web/test/screens.test.ts
 ```
 
 它起一个带示例数据的控制面，把每个页面截成 PNG 放进那个目录。不设 `PALACE_SCREENS` 时这个文件跳过，不影响 `pnpm test`。
-本机已有 Google Chrome 时，可以设置 `PALACE_BROWSER_CHANNEL=chrome` 复用它，不必下载 Playwright 的浏览器；不设置时使用 Playwright 默认的 Chromium。
 
 ## 7. 原生移动客户端
 

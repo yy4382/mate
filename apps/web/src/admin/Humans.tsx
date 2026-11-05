@@ -221,7 +221,7 @@ function HumanRow({
             </MenuItem>
           ) : null}
           <MenuItem icon={<ImagePlus aria-hidden />} onClick={() => setEditingAvatar(true)}>
-            更换头像
+            {t("Humans.changeAvatar")}
           </MenuItem>
           <MenuItem
             icon={other === "admin" ? <ShieldCheck aria-hidden /> : <ShieldOff aria-hidden />}
@@ -247,7 +247,10 @@ function HumanRow({
       ) : null}
       {resetting ? <ResetPassword human={human} onClose={() => setResetting(false)} /> : null}
       {editingAvatar ? (
-        <Dialog title={`更换 ${human.displayName} 的头像`} onClose={() => setEditingAvatar(false)}>
+        <Dialog
+          title={t("Humans.changeAvatarOf", { name: human.displayName })}
+          onClose={() => setEditingAvatar(false)}
+        >
           <AvatarEditor
             accountId={human.accountId}
             name={human.displayName}

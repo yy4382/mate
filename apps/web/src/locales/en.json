@@ -78,7 +78,9 @@
     "peopleWhoCanSignInToMateAdministrators": "People who can sign in to Palace. Administrators also manage Agents, providers, nodes, and other humans. Regular humans use chat.",
     "resetNamed": "Reset {{name}}'s password",
     "deactivateNamed": "Deactivate {{name}}?",
-    "setRole": "Set role to {{role}}"
+    "setRole": "Set role to {{role}}",
+    "changeAvatar": "Change avatar",
+    "changeAvatarOf": "Change {{name}}'s avatar"
   },
   "NodeAccess": {
     "online": "Online",
@@ -284,6 +286,19 @@
     "signInToMate": "Sign in to Palace",
     "password": "Password",
     "signIn": "Sign in"
+  },
+  "AvatarEditor": {
+    "avatar": "Avatar",
+    "imageLabel": "Avatar image",
+    "upload": "Upload avatar",
+    "uploading": "Uploading…",
+    "restoreDefault": "Restore default avatar",
+    "hint": "PNG, JPEG, or WebP, up to 5 MiB. The image is cropped to a centered square.",
+    "saved": "Avatar saved",
+    "chooseImage": "Choose a PNG, JPEG, or WebP image.",
+    "tooLarge": "The image must be 5 MiB or smaller.",
+    "unreadable": "The image can't be read. Choose a complete PNG, JPEG, or WebP image.",
+    "cannotProcess": "The browser can't process this image."
   },
   "Profile": {
     "saved": "Saved",

@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useRef } from "react";
+import { t } from "../i18n.ts";
 import { useAccounts, type AccountView } from "./accounts.ts";
 import { AccountAvatar } from "./AccountAvatar.tsx";
 import { put } from "./api.ts";
@@ -8,20 +9,20 @@ import { Button, Card, CardBody, ErrorLine } from "./ui.tsx";
 
 async function avatarPng(file: File): Promise<string> {
   if (!["image/png", "image/jpeg", "image/webp"].includes(file.type))
-    throw new Error("请选择 PNG、JPEG 或 WebP 图片。");
-  if (file.size > 5 * 1024 * 1024) throw new Error("图片不能超过 5 MiB。");
+    throw new Error(t("AvatarEditor.chooseImage"));
+  if (file.size > 5 * 1024 * 1024) throw new Error(t("AvatarEditor.tooLarge"));
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(file);
   } catch {
-    throw new Error("图片无法读取，请选择完整的 PNG、JPEG 或 WebP 图片。");
+    throw new Error(t("AvatarEditor.unreadable"));
   }
   try {
     const side = Math.min(bitmap.width, bitmap.height);
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = Math.min(side, 256);
     const context = canvas.getContext("2d");
-    if (context === null) throw new Error("浏览器无法处理图片。");
+    if (context === null) throw new Error(t("AvatarEditor.cannotProcess"));
     context.drawImage(
       bitmap,
       (bitmap.width - side) / 2,
@@ -69,7 +70,7 @@ export function AvatarEditor({
               <input
                 ref={input}
                 type="file"
-                aria-label="头像图片"
+                aria-label={t("AvatarEditor.imageLabel")}
                 accept="image/png,image/jpeg,image/webp"
                 className="sr-only"
                 tabIndex={-1}
@@ -80,20 +81,18 @@ export function AvatarEditor({
                 }}
               />
               <Button disabled={upload.isPending} onClick={() => input.current?.click()}>
-                {upload.isPending ? "正在上传…" : "上传头像"}
+                {upload.isPending ? t("AvatarEditor.uploading") : t("AvatarEditor.upload")}
               </Button>
               {account?.avatarVersion == null ? null : (
                 <Button disabled={upload.isPending} onClick={() => upload.mutate(null)}>
-                  恢复默认头像
+                  {t("AvatarEditor.restoreDefault")}
                 </Button>
               )}
             </div>
-            <p className="text-xs text-muted">
-              PNG、JPEG 或 WebP，最多 5 MiB。图片会居中裁成正方形。
-            </p>
+            <p className="text-xs text-muted">{t("AvatarEditor.hint")}</p>
             {upload.isSuccess ? (
               <p role="status" className="text-sm text-muted">
-                头像已保存
+                {t("AvatarEditor.saved")}
               </p>
             ) : null}
             <ErrorLine error={upload.isError ? refusalText(upload.error) : null} />

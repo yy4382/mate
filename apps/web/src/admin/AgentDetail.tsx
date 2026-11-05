@@ -135,8 +135,8 @@ export function AgentDetail({ agentId }: { agentId: string }) {
       </div>
       <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} items={TABS}>
         <TabPanel value="settings">
-          <section className="mb-6 grid gap-4" aria-label="头像">
-            <h2 className="text-base font-semibold">头像</h2>
+          <section className="mb-6 grid gap-4" aria-label={t("AvatarEditor.avatar")}>
+            <h2 className="text-base font-semibold">{t("AvatarEditor.avatar")}</h2>
             <AvatarEditor
               accountId={agent.accountId}
               name={name}

@@ -78,7 +78,9 @@
     "peopleWhoCanSignInToMateAdministrators": "能登录 Palace 的人。管理员还能管理 Agent、提供商、node 和其他人类，普通人类只聊天。",
     "resetNamed": "重置 {{name}} 的密码",
     "deactivateNamed": "停用 {{name}}？",
-    "setRole": "设为{{role}}"
+    "setRole": "设为{{role}}",
+    "changeAvatar": "更换头像",
+    "changeAvatarOf": "更换 {{name}} 的头像"
   },
   "NodeAccess": {
     "online": "在线",
@@ -284,6 +286,19 @@
     "signInToMate": "登录 Palace",
     "password": "密码",
     "signIn": "登录"
+  },
+  "AvatarEditor": {
+    "avatar": "头像",
+    "imageLabel": "头像图片",
+    "upload": "上传头像",
+    "uploading": "正在上传…",
+    "restoreDefault": "恢复默认头像",
+    "hint": "PNG、JPEG 或 WebP，最多 5 MiB。图片会居中裁成正方形。",
+    "saved": "头像已保存",
+    "chooseImage": "请选择 PNG、JPEG 或 WebP 图片。",
+    "tooLarge": "图片不能超过 5 MiB。",
+    "unreadable": "图片无法读取，请选择完整的 PNG、JPEG 或 WebP 图片。",
+    "cannotProcess": "浏览器无法处理图片。"
   },
   "Profile": {
     "saved": "已保存",
