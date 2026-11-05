@@ -1,5 +1,6 @@
 import { accountName, timelineKey } from "@palace/chat/client";
 import { t, locale } from "../i18n.ts";
+import { AccountAvatar } from "../shell/AccountAvatar.tsx";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
@@ -21,7 +22,6 @@ import {
 import { describe, post, taskRefusal } from "../shell/api.ts";
 import { Link, chatPath } from "../shell/router.tsx";
 import {
-  Avatar,
   Button,
   EmptyState,
   ErrorLine,
@@ -33,15 +33,7 @@ import {
   cx,
   timeLabel,
 } from "../shell/ui.tsx";
-import {
-  avatarOf,
-  loadOlder,
-  useMe,
-  useAccounts,
-  useReplyCount,
-  useTimeline,
-  useUnread,
-} from "./data.ts";
+import { loadOlder, useMe, useAccounts, useReplyCount, useTimeline, useUnread } from "./data.ts";
 import { abandonPending, sendDraft, setDraftText, useDraft } from "./drafts.ts";
 import type {
   AccountView,
@@ -266,7 +258,7 @@ function MessageRow(props: {
           {clockLabel(entry.at)}
         </time>
       ) : (
-        <Avatar {...avatarOf(accounts, entry.author)} />
+        <AccountAvatar accountId={entry.author} name={accountName(accounts, entry.author)} />
       )}
       <div className="min-w-0">
         {props.grouped ? (
@@ -422,7 +414,7 @@ function ThreadRoot(props: { entry: MessageEntry; replies: number }) {
   return (
     <div className="pb-2">
       <div className="grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3 px-4 pt-3 pb-1 md:px-6">
-        <Avatar {...avatarOf(accounts, entry.author)} />
+        <AccountAvatar accountId={entry.author} name={accountName(accounts, entry.author)} />
         <div className="min-w-0">
           <div className="flex items-baseline gap-2 leading-6">
             <strong className="text-sm font-semibold">{name}</strong>

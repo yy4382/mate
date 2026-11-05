@@ -1,7 +1,6 @@
 import { mergeEntries, timelineKey, type TimelineKey } from "@palace/chat/client";
 import { QueryClient } from "@tanstack/react-query";
 import type {
-  AccountView,
   ConversationView,
   Entry,
   LiveEvents,
@@ -10,15 +9,15 @@ import type {
   UnreadSummary,
 } from "./types.ts";
 import { currentHumanKey } from "../shell/humans.ts";
+import { accountsKey, updateAccount } from "../shell/accounts.ts";
 
 /**
- * Everything the chat client shows lives in the query cache under "chat". A timeline's entries are keyed by seq, so a
+ * Conversation data lives in the query cache under "chat"; accounts use the shell's shared cache. Entries are keyed by seq, so a
  * replayed or duplicated entry lands on the same slot instead of adding another.
  */
 export const keys = {
   all: ["chat"] as const,
   me: ["chat", "me"] as const,
-  accounts: ["chat", "accounts"] as const,
   conversations: ["chat", "conversations"] as const,
   unread: ["chat", "unread"] as const,
   threads: ["chat", "threads"] as const,
@@ -82,9 +81,7 @@ export function applyLive(qc: QueryClient, batch: Extract<LiveEvents, { status: 
         ),
       );
     else if (event.type === "account") {
-      qc.setQueryData<AccountView[]>(keys.accounts, (old) =>
-        upsert(old, event.account, (a) => a.accountId === event.account.accountId),
-      );
+      updateAccount(qc, event.account);
       if (event.account.accountId === qc.getQueryData<number>(keys.me))
         void qc.invalidateQueries({ queryKey: currentHumanKey });
     }
@@ -94,7 +91,7 @@ export function applyLive(qc: QueryClient, batch: Extract<LiveEvents, { status: 
 /** Fill the cache from a snapshot: the starting point the live stream continues from. */
 export function seed(qc: QueryClient, snapshot: LiveSnapshot): void {
   qc.setQueryData(keys.me, snapshot.me);
-  qc.setQueryData(keys.accounts, snapshot.accounts);
+  qc.setQueryData(accountsKey, snapshot.accounts);
   qc.setQueryData(keys.conversations, snapshot.conversations);
   qc.setQueryData(keys.unread, snapshot.unread);
   if (snapshot.page !== null) {

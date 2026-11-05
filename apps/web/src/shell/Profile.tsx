@@ -1,5 +1,7 @@
 import { passwordTooShort } from "@palace/control-plane/passwords";
 import { t } from "../i18n.ts";
+import { AccountAvatar } from "../shell/AccountAvatar.tsx";
+import { AvatarEditor } from "../shell/AvatarEditor.tsx";
 import { useQueryClient } from "@tanstack/react-query";
 import { LogOut } from "lucide-react";
 import { useState } from "react";
@@ -14,7 +16,6 @@ import {
   type HumanView,
 } from "./humans.ts";
 import {
-  Avatar,
   Badge,
   Button,
   Card,
@@ -209,7 +210,7 @@ export function ProfilePage() {
         {...(me === undefined
           ? {}
           : {
-              leading: <Avatar name={me.displayName} size="lg" />,
+              leading: <AccountAvatar accountId={me.accountId} name={me.displayName} size="lg" />,
               badge: (
                 <Badge tone={me.role === "admin" ? "accent" : "neutral"}>
                   {ROLE_LABEL[me.role]}
@@ -219,6 +220,14 @@ export function ProfilePage() {
       />
       {me === undefined ? null : (
         <>
+          <section className="grid gap-4" aria-label={t("AvatarEditor.avatar")}>
+            <h2 className="text-base font-semibold">{t("AvatarEditor.avatar")}</h2>
+            <AvatarEditor
+              accountId={me.accountId}
+              name={me.displayName}
+              endpoint="/api/me/avatar"
+            />
+          </section>
           <section className="grid gap-4">
             <h2 className="text-base font-semibold">{t("Profile.basicInformation")}</h2>
             <Names me={me} />

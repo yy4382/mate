@@ -14,6 +14,7 @@ export const AccountView = z.object({
   displayName: z.string(),
   kind: AccountKind,
   active: z.boolean(),
+  avatarVersion: z.string().nullable(),
 });
 export type AccountView = z.output<typeof AccountView>;
 
