@@ -1,4 +1,4 @@
-import type { Admin } from "@palace/admin";
+import { WEBHOOK_TEXT_MAX_BYTES, type Admin } from "@palace/admin";
 import type { ChatApp } from "@palace/chat";
 import { PushSubscription } from "@palace/chat/contracts";
 import type { ApnsConfig } from "./apns.ts";
@@ -358,6 +358,12 @@ export function adminRoutes(admin: Admin): Route[] {
   ]);
 }
 
+/**
+ * The most a delivery's body can be: JSON writes a text byte as at most 6 bytes (`\u00XX`), so a 32 KiB text always
+ * fits, plus room for the key and braces. Far below the 1 MiB other requests may carry.
+ */
+export const WEBHOOK_BODY_MAX_BYTES = WEBHOOK_TEXT_MAX_BYTES * 6 + 1024;
+
 /** The delivery route of an outside system. It carries no session: the webhook's secret is the credential. */
 export const WEBHOOK_DELIVERY = /^\/api\/webhooks\/([^/]+)$/;
 
@@ -372,10 +378,12 @@ export async function deliverToWebhook(
   body: unknown,
 ): Promise<{ requestId: string }> {
   const secret = /^Bearer (\S+)$/i.exec(headers.authorization ?? "")?.[1] ?? "";
-  const { text } = forwarded<{ text: string }>(body);
+  // The admin module checks the secret first and the body's shape after, so a caller without the secret learns
+  // nothing about what a body must look like.
+  const fields = typeof body === "object" && body !== null && !Array.isArray(body) ? body : {};
   return admin.deliverWebhook(webhookId, secret, {
-    text,
-    ...(headers.key === undefined ? {} : { key: headers.key }),
+    ...(fields as { text: string }),
+    key: headers.key,
   });
 }
 

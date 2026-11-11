@@ -1,5 +1,6 @@
 export {
   openAdmin,
+  WEBHOOK_TEXT_MAX_BYTES,
   type Admin,
   type AdminGateway,
   type AdminOptions,

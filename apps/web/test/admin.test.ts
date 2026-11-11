@@ -199,6 +199,7 @@ describe("Agents", () => {
     const site = await startSite();
     const agent = await site.agent("sam");
     agent.provider.step("woken", (request) => request.text("ok"));
+    agent.provider.step("woken again", (request) => request.text("ok"));
     const { page } = await openApp(site, `/app/admin/agents/${agent.agentId}`);
     const region = page.getByRole("region", { name: "Webhook" });
     await region.getByText("还没有 webhook").waitFor();

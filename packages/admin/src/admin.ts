@@ -44,7 +44,7 @@ const CreateAgentInput = AccountNames.extend({
   settings: SettingsInput,
 });
 
-const WEBHOOK_TEXT_MAX_BYTES = 32 * 1024;
+export const WEBHOOK_TEXT_MAX_BYTES = 32 * 1024;
 
 const WebhookInput = z.object({ name: z.string().trim().min(1).max(64) });
 
@@ -369,7 +369,8 @@ export class Admin {
     input: z.input<typeof DeliveryInput> & { key?: string | undefined },
   ): Promise<{ requestId: string }> {
     const webhook = this.#store.webhook(webhookId);
-    if (webhook === undefined || !secretIs(secret, webhook.secretHash)) throw invalidWebhook();
+    const matches = secretIs(secret, webhook?.secretHash ?? NO_WEBHOOK_HASH);
+    if (webhook === undefined || !matches) throw invalidWebhook();
     const { text, key } = parseInput(DeliveryInput, input);
     const requestId = `webhook:${webhook.id}:${key ?? randomUUID()}`;
     const at = new Date(this.#clock.now())
@@ -534,6 +535,9 @@ export class Admin {
 
 const newSecret = () => randomBytes(32).toString("base64url");
 const hashSecret = (secret: string) => createHash("sha256").update(secret).digest("hex");
+
+/** The hash a delivery to an unknown webhook is checked against, so it takes as long as a wrong secret. */
+const NO_WEBHOOK_HASH = hashSecret(newSecret());
 
 function secretIs(secret: string, expectedHash: string): boolean {
   return timingSafeEqual(Buffer.from(hashSecret(secret)), Buffer.from(expectedHash));

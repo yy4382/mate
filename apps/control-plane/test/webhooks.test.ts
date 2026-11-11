@@ -204,3 +204,22 @@ it("refuses a body that is not JSON text of 1 B to 32 KiB, and a text/plain body
 
   expect(answers.map((answer) => answer.status)).toEqual([400, 400, 400, 400, 415]);
 });
+
+it("takes any valid text however JSON writes it, and refuses a body far beyond the text limit before reading it all", async () => {
+  const { site, provider, webhook } = await agentWithWebhook();
+  provider.step("wake", (request) => request.text("Noted."));
+  const controlCharacters = "\u0001".repeat(32 * 1024);
+
+  const accepted = await deliver(site, webhook.webhookId, webhook.secret, {
+    text: controlCharacters,
+  });
+  const flood = await deliver(site, webhook.webhookId, webhook.secret, {
+    text: "x".repeat(300 * 1024),
+  });
+
+  expect(accepted.status, "32 KiB written as \\u0001 escapes is about 192 KiB of JSON").toBe(202);
+  expect([flood.status, flood.json]).toEqual([
+    413,
+    expect.objectContaining({ error: "body-too-large" }),
+  ]);
+});

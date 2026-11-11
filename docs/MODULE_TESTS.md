@@ -135,7 +135,7 @@
 
 原生传输扩展继续通过 `ChatApp.subscribePush` 与 `unsubscribePush` 驱动，不测试内部队列表。相同 APNs token 在另一账号或新的 binding 下登记后，旧通知与迟到的投递回答不能影响新登记。旧 binding 的取消不能删除新 binding。Web Push 的已有公开接口与存储夹具回归继续运行。
 
-用已发布版本的**存储夹具**（`tests/fixtures/stores/v0.1.0-alpha.2/`，生成方法见它的 README）。测试先把夹具复制到临时目录，从不改夹具本身。
+用已发布版本的**存储夹具**（`tests/fixtures/stores/v0.1.0-alpha.2/` 和 `v0.1.0-alpha.10/`，生成方法见各自的 README）。测试先把夹具复制到临时目录，从不改夹具本身。
 
 - 用 `ChatApp` 打开夹具里的 `chat.sqlite` 副本，账号、会话、消息、讨论串、任务都在，所有者的未读摘要和夹具生成时一致。
 - 迁移后原来的所有者账号是人类、两个 Agent 是 Agent；迁移后新增的人类账号读到和所有者相同的会话和历史。
@@ -407,14 +407,14 @@
 - 新 Agent 只有主 node 可用；未知和未授权名字同样拒绝并列可访问名字，不向 node 发调用。在线授权返回前以 visit 准备工作区；访问调用以 visit、主 node 以 home 转发；node_list 每次现读并保持主 node 标记。
 - 离线授权成功并持久化，重连后允许首次调用；在线准备失败报告错误但保留授权，重复授权重试准备。准备期间收回授权，迟到的准备完成不会恢复授权。
 - 授权、收回幂等；主 node invalid-input，未知 Agent/node 分别拒绝；暂停的 Agent 也能授权，agents 显示当前授权名字。收回后新调用拒绝，已发出的前台和后台调用仍完成；目标离线错误标出名字，主 node 离线不阻止其他 node。
-- 用已发布版本公开 API 创建并暂停的真实 Agent 夹具验证 admin 迁移：凭据不变，初始无额外授权，原 Agent 仍只用主 node，webhook 列表为空且能新增，重新打开后仍在。
+- 用已发布版本公开 API 创建并暂停的真实 Agent 夹具验证 admin 迁移。从 v0.1.0-alpha.2（admin 第 1 版）升级：凭据不变，初始无额外授权，原 Agent 仍只用主 node。从 v0.1.0-alpha.10（admin 第 2 版，已有授权表）升级到第 3 版，和 alpha.2 一样：webhook 列表为空且能新增，重新打开后仍在。
 
 入站 webhook（经 `Admin` 接口，HTTP 在 11.1）：
 
-- 投递唤醒打开的 Agent：观察的事件里看到包在 `external_webhook_content` 标签里、带 webhook 名字、ID、时间的输入和正文，模型的请求里也是这一段，系统提示有说明标签含义的那一行（runtime 不接聊天 app 时也有）；同一个 `Idempotency-Key` 只生效一次，重试不改任何东西；没有 key 时每次都是新的输入。
-- 未知 webhook 和错误密钥以相同的 `invalid-webhook`（相同消息）拒绝；暂停的 Agent 以 `agent-closed` 拒绝，恢复后也没有排队的输入。
+- 投递唤醒打开的 Agent：观察的事件里看到包在 `external_webhook_content` 标签里、带 webhook 名字、ID、时间的输入和正文，模型的请求里也是这一段，系统提示有说明标签含义的那一段（runtime 不接聊天 app 时也有；这段的原文只在 runtime 的测试里断言一次）；同一个 `Idempotency-Key` 只生效一次，重试不改任何东西；没有 key 时每次都是新的输入。
+- 未知 webhook 和错误密钥以相同的 `invalid-webhook`（相同消息）拒绝；暂停的 Agent 以 `agent-closed` 拒绝，恢复后也没有排队的输入：恢复后的下一次运行，模型的请求里没有被拒绝的那条内容。
 - 轮换后旧密钥立即失效、新密钥可用；删除 webhook 后不再投递，重复删除或轮换为 `unknown-webhook`；删除 Agent 同时删掉它的 webhook；列出不含密钥；重启后 webhook 仍在。
-- 空正文、超过 32 KiB（按字节）的正文、不合法的 key 和不合法的名字以 `invalid-input` 拒绝；名字和正文里的 `<`、`>`、`&`、引号和换行关不掉标签、加不进属性，也伪造不出另一个标签。
+- 空正文、超过 32 KiB（按字节）的正文、不合法的 key 和不合法的名字以 `invalid-input` 拒绝；名字和正文里的 `<`、`>`、`&`、引号和换行关不掉标签、加不进属性，也伪造不出另一个标签（只断言模型读到的是一个标签、三个属性，不断言具体转义写法）。
 
 ## 11. Web 外壳
 
