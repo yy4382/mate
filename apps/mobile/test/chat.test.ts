@@ -433,6 +433,23 @@ describe("native chat public interface", () => {
     expect(f.requests).toHaveLength(before);
     expect(f.writes).toEqual([]);
   });
+  it("stays paused when its owner pauses it while a person's reconnect waits for the old stream", async () => {
+    const f = fixture();
+    await f.start();
+    const reconnecting = f.chat.reconnect();
+    f.chat.pause();
+    const before = f.requests.length;
+    await reconnecting;
+    f.chat.edit(f.ref, "后台不能发出");
+    const sending = f.chat.send(f.ref);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.chat.getSnapshot().connection).toBe("paused");
+    expect(f.requests).toHaveLength(before);
+    expect(f.chat.draft(f.ref).pending?.status).toBe("sending");
+    f.chat.close();
+    await sending;
+    expect(f.writes).toEqual([]);
+  });
   it("drops late snapshots, responses, messages and drafts when its identity closes", async () => {
     const f = fixture(),
       held = f.holdSnapshot();
