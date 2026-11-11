@@ -120,10 +120,9 @@ export function useResource<T>(path: string, interval = 0) {
   return {
     data: query.data,
     error: query.error,
-    loading: query.isFetching || query.isPending,
-    refresh: () => {
-      void queries.invalidateQueries({ queryKey: [path] });
-    },
+    /** True only until the first data arrives; later refreshes update the shown data in place. */
+    loading: query.isPending || (query.isFetching && query.data === undefined),
+    refresh: () => queries.invalidateQueries({ queryKey: [path] }),
   };
 }
 

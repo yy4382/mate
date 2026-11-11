@@ -31,12 +31,12 @@ export function Providers({
 } = {}) {
   const providers = useResource<ProviderView[]>("/api/admin/providers");
   return (
-    <Screen onRefresh={providers.refresh} refreshing={providers.loading}>
+    <Screen onRefresh={providers.refresh}>
       <ErrorLine error={providers.error} />
       {providers.error != null && (
         <Button title={t("management.reload")} onPress={providers.refresh} />
       )}
-      <Loading loading={providers.loading && !providers.data} />
+      <Loading loading={providers.loading} />
       {providers.data && (
         <Section footer={t("management.credentials_are_stored_on_the_server_saving")}>
           {providers.data.map((p) => (
@@ -74,10 +74,10 @@ export function ProviderDetail({
     void queries.invalidateQueries({ queryKey: ["/api/admin/models"] });
   };
   return (
-    <Screen onRefresh={providers.refresh} refreshing={providers.loading}>
+    <Screen onRefresh={providers.refresh}>
       <Stack.Screen options={{ title: provider?.name ?? t("management.provider") }} />
       <ErrorLine error={providers.error} />
-      <Loading loading={providers.loading && !providers.data} />
+      <Loading loading={providers.loading} />
       {providers.error != null && (
         <Button title={t("management.reload")} onPress={providers.refresh} />
       )}
@@ -243,12 +243,7 @@ export function ProviderCatalog() {
             {(providers.error ?? models.error) != null && (
               <Button title={t("management.reload")} onPress={refresh} />
             )}
-            <Loading
-              loading={
-                (providers.loading && !providers.data) ||
-                (!!provider?.credentials && models.loading && !models.data)
-              }
-            />
+            <Loading loading={providers.loading || (!!provider?.credentials && models.loading)} />
             {provider?.credentials && (
               <Field
                 label={t("management.search_models")}

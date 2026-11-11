@@ -148,7 +148,7 @@ export function Humans() {
   const ready = useManagementAccess().kind === "ready";
   const [adding, setAdding] = useState(false);
   return (
-    <Screen onRefresh={humans.refresh} refreshing={humans.loading}>
+    <Screen onRefresh={humans.refresh}>
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button hidden={!ready} onPress={() => setAdding(true)}>
           {t("management.add")}
@@ -156,7 +156,7 @@ export function Humans() {
       </Stack.Toolbar>
       <ErrorLine error={humans.error} />
       {humans.error != null && <Button title={t("management.reload")} onPress={humans.refresh} />}
-      <Loading loading={humans.loading && !humans.data} />
+      <Loading loading={humans.loading} />
       {humans.data &&
         [true, false].map((active) => {
           const group = (humans.data ?? []).filter((h) => h.active === active);
@@ -229,11 +229,11 @@ export function HumanDetail() {
       });
   };
   return (
-    <Screen onRefresh={humans.refresh} refreshing={humans.loading}>
+    <Screen onRefresh={humans.refresh}>
       <Stack.Screen options={{ title: human?.displayName ?? t("management.human_details") }} />
       <ErrorLine error={humans.error} />
       {humans.error != null && <Button title={t("management.reload")} onPress={humans.refresh} />}
-      <Loading loading={humans.loading && !humans.data} />
+      <Loading loading={humans.loading} />
       {humans.data && !human && <Empty title={t("management.human_account_not_found")} />}
       {human && (
         <>

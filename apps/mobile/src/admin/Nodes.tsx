@@ -54,7 +54,7 @@ export function Nodes({
     }, "");
   };
   return (
-    <Screen onRefresh={nodes.refresh} refreshing={nodes.loading}>
+    <Screen onRefresh={nodes.refresh}>
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button hidden={!ready} onPress={() => setPairing(true)}>
           {t("management.pair")}
@@ -62,7 +62,7 @@ export function Nodes({
       </Stack.Toolbar>
       <ErrorLine error={nodes.error} />
       {nodes.error != null && <Button title={t("management.reload")} onPress={nodes.refresh} />}
-      <Loading loading={nodes.loading && !nodes.data} />
+      <Loading loading={nodes.loading} />
       {nodes.data?.length === 0 && (
         <Empty
           title={t("management.no_nodes_yet")}
@@ -166,11 +166,11 @@ export function NodeDetail() {
   const [name, setName] = useState("");
   const valid = /^[a-z0-9][a-z0-9-]{0,31}$/.test(name);
   return (
-    <Screen onRefresh={nodes.refresh} refreshing={nodes.loading}>
+    <Screen onRefresh={nodes.refresh}>
       <Stack.Screen options={{ title: node?.name ?? t("management.node_details") }} />
       <ErrorLine error={nodes.error} />
       {nodes.error != null && <Button title={t("management.reload")} onPress={nodes.refresh} />}
-      <Loading loading={nodes.loading && !nodes.data} />
+      <Loading loading={nodes.loading} />
       {nodes.data && !node && (
         <Empty
           title={t("management.node_not_found")}
