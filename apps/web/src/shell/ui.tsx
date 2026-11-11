@@ -3,8 +3,8 @@ import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { Menu as BaseMenu } from "@base-ui/react/menu";
 import { Tabs as BaseTabs } from "@base-ui/react/tabs";
-import { ChevronDown, MoreHorizontal, X } from "lucide-react";
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { Check, ChevronDown, Copy, MoreHorizontal, X } from "lucide-react";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { twMerge } from "tailwind-merge";
 import { describe } from "./api.ts";
 
@@ -589,4 +589,45 @@ export function timeLabel(at: number): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+/** A mono block with a button that copies its text; the button shows a check for two seconds. */
+export function CopyBlock(props: { label: string; text: string; testId?: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-border bg-subtle py-2 pl-3 pr-2">
+      <code
+        className="min-w-0 flex-1 break-all py-1 font-mono text-xs leading-5"
+        {...(props.testId === undefined ? {} : { "data-testid": props.testId })}
+      >
+        {props.text}
+      </code>
+      <button
+        type="button"
+        aria-label={props.label}
+        className={buttonClass({ variant: "ghost", size: "icon-sm" })}
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(props.text);
+            setCopied(true);
+          } catch {
+            setCopied(false);
+          }
+        }}
+      >
+        {copied ? (
+          <span className="inline-flex transition-[opacity,scale] duration-150 ease-out-expo starting:opacity-0 motion-safe:starting:scale-95 motion-reduce:transition-opacity motion-reduce:duration-[120ms] [html[data-input=keyboard]_&]:transition-none">
+            <Check aria-hidden className="text-success" />
+          </span>
+        ) : (
+          <Copy aria-hidden />
+        )}
+      </button>
+    </div>
+  );
 }

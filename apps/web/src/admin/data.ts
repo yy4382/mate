@@ -1,6 +1,12 @@
 import { t } from "../i18n.ts";
 import { useQuery } from "@tanstack/react-query";
-import type { AgentView, CatalogModel, NodeStatusResult, ProviderView } from "@palace/admin";
+import type {
+  AgentView,
+  CatalogModel,
+  NodeStatusResult,
+  ProviderView,
+  WebhookView,
+} from "@palace/admin";
 import { get } from "../shell/api.ts";
 import type { HumanView } from "../shell/humans.ts";
 
@@ -12,6 +18,7 @@ export const adminKeys = {
   models: ["admin", "models"] as const,
   nodes: ["admin", "nodes"] as const,
   humans: ["admin", "humans"] as const,
+  webhooks: (agentId: string) => ["admin", "webhooks", agentId] as const,
 };
 
 export const useAgents = () =>
@@ -38,6 +45,12 @@ export const useNodes = (poll = false) =>
     queryKey: adminKeys.nodes,
     queryFn: () => get<NodeView[]>("/api/admin/nodes"),
     ...(poll ? { refetchInterval: 3000 } : {}),
+  });
+
+export const useWebhooks = (agentId: string) =>
+  useQuery({
+    queryKey: adminKeys.webhooks(agentId),
+    queryFn: () => get<WebhookView[]>(`/api/admin/agents/${agentId}/webhooks`),
   });
 
 export const useHumans = () =>

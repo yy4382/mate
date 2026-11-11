@@ -103,6 +103,13 @@ describe("mobile management requests for the current login", () => {
     });
   });
 
+  it("words the refusal for a webhook that no longer exists", async () => {
+    const env = await connected();
+    env.respond(async () => json({ error: "unknown-webhook" }, 404));
+    const missing = await env.client.request("/api/admin/webhooks/gone", "DELETE").catch((e) => e);
+    expect(errorText(missing)).toBe(en.management.this_webhook_no_longer_exists);
+  });
+
   it("publishes saved profile names immediately without cookie cleanup or losing other in-flight management reads", async () => {
     const env = await connected();
     const read = deferred<Response>();

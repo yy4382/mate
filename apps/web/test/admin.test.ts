@@ -195,6 +195,50 @@ describe("Agents", () => {
     expect(revoked[0]?.grantedNodes).toEqual([]);
   });
 
+  it("the owner creates a webhook on the Agent page, sees its secret once, rotates it and deletes it", async () => {
+    const site = await startSite();
+    const agent = await site.agent("sam");
+    agent.provider.step("woken", (request) => request.text("ok"));
+    const { page } = await openApp(site, `/app/admin/agents/${agent.agentId}`);
+    const region = page.getByRole("region", { name: "Webhook" });
+    await region.getByText("还没有 webhook").waitFor();
+    await region.getByRole("button", { name: "新建 webhook" }).click();
+    await page.getByLabel("名称").fill("CI");
+    await page.getByRole("button", { name: "创建 webhook" }).click();
+    const secret = (await page.getByTestId("webhook-secret").textContent()) ?? "";
+    expect(secret.length).toBeGreaterThan(20);
+    await page.getByRole("button", { name: "完成" }).click();
+    const row = region.locator("[data-webhook]");
+    await row.getByText("CI", { exact: true }).waitFor();
+    const webhookId = (await row.getAttribute("data-webhook")) ?? "";
+    await row.getByText(`${site.origin}/api/webhooks/${webhookId}`).waitFor();
+    expect(await region.textContent(), "the secret is gone once the dialog closes").not.toContain(
+      secret,
+    );
+    const deliver = (bearer: string) =>
+      fetch(`${site.url}/api/webhooks/${webhookId}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+        body: JSON.stringify({ text: "deploy finished" }),
+      });
+    expect((await deliver(secret)).status).toBe(202);
+
+    await row.getByRole("button", { name: "CI 的更多操作" }).click();
+    await page.getByRole("menuitem", { name: "轮换密钥" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "轮换" }).click();
+    const rotated = (await page.getByTestId("webhook-secret").textContent()) ?? "";
+    expect(rotated).not.toBe(secret);
+    await page.getByRole("button", { name: "完成" }).click();
+    expect((await deliver(secret)).status, "the old secret stopped working").toBe(401);
+    expect((await deliver(rotated)).status).toBe(202);
+
+    await row.getByRole("button", { name: "CI 的更多操作" }).click();
+    await page.getByRole("menuitem", { name: "删除 webhook" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "删除" }).click();
+    await region.getByText("还没有 webhook").waitFor();
+    expect((await deliver(rotated)).status).toBe(401);
+  });
+
   it("an Agent's avatar is generated from its chat account on the list and the detail page", async () => {
     const site = await startSite();
     const agent = await site.agent("sam");

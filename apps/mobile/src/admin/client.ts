@@ -49,6 +49,8 @@ const refusals: Record<AdminErrorReason, string> & Record<string, string> = {
   "unsupported-thinking-level": t("management.this_model_does_not_support_the_selected"),
   "agent-closed": t("management.the_agent_is_not_running_resume_it"),
   "unknown-assistant": t("management.this_assistant_could_not_be_found_refresh"),
+  "unknown-webhook": t("management.this_webhook_no_longer_exists"),
+  "invalid-webhook": t("management.the_webhook_or_its_secret_is_not_valid"),
   "agent-exists": t("management.this_agent_already_exists_return_to_the"),
   "creation-failed": t("management.creation_was_interrupted_retrying_continues_creating_the"),
   "inactive-account": t("management.this_account_has_been_deactivated_and_cannot"),

@@ -23,6 +23,7 @@ import {
 import { AgentActions } from "./AgentActions.tsx";
 import { AgentStateBadge, SettingsFields, settingsBody } from "./Agents.tsx";
 import { NodeAccess } from "./NodeAccess.tsx";
+import { Webhooks } from "./Webhooks.tsx";
 import { Watch } from "./Watch.tsx";
 import { Workspace } from "./Workspace.tsx";
 import { adminKeys, useAgents, useModels } from "./data.ts";
@@ -193,6 +194,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
             </Card>
           </form>
           <NodeAccess agent={agent} />
+          <Webhooks agentId={agentId} />
         </TabPanel>
         <TabPanel value="watch">
           <Watch agentId={agentId} open={agent.state === "open"} />
