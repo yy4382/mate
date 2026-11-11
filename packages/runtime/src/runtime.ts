@@ -16,6 +16,7 @@ import { AgentStateDoc, type AgentUsage } from "./agent-state.ts";
 import { AssistantsDoc, assistants } from "./assistants.ts";
 import { chatExtension, type ChatPort } from "./chat-tools.ts";
 import { systemClock, type Clock } from "@palace/clock";
+import { docsExtension } from "./docs.ts";
 import { historyExtension } from "./history.ts";
 import { Lifetime, guardDatabase } from "./lifetime.ts";
 import { agentModels, type CredentialsLookup, type ModelResolver } from "./models.ts";
@@ -126,6 +127,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     ),
   );
   registry.install(historyExtension);
+  registry.install(docsExtension());
   for (const extension of primaryOnlyExtensions) registry.install(extension);
   registry.install(assistantsIdentity);
   const harness = await Harness.open(

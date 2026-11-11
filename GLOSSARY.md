@@ -282,6 +282,10 @@ Agent 把一次工具调用送到已授权的非主 node，在该 node 上自己
 **访问方式**（NodeAccess）
 管理模块判断的主 node 或访问关系，主 node 为 `home`，获准访问的非主 node 为 `visit`，经网关交给 node。两者使用相同的 Agent 工作区路径，但主工作区只显式初始化，访问工作区的准备不初始化 MEMORY.md。
 
+**Palace 文档**（Palace docs）
+`packages/runtime/docs/<topic>.md`：讲某个 Palace 功能怎么工作的、写给模型的英文文档，每个主题一个文件，front matter 的 `description` 是索引里的一行。Agent 用 `palace_docs({ topic })` 按需阅读，不进系统提示；工具描述就是索引。Agent 为读懂收到的东西而必须知道的（如 webhook 标签的含义）不在这里，留在提示或输入里。
+避免：把它叫"技能"（skill）：Palace 没有技能机制；也不是用户手册。
+
 **node 授权**（node grant）
 管理员允许某个 Agent 访问一个非主 node 的记录，按两个 ID 存在控制库。主 node 不需要授权；授权先持久化，在线时准备工作区，离线时延后到首次在线调用。授权和收回只影响之后开始的调用，收回不删除工作区。
 
