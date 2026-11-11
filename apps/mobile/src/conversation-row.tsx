@@ -66,11 +66,17 @@ export function ConversationRow({
     >
       <Avatar name={title} kind={kind} size={44} />
       <View style={{ flex: 1, gap: 2 }}>
-        <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8 }}>
+        <View
+          style={{
+            flexDirection: large ? "column" : "row",
+            alignItems: large ? "flex-start" : "baseline",
+            gap: large ? 2 : 8,
+          }}
+        >
           <Text
-            numberOfLines={1}
+            numberOfLines={large ? 2 : 1}
             style={{
-              flex: 1,
+              ...(large ? {} : { flex: 1 }),
               color: c.foreground,
               fontSize: 17,
               fontWeight: count ? "600" : "500",
