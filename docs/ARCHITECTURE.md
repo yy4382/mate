@@ -498,13 +498,18 @@ interface Admin {
   providers(): { provider, name, credentials: { apiKey: "…末四位", baseUrl } | null }[] // 每个提供商一行
   setCredentials(provider, { apiKey, baseUrl? }) / deleteCredentials(provider)
   models() // 已存了 key 的提供商的模型目录，每个模型带它接受的 thinking 级别
+  webhooks(agentId) // { webhookId, name, createdAt }[]，不含密钥；打开或关闭的 Agent 都可以
+  createWebhook(agentId, { name }) // 返回 { webhookId, name, createdAt, secret }；secret 只在这里出现一次
+  rotateWebhook(webhookId) // 返回 { webhookId, secret }；旧密钥立即失效
+  deleteWebhook(webhookId)
+  deliverWebhook(webhookId, secret, { text, key? }) // { requestId }；见下面"入站 webhook"
   nodes() / createPairingToken() // 转给网关
   renameNode(nodeId, name) // 转给网关；NodeGatewayError 转成相同 reason 的 AdminError
   close() // 关闭 Manager（所有 runtime），再关自己的控制库连接；网关和聊天 app 由 Web 外壳关闭
 }
 ```
 
-拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`name-taken`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。每个拒绝都是 `AdminError`（或上面这种 `ChatError`）：对 Agent 的操作排在该 Agent 的队列里执行，排队期间 Agent 被删掉，同样是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
+拒绝都是 `AdminError`，带 `reason`（`invalid-input`、`name-taken`、`unknown-agent`、`unknown-node`、`unknown-provider`、`no-credentials`、`unknown-model`、`unsupported-thinking-level`、`agent-closed`、`unknown-assistant`、`unknown-webhook`、`invalid-webhook`（见"入站 webhook"）、`agent-exists`（用存在的 Agent 的 ID 创建），以及浏览工作区的 `node-offline`、`outside-workspace`、`not-found`、`unreadable`），被拒绝的操作什么都不改。聊天 app 对创建的拒绝（`handle-taken`，已删除 Agent 的 ID 的 `inactive-account`）以 `ChatError` 原样出来，因为那时什么都没创建。每个拒绝都是 `AdminError`（或上面这种 `ChatError`）：对 Agent 的操作排在该 Agent 的队列里执行，排队期间 Agent 被删掉，同样是 `unknown-agent`；观察时 Agent 被暂停或删除，是 `agent-closed`。
 
 **工作区宿主与授权。** `WorkspaceHost.port(homeNodeId, agentId)` 返回的端口接受 `{ tool, arguments, node?, conversationId }`，runtime 统一将 `node` 从四个工具的参数中取出，node 收到的 `arguments` 不变；`conversationId` 是发起调用的对话，经管理模块和网关原样交给 node。端口的 `nodes()` 返回 `{ name, online, platform, home }[]`。缺省目标为主 node，否则按名字解析。
 
@@ -518,6 +523,13 @@ interface Admin {
 
 **模型和 API key：** 模型来自 pi-ai 自带的目录（runtime 的 `catalogModels`，Agent 的请求也在这个目录里解析）。管理界面提供 OpenAI（Responses API）和 DeepSeek 两家；凭据按提供商存 `{ apiKey, baseUrl? }`，`baseUrl` 替换目录里这个提供商所有模型的地址。设置模型时先检查（创建 Agent 时也一样，在任何东西被创建之前）：提供商是这两家之一、已经存了 key、目录里有这个模型、thinking 级别在这个模型接受的级别里。不接受的级别直接拒绝，不降级。runtime 每次模型请求都现读凭据，所以改了 key 从下一次请求起生效，再存一次同样的值不影响任何正在运行的 Agent；删了 key，这个提供商的请求不发出就失败。
 
+**入站 webhook。** 外部系统（CI、监控、定时任务、别的 bot）把一条消息直接交给某一个 Agent 并唤醒它。它不是聊天消息：不经过聊天 app，没有聊天账号，人类看不到也收不到推送；管理员在观察界面里看到它。`deliverWebhook` 走和连接器、提醒相同的入口，对打开的 Agent 调 `runtime.submit(content, { requestId, whenBusy: "steer" })`（经 `#whileOpen`），所以空闲的 Agent 被唤醒，运行中的 Agent 在当前这轮工具调用之后收到。Durable 的输入不带元数据，发送者写进内容：
+```
+[webhook "<name>" <webhookId> at 2026-11-11 14:32:05 UTC]
+<text>
+```
+`<name>` 由管理员设定（以 JSON 字符串引用，所以名字里的引号和换行伪造不出另一行抬头），模型可以信任它；正文是不可信的数据，runtime 的聊天系统提示说明以 `[webhook` 开头的输入来自外部系统而不是人类。`text` 为 1 字节到 32 KiB，`key`（`Idempotency-Key`）为 1 到 128 个可打印 ASCII。`requestId` 是 `webhook:<webhookId>:<key>`，没有 key 时用随机 UUID；同一个 key 只有第一次生效，之后返回同一个 `requestId`，不改任何东西。密钥是 `randomBytes(32)` 的 base64url，只在创建和轮换时返回一次，库里只存 SHA-256，用 `timingSafeEqual` 比较，和登录令牌一样。未知的 webhook、错的密钥、Agent 已被删除的 webhook 都是 `invalid-webhook`，消息相同、无法区分；暂停或关闭的 Agent 是 `agent-closed`，不排队、不保留。轮换只换哈希，删除只删这一行；删除 Agent 时一并删掉它的 webhook（Agent 删除之后才删，与授权相同，遗留的行因为 Agent ID 不会复用而无害，投递到它们是 `invalid-webhook`）。
+
 **观察：** `watchAgent` 就是 runtime 的 `watchEvents`：Durable 的 agent 事件原样交出去，第一批是快照，之后是流式文字、工具调用和它们的输出、输入、用量。观察只读，不改变 Agent 的任何状态。关闭的 Agent 没有可看的，拒绝为 `agent-closed`。
 
 **浏览工作区：** 管理模块按 Agent 文件里的 node ID 调网关的 `browse(nodeId, agentId, path)`，网关发 `gateway.browse`，node 回 `node.browse.result`。浏览不经过 runtime，所以暂停的 Agent 也能看。
@@ -526,7 +538,7 @@ interface Admin {
 - **上限：** 文件最多返回开头 128 KiB（`BROWSE_FILE_BYTES`），截在完整字符处并标明 `truncated`；目录最多 500 条（`BROWSE_DIRECTORY_ENTRIES`），超出时标明 `truncated`，列出哪些由文件系统决定。这两个数让任何回答按 JSON 转义后的最坏情况仍在网关 1 MiB 的帧上限以内。
 - **离线：** node 不在线、或者回答之前连接断开，网关立即回答 `node-offline`，不排队等待；之后迟到的回答被丢弃。和工具调用一样，回答只认发出请求的那条连接。
 
-**持久化：** API key 存在 `data/control.sqlite` 里管理模块自己的 `provider_credentials` 表（模块名 `admin`），是唯一一份，runtime 每次请求现读。同一个 `AdminStore` 连接也管理 `node_grants(agent_id, node_id, granted_at)`，以 Agent 和 node ID 联合为主键。admin 结构第 2 版只新增这张空表，重复授权不更新时间，主 node 不入表。Agent 文件结构和已有凭据不变，Agent 自己的配置仍在自己的文件里。
+**持久化：** API key 存在 `data/control.sqlite` 里管理模块自己的 `provider_credentials` 表（模块名 `admin`），是唯一一份，runtime 每次请求现读。同一个 `AdminStore` 连接也管理 `node_grants(agent_id, node_id, granted_at)`，以 Agent 和 node ID 联合为主键。admin 结构第 2 版只新增这张空表，重复授权不更新时间，主 node 不入表。Agent 文件结构和已有凭据不变，Agent 自己的配置仍在自己的文件里。admin 结构第 3 版只新增空的 `webhooks(id, agent_id, name, secret_hash, created_at)` 表和按 `agent_id` 的索引，已有的凭据、授权和 Agent 不受影响。
 
 ### 4.7 Web 外壳
 
@@ -667,7 +679,7 @@ data/
 
 搬到另一台 VPS：停掉容器，复制 `data/`，启动。
 
-**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@palace/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号；第 5 版把推送订阅的 endpoint 和 keys 换成 `subscription_key` 与 `subscription_json`，第 6 版新增空的账号头像表与实时事件触发器，原有账号默认无上传头像）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5；外壳的第 2 版用 `humans` 和 `sessions` 取代 `owner_password` 和 `owner_sessions`：原来的所有者成为 externalId 为 `owner` 的管理员，密码哈希和登录会话原样保留（已登录的 cookie 继续有效），这个账号的聊天账号本来就是 externalId `owner` 的人类账号，名字和 handle 不变，之后可以自己改。网关的第 2 版为已有 node 加名字和空的系统报告，身份与公钥不变，详见 4.5。admin 的第 2 版新增空的 node 授权表，已有 Agent 仍只访问主 node。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
+**结构迁移。** 每个存储的结构就是一串按版本递增的迁移（`@palace/migrations` 的 `Migrations`），没有另一份"当前建表语句"：新存储跑完整个列表，已有的存储只跑比它的版本新的迁移，所以新建的和升级来的结构不会分叉。启动时在一个事务里迁移，失败就回滚，存储留在旧版本并拒绝启动；存储比代码新、或停在列表里没有的版本，同样拒绝启动，并且不改动文件。`chat.sqlite` 的版本记在 `PRAGMA user_version`，迁移列表在 `packages/chat/src/chat-migrations.ts`（第 3 版是第一条，1、2 从未发布；第 4 版把账号的 `role` 换成 `kind`：原来的所有者成为人类、其余成为 Agent，并给实时事件加受众、给推送订阅加账号；第 5 版把推送订阅的 endpoint 和 keys 换成 `subscription_key` 与 `subscription_json`，第 6 版新增空的账号头像表与实时事件触发器，原有账号默认无上传头像）；迁移时外键关闭，以便重建表，提交前用 `foreign_key_check` 确认没有悬空引用。`control.sqlite` 由几个模块共用，版本按模块各记一行，见 4.5；外壳的第 2 版用 `humans` 和 `sessions` 取代 `owner_password` 和 `owner_sessions`：原来的所有者成为 externalId 为 `owner` 的管理员，密码哈希和登录会话原样保留（已登录的 cookie 继续有效），这个账号的聊天账号本来就是 externalId `owner` 的人类账号，名字和 handle 不变，之后可以自己改。网关的第 2 版为已有 node 加名字和空的系统报告，身份与公钥不变，详见 4.5。admin 的第 2 版新增空的 node 授权表，已有 Agent 仍只访问主 node；第 3 版新增空的 webhook 表。升级是否可行由**存储夹具**证明：用 `scripts/make-store-fixture.ts` 从已发布的版本生成真实的数据目录，放在 `tests/fixtures/stores/<版本>/`，测试在它的副本上启动新代码。
 
 ## 7. 部署
 

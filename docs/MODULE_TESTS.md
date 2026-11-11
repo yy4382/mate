@@ -407,7 +407,14 @@
 - 新 Agent 只有主 node 可用；未知和未授权名字同样拒绝并列可访问名字，不向 node 发调用。在线授权返回前以 visit 准备工作区；访问调用以 visit、主 node 以 home 转发；node_list 每次现读并保持主 node 标记。
 - 离线授权成功并持久化，重连后允许首次调用；在线准备失败报告错误但保留授权，重复授权重试准备。准备期间收回授权，迟到的准备完成不会恢复授权。
 - 授权、收回幂等；主 node invalid-input，未知 Agent/node 分别拒绝；暂停的 Agent 也能授权，agents 显示当前授权名字。收回后新调用拒绝，已发出的前台和后台调用仍完成；目标离线错误标出名字，主 node 离线不阻止其他 node。
-- 用已发布版本公开 API 创建并暂停的真实 Agent 夹具验证 admin 迁移：凭据不变，初始无额外授权，原 Agent 仍只用主 node。
+- 用已发布版本公开 API 创建并暂停的真实 Agent 夹具验证 admin 迁移：凭据不变，初始无额外授权，原 Agent 仍只用主 node，webhook 列表为空且能新增，重新打开后仍在。
+
+入站 webhook（经 `Admin` 接口，HTTP 在 11.1）：
+
+- 投递唤醒打开的 Agent：观察的事件里看到带 webhook 名字、ID、时间的输入和正文；同一个 `Idempotency-Key` 只生效一次，重试不改任何东西；没有 key 时每次都是新的输入。
+- 未知 webhook 和错误密钥以相同的 `invalid-webhook`（相同消息）拒绝；暂停的 Agent 以 `agent-closed` 拒绝，恢复后也没有排队的输入。
+- 轮换后旧密钥立即失效、新密钥可用；删除 webhook 后不再投递，重复删除或轮换为 `unknown-webhook`；删除 Agent 同时删掉它的 webhook；列出不含密钥；重启后 webhook 仍在。
+- 空正文、超过 32 KiB（按字节）的正文、不合法的 key 和不合法的名字以 `invalid-input` 拒绝；名字里的引号和换行伪造不出另一行抬头。
 
 ## 11. Web 外壳
 

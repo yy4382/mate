@@ -196,7 +196,7 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 运行在 Docker 容器里的单个进程，包含 Web 外壳、聊天 app、管理模块、Agent Manager、所有 runtime 和 node 网关。
 
 **控制库**（control store）
-`data/control.sqlite`：网关的 node 注册表、Web 外壳的登录、管理模块的 API key 和 node 授权共用的一个 SQLite 文件。每个模块用 `@palace/control-store` 的 `openControlTables` 打开自己的一条连接，只建、只检查自己的表；`schema_versions` 表里每个模块一行结构版本，一个模块版本不对只让这个模块拒绝启动。
+`data/control.sqlite`：网关的 node 注册表、Web 外壳的登录、管理模块的 API key、node 授权和 webhook 共用的一个 SQLite 文件。每个模块用 `@palace/control-store` 的 `openControlTables` 打开自己的一条连接，只建、只检查自己的表；`schema_versions` 表里每个模块一行结构版本，一个模块版本不对只让这个模块拒绝启动。
 避免：说某个模块"拥有" `control.sqlite`；用 `PRAGMA user_version` 记控制库的版本（一个文件只有一个）。
 
 **Web 外壳**（shell）
@@ -280,6 +280,10 @@ Agent 把一次工具调用送到已授权的非主 node，在该 node 上自己
 
 **node 授权**（node grant）
 管理员允许某个 Agent 访问一个非主 node 的记录，按两个 ID 存在控制库。主 node 不需要授权；授权先持久化，在线时准备工作区，离线时延后到首次在线调用。授权和收回只影响之后开始的调用，收回不删除工作区。
+
+**入站 webhook**（inbound webhook）
+管理员为某一个 Agent 创建的、让外部系统用 `POST /api/webhooks/:webhookId` 加 `Authorization: Bearer <密钥>` 把一条文字直接交给这个 Agent 并唤醒它的入口。它走 runtime 的收件箱，不是聊天消息：没有聊天账号，人类收不到，管理员在观察界面里看到。输入内容以 `[webhook "<name>" <webhookId> at <时间>]` 开头，让模型知道发送者。密钥只在创建和轮换时显示一次，库里只存哈希。
+避免：把它叫"机器人账号"或"聊天集成"。
 
 **node 名字**（node name）
 网关保存的、管理员可改且唯一的机器名字；UUID 仍用于身份和调用（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。

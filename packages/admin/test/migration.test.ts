@@ -24,4 +24,18 @@ describe("upgrading the admin store", () => {
       }),
     ]);
   });
+
+  it("gives a released Agent an empty webhook list that takes new webhooks", async () => {
+    const { dataDirectory, facts } = storeFixture("v0.1.0-alpha.2");
+    const env = await environment(dataDirectory);
+    const admin = await env.open();
+    const { agentId } = facts.releasedAgent;
+    expect(await admin.webhooks(agentId)).toEqual([]);
+    const { webhookId } = await admin.createWebhook(agentId, { name: "CI" });
+    await admin.close();
+
+    const reopened = await env.open();
+
+    expect(await reopened.webhooks(agentId)).toEqual([expect.objectContaining({ webhookId })]);
+  });
 });

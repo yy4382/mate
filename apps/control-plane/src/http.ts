@@ -41,6 +41,8 @@ const ADMIN_STATUS: Record<AdminErrorReason, number> = {
   "unknown-node": 404,
   "unknown-provider": 404,
   "unknown-assistant": 404,
+  "unknown-webhook": 404,
+  "invalid-webhook": 401,
   "agent-exists": 409,
   "name-taken": 409,
   "no-credentials": 409,

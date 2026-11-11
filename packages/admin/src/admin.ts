@@ -1,3 +1,4 @@
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import { AccountNames, type ChatApp } from "@palace/chat";
 import { systemClock, type Clock } from "@palace/clock";
@@ -40,6 +41,21 @@ const CreateAgentInput = AccountNames.extend({
   agentId: z.string().refine(isAgentId, "an Agent ID is a lowercase UUID").optional(),
   nodeId: z.string().min(1),
   settings: SettingsInput,
+});
+
+const WEBHOOK_TEXT_MAX_BYTES = 32 * 1024;
+
+const WebhookInput = z.object({ name: z.string().trim().min(1).max(64) });
+
+const DeliveryInput = z.object({
+  text: z
+    .string()
+    .min(1)
+    .refine((text) => Buffer.byteLength(text) <= WEBHOOK_TEXT_MAX_BYTES, "text is over 32 KiB"),
+  key: z
+    .string()
+    .regex(/^[\x20-\x7e]{1,128}$/, "an idempotency key is 1 to 128 printable ASCII characters")
+    .optional(),
 });
 
 const CredentialsInput = z.object({
@@ -92,6 +108,13 @@ export type ProviderView = {
   readonly name: string;
   /** The stored key shows only its last four characters. */
   readonly credentials: { readonly apiKey: string; readonly baseUrl: string | null } | null;
+};
+
+/** An inbound webhook as an admin sees it. Its secret is shown only when it is created or rotated. */
+export type WebhookView = {
+  readonly webhookId: string;
+  readonly name: string;
+  readonly createdAt: number;
 };
 
 /**
@@ -217,10 +240,11 @@ export class Admin {
     await this.#existing(agentId, (id) => this.#manager.resume(id));
   }
 
-  /** Close the Agent, deactivate its chat account, delete its file and grants. Its messages stay readable. */
+  /** Close the Agent, deactivate its chat account, delete its file, grants and webhooks. Its messages stay readable. */
   async deleteAgent(agentId: string): Promise<void> {
     await this.#existing(agentId, (id) => this.#manager.delete(id));
     this.#store.deleteNodeGrants(agentId);
+    this.#store.deleteWebhooks(agentId);
   }
 
   /** Persist access, then prepare on an online node. Offline or failed preparation is retried by the node on use. */
@@ -289,6 +313,78 @@ export class Admin {
       if (!outcome.ok) throw new AdminError(outcome.reason, outcome.message);
       return outcome.listing;
     });
+  }
+
+  // ── Webhooks ────────────────────────────────────────────────────────────────
+
+  /** The Agent's webhooks, open or closed Agent. */
+  async webhooks(agentId: string): Promise<WebhookView[]> {
+    return this.#existing(agentId, async (id) => this.#store.webhooksOf(id).map(webhookView));
+  }
+
+  /** Add a webhook that delivers to the Agent. The secret is returned here and never again. */
+  async createWebhook(
+    agentId: string,
+    input: z.input<typeof WebhookInput>,
+  ): Promise<WebhookView & { secret: string }> {
+    const { name } = parseInput(WebhookInput, input);
+    return this.#existing(agentId, async (id) => {
+      const secret = newSecret();
+      const record = {
+        id: randomUUID(),
+        agentId: id,
+        name,
+        secretHash: hashSecret(secret),
+        createdAt: this.#clock.now(),
+      };
+      this.#store.addWebhook(record);
+      return { ...webhookView(record), secret };
+    });
+  }
+
+  /** Replace the webhook's secret; the old one stops working at once. The new secret is returned here and never again. */
+  rotateWebhook(webhookId: string): { webhookId: string; secret: string } {
+    const secret = newSecret();
+    if (!this.#store.replaceWebhookSecret(webhookId, hashSecret(secret)))
+      throw new AdminError("unknown-webhook", `no webhook ${webhookId}`);
+    return { webhookId, secret };
+  }
+
+  deleteWebhook(webhookId: string): void {
+    if (!this.#store.deleteWebhook(webhookId))
+      throw new AdminError("unknown-webhook", `no webhook ${webhookId}`);
+  }
+
+  /**
+   * Hand an outside system's message to the open Agent as an input of its primary conversation, steering a run in
+   * progress and starting one otherwise. The content names the webhook and says when, so the model knows a human did
+   * not write it. Admitted once per `requestId`: `webhook:<id>:<key>` with a key, so a retry with the same key changes
+   * nothing, and a fresh one without. A webhook that does not exist, a wrong secret, and a webhook whose Agent is gone
+   * are all `invalid-webhook`; a paused or closed Agent is `agent-closed`, and nothing is queued for it.
+   */
+  async deliverWebhook(
+    webhookId: string,
+    secret: string,
+    input: z.input<typeof DeliveryInput> & { key?: string | undefined },
+  ): Promise<{ requestId: string }> {
+    const webhook = this.#store.webhook(webhookId);
+    if (webhook === undefined || !secretIs(secret, webhook.secretHash)) throw invalidWebhook();
+    const { text, key } = parseInput(DeliveryInput, input);
+    const requestId = `webhook:${webhook.id}:${key ?? randomUUID()}`;
+    const at = new Date(this.#clock.now())
+      .toISOString()
+      .replace("T", " ")
+      .replace(/\.\d+Z$/, " UTC");
+    const content = `[webhook ${JSON.stringify(webhook.name)} ${webhook.id} at ${at}]\n${text}`;
+    try {
+      await this.#whileOpen(webhook.agentId, (runtime) =>
+        runtime.submit(content, { requestId, whenBusy: "steer" }),
+      );
+    } catch (error) {
+      if (error instanceof AdminError && error.reason === "unknown-agent") throw invalidWebhook();
+      throw error;
+    }
+    return { requestId };
   }
 
   // ── Providers and models ────────────────────────────────────────────────────
@@ -433,6 +529,20 @@ export class Admin {
       ...(instructions === undefined ? {} : { instructions }),
     };
   }
+}
+
+const newSecret = () => randomBytes(32).toString("base64url");
+const hashSecret = (secret: string) => createHash("sha256").update(secret).digest("hex");
+
+function secretIs(secret: string, expectedHash: string): boolean {
+  return timingSafeEqual(Buffer.from(hashSecret(secret)), Buffer.from(expectedHash));
+}
+
+const invalidWebhook = () =>
+  new AdminError("invalid-webhook", "no such webhook, or the secret is wrong");
+
+function webhookView(record: { id: string; name: string; createdAt: number }): WebhookView {
+  return { webhookId: record.id, name: record.name, createdAt: record.createdAt };
 }
 
 function mask(apiKey: string): string {

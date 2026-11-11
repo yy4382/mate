@@ -5,6 +5,7 @@ export {
   type AdminOptions,
   type AgentView,
   type ProviderView,
+  type WebhookView,
 } from "./admin.ts";
 export type { WorkspaceListing } from "@palace/node-protocol";
 export type { NodeStatusResult } from "@palace/gateway";

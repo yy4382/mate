@@ -29,6 +29,19 @@ CREATE TABLE node_grants (
 ) STRICT;
 `,
     },
+    {
+      version: 3,
+      sql: `
+CREATE TABLE webhooks (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  secret_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX webhooks_by_agent ON webhooks (agent_id);
+`,
+    },
   ]),
 };
 
@@ -41,9 +54,34 @@ const Row = z
       : { apiKey: row.api_key, ...(row.base_url === null ? {} : { baseUrl: row.base_url }) },
   );
 
+/** An inbound webhook as stored: the secret only as its SHA-256. */
+export type WebhookRecord = {
+  readonly id: string;
+  readonly agentId: string;
+  readonly name: string;
+  readonly secretHash: string;
+  readonly createdAt: number;
+};
+
+const WebhookRow = z
+  .object({
+    id: z.string(),
+    agent_id: z.string(),
+    name: z.string(),
+    secret_hash: z.string(),
+    created_at: z.number(),
+  })
+  .transform((row): WebhookRecord => ({
+    id: row.id,
+    agentId: row.agent_id,
+    name: row.name,
+    secretHash: row.secret_hash,
+    createdAt: row.created_at,
+  }));
+
 /**
- * Credentials and node grants share the admin module's control-store connection. Both are read for each request,
- * so a change applies to the next request without updating an open runtime.
+ * Credentials, node grants and webhooks share the admin module's control-store connection. All are read for each
+ * request, so a change applies to the next request without updating an open runtime.
  */
 export class AdminStore {
   readonly #db: DatabaseSync;
@@ -98,6 +136,43 @@ export class AdminStore {
 
   deleteNodeGrants(agentId: string): void {
     this.#db.prepare("DELETE FROM node_grants WHERE agent_id = ?").run(agentId);
+  }
+
+  webhook(id: string): WebhookRecord | undefined {
+    const row = this.#db.prepare("SELECT * FROM webhooks WHERE id = ?").get(id);
+    return row === undefined ? undefined : WebhookRow.parse(row);
+  }
+
+  webhooksOf(agentId: string): WebhookRecord[] {
+    return this.#db
+      .prepare("SELECT * FROM webhooks WHERE agent_id = ? ORDER BY created_at, id")
+      .all(agentId)
+      .map((row) => WebhookRow.parse(row));
+  }
+
+  addWebhook(webhook: WebhookRecord): void {
+    this.#db
+      .prepare(
+        "INSERT INTO webhooks (id, agent_id, name, secret_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(webhook.id, webhook.agentId, webhook.name, webhook.secretHash, webhook.createdAt);
+  }
+
+  /** Whether the webhook existed. */
+  replaceWebhookSecret(id: string, secretHash: string): boolean {
+    return (
+      this.#db.prepare("UPDATE webhooks SET secret_hash = ? WHERE id = ?").run(secretHash, id)
+        .changes > 0
+    );
+  }
+
+  /** Whether the webhook existed. */
+  deleteWebhook(id: string): boolean {
+    return this.#db.prepare("DELETE FROM webhooks WHERE id = ?").run(id).changes > 0;
+  }
+
+  deleteWebhooks(agentId: string): void {
+    this.#db.prepare("DELETE FROM webhooks WHERE agent_id = ?").run(agentId);
   }
 
   close(): void {
