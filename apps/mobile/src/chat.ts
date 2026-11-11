@@ -215,30 +215,33 @@ export class MobileChat {
         : t("chat.the_server_cannot_process_this_right_now"),
     );
   }
-  start(): void {
-    if (this.running || this.lifetime.signal.aborted) return;
-    this.held?.release();
-    this.held = null;
-    const controller = new AbortController();
-    this.live = controller;
-    this.publish({ connection: this.cursor === undefined ? "loading" : "reconnecting" });
-    this.running = this.follow(controller.signal).finally(() => {
-      this.running = undefined;
-    });
-  }
   pause(): void {
     this.held ??= hold();
     this.live?.abort();
     this.publish({ connection: "paused" });
   }
   async resume(): Promise<void> {
-    this.pause();
-    await this.running;
-    this.start();
+    this.held?.release();
+    this.held = null;
+    await this.restart();
   }
   /** A person's retry: reconnects only while the owner lets the chat run. */
   async reconnect(): Promise<void> {
-    if (!this.held) await this.resume();
+    if (!this.held) await this.restart();
+  }
+  /** A pause that arrives while the old stream closes wins. */
+  private async restart(): Promise<void> {
+    if (this.running) {
+      this.live?.abort();
+      await this.running;
+    }
+    if (this.held || this.running || this.lifetime.signal.aborted) return;
+    const controller = new AbortController();
+    this.live = controller;
+    this.publish({ connection: this.cursor === undefined ? "loading" : "reconnecting" });
+    this.running = this.follow(controller.signal).finally(() => {
+      this.running = undefined;
+    });
   }
   close(): void {
     this.live?.abort();

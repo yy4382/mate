@@ -225,7 +225,7 @@ function fixture(clock?: Clock) {
       return expired;
     },
     start: async () => {
-      chat.start();
+      void chat.resume();
       await until(chat, (s) => s.connection === "live");
     },
     push: () => {
@@ -433,10 +433,27 @@ describe("native chat public interface", () => {
     expect(f.requests).toHaveLength(before);
     expect(f.writes).toEqual([]);
   });
+  it("stays paused when its owner pauses it while a person's reconnect waits for the old stream", async () => {
+    const f = fixture();
+    await f.start();
+    const reconnecting = f.chat.reconnect();
+    f.chat.pause();
+    const before = f.requests.length;
+    await reconnecting;
+    f.chat.edit(f.ref, "后台不能发出");
+    const sending = f.chat.send(f.ref);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.chat.getSnapshot().connection).toBe("paused");
+    expect(f.requests).toHaveLength(before);
+    expect(f.chat.draft(f.ref).pending?.status).toBe("sending");
+    f.chat.close();
+    await sending;
+    expect(f.writes).toEqual([]);
+  });
   it("drops late snapshots, responses, messages and drafts when its identity closes", async () => {
     const f = fixture(),
       held = f.holdSnapshot();
-    f.chat.start();
+    void f.chat.resume();
     f.chat.edit(f.ref, "旧账号草稿");
     f.chat.close();
     held.resolve(new Response(JSON.stringify(f.server.liveSnapshot(f.me, {}))));
@@ -538,7 +555,7 @@ describe("native chat public interface", () => {
       await connection.promise;
       return stream(...args);
     };
-    f.chat.start();
+    void f.chat.resume();
     try {
       await until(f.chat, (state) => state.connection === "connecting");
       await f.chat.load(f.ref);
