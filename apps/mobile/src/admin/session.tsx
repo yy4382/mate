@@ -15,6 +15,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { useFocusEffect, useNavigation } from "expo-router";
 import { fetch as streamingFetch } from "expo/fetch";
 import { auth } from "../auth-native";
+import { sessionIdentity } from "../auth";
 import { ManagementClient } from "./client";
 import { Creation, newAgentDraft } from "./creation";
 import { PresentationAccess } from "../ui";
@@ -57,9 +58,10 @@ export function ManagementScope({ children }: { children: ReactNode }) {
   const state = useSyncExternalStore(auth.subscribe, auth.getSnapshot);
   const [scope, setScope] = useState<{ client: ManagementClient; id: number } | null>(null);
   useEffect(() => {
-    if (state.kind === "signed-in" && (!scope || scope.client.getSnapshot().kind === "closed"))
+    const identity = sessionIdentity(state);
+    if (identity && (!scope || scope.client.getSnapshot().kind === "closed"))
       setScope({
-        client: new ManagementClient(auth, state, fetch, streamingFetch),
+        client: new ManagementClient(auth, identity, fetch, streamingFetch),
         id: (scope?.id ?? 0) + 1,
       });
   }, [state, scope]);

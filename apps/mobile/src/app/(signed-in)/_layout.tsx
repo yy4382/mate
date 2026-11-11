@@ -3,6 +3,7 @@ import { Redirect, usePathname } from "expo-router";
 import { useSyncExternalStore } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { auth } from "../../auth-native";
+import { sessionIdentity } from "../../auth";
 import { useSessionChat } from "../../session";
 import { HomeScreen } from "../../home";
 import { ManagementScope } from "../../admin/session";
@@ -22,7 +23,7 @@ export default function SignedInLayout() {
       </View>
     );
   }
-  const ready = state.kind === "signed-in";
+  const ready = sessionIdentity(state) !== null;
   return (
     <View style={{ flex: 1 }}>
       <View

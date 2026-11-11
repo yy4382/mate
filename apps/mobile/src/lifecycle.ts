@@ -1,5 +1,5 @@
 import type { AppState, AppStateStatus } from "react-native";
-import type { MobileAuth } from "./auth";
+import { sessionIdentity, type MobileAuth } from "./auth";
 import type { MobileNotifications } from "./notifications";
 
 type Chat = { pause(): void; resume(): Promise<void>; close(): void };
@@ -7,7 +7,9 @@ type Chat = { pause(): void; resume(): Promise<void>; close(): void };
 /**
  * The one app-state listener, and the auth subscription that drives notifications and chat: a
  * signed-in session is available only in the foreground, and only availability changes pause or
- * resume notifications and the chat stream. Management keeps its own login scope.
+ * resume notifications and the chat stream. The chat opens for the identity the app shows, even one
+ * still being checked, so a restored session appears at once, but it runs only once verified.
+ * Management keeps its own login scope.
  */
 export function startMobileLifecycle<C extends Chat>({
   auth,
@@ -32,11 +34,12 @@ export function startMobileLifecycle<C extends Chat>({
     void notifications.setSession(
       available ? { server: state.server, accountId: state.human.accountId } : null,
     );
-    if (state.kind === "signed-in") {
-      const identity = `${state.server}/${state.human.accountId}`;
+    const shown = sessionIdentity(state);
+    if (shown) {
+      const identity = `${shown.server}/${shown.human.accountId}`;
       if (current?.identity !== identity) {
         current?.chat.close();
-        current = { identity, chat: platform.openChat(state.server), running: null };
+        current = { identity, chat: platform.openChat(shown.server), running: null };
         platform.showChat(current.chat);
       }
     } else if (current && state.kind !== "checking" && state.kind !== "unavailable") {

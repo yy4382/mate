@@ -3,10 +3,9 @@ import type { Admin, AdminErrorReason, AgentEvent, AgentView } from "@palace/adm
 import { HumanView } from "@palace/control-plane/contracts";
 import { z } from "zod";
 import { readEvents, sendJson } from "../http";
-import type { AuthState, MobileAuth } from "../auth";
+import type { MobileAuth, SessionIdentity } from "../auth";
 
-export type SignedIn = Extract<AuthState, { kind: "signed-in" }>;
-type Access = { kind: "ready" | "suspended"; session: SignedIn } | { kind: "closed" };
+type Access = { kind: "ready" | "suspended"; session: SessionIdentity } | { kind: "closed" };
 export type AgentSettingsInput = Parameters<Admin["configureAgent"]>[1];
 export type PairingToken = ReturnType<Admin["createPairingToken"]>;
 
@@ -85,7 +84,7 @@ export class ManagementClient {
 
   constructor(
     private auth: MobileAuth,
-    session: SignedIn,
+    session: SessionIdentity,
     private fetcher: typeof fetch,
     private streamFetch: StreamFetch,
   ) {

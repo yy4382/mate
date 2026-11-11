@@ -15,12 +15,21 @@ export type AuthState =
   | { kind: "server"; problem: "settings" | "address" | null }
   | { kind: "signed-out"; server: string; notice: SignedOutNotice | null }
   | { kind: "logging-in"; server: string }
-  | { kind: "checking"; server: string }
+  /** `human` is the identity this cookie was last verified as; null when none is stored. */
+  | { kind: "checking"; server: string; human: HumanView | null }
   | { kind: "clearing"; server: string }
   | { kind: "signed-in"; server: string; human: HumanView }
   | { kind: "unavailable"; server: string; problem: "cleanup" | "connection" };
 
-const Preferences = z.object({ server: z.url(), restore: z.boolean() });
+/** A restorable session keeps the identity it was last verified as; an unreadable copy is dropped. */
+const Preferences = z.union([
+  z.object({ server: z.url(), restore: z.literal(false) }),
+  z.object({
+    server: z.url(),
+    restore: z.literal(true),
+    human: HumanView.optional().catch(undefined),
+  }),
+]);
 type Preferences = z.output<typeof Preferences>;
 export type AuthPlatform = {
   read(): unknown;
@@ -50,6 +59,15 @@ class Refusal extends Error {
   constructor(readonly status: number) {
     super(String(status));
   }
+}
+
+export type SessionIdentity = { server: string; human: HumanView };
+
+/** The account the app shows: verified when signed in, last verified while checking again. */
+export function sessionIdentity(state: AuthState): SessionIdentity | null {
+  if (state.kind === "signed-in") return state;
+  if (state.kind === "checking" && state.human) return { server: state.server, human: state.human };
+  return null;
 }
 
 /** Owns the one selected server and access to its current cookie session. */
@@ -137,15 +155,23 @@ export class MobileAuth {
     const request = new AbortController();
     const timeout = setTimeout(() => request.abort(), 15_000);
     this.request = request;
-    this.publish({ kind: input ? "logging-in" : "checking", server });
+    this.publish(
+      input
+        ? { kind: "logging-in", server }
+        : {
+            kind: "checking",
+            server,
+            human: preferences.restore ? (preferences.human ?? null) : null,
+          },
+    );
     this.pending = (async () => {
       try {
         if (input) LoginResult.parse(await this.json(server, "/api/login", request.signal, input));
         if (generation !== this.generation) return;
         const human = HumanView.parse(await this.json(server, "/api/me", request.signal));
         if (generation !== this.generation) return;
-        this.platform.write({ server, restore: true });
-        this.preferences = { server, restore: true };
+        this.platform.write({ server, restore: true, human });
+        this.preferences = { server, restore: true, human };
         this.publish({ kind: "signed-in", server, human });
       } catch (error) {
         if (generation !== this.generation) return;
