@@ -160,8 +160,13 @@ export const TaskResult = z.discriminatedUnion("status", [
 ]);
 export type TaskResult = z.output<typeof TaskResult>;
 
+/** The newest top-level entry of one conversation, which a client orders and previews its conversation list by. */
+export const ConversationActivity = z.object({ conversationId: Id, entry: Entry });
+export type ConversationActivity = z.output<typeof ConversationActivity>;
+
 /**
  * Everything a human's client renders, as of one moment, and the cursor of that moment. `me` is the viewer's account.
+ * `activity` has the newest top-level entry of each readable conversation that has one, in conversation order.
  * `page` is the newest page of the timeline the client opened (newest first, as `readHistory` returns it) with the
  * viewer's read position there.
  */
@@ -171,6 +176,7 @@ export const LiveSnapshot = z.object({
   accounts: z.array(AccountView),
   conversations: z.array(ConversationView),
   unread: UnreadSummary,
+  activity: z.array(ConversationActivity),
   page: z
     .object({ timeline: TimelineRef, entries: z.array(Entry), position: z.number() })
     .nullable(),

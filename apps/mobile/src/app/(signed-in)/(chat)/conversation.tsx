@@ -7,7 +7,7 @@ import { AppState, FlatList, KeyboardAvoidingView, Pressable, Text, View } from 
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Entry, TimelineRef } from "@palace/chat/contracts";
 import { accountName, timelineKey } from "@palace/chat/client";
-import { conversationLabel, operationKey } from "../../../chat";
+import { conversationLabel, operationKey, taskChangeKey } from "../../../chat";
 import {
   ConversationActionsContent,
   type ConversationPresentation,
@@ -31,13 +31,6 @@ type Panel =
   | { kind: "message"; entry: Message }
   | { kind: "create-task"; entry: Message; presentation: TaskCreationPresentation }
   | { kind: "task"; task: Task; presentation: TaskPresentation };
-const taskChangeKey = {
-  created: "chat.task_created",
-  claimed: "chat.task_claimed",
-  yielded: "chat.task_yielded",
-  transferred: "chat.task_transferred",
-  completed: "chat.task_completed",
-} as const;
 export default function ConversationScreen() {
   const headerHeight = useHeaderHeight();
   const params = useLocalSearchParams<{
