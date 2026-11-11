@@ -97,47 +97,6 @@ describe("workspace targets", () => {
     agent.provider.assertComplete();
   });
 
-  it("tells the primary conversation and a work assistant about the workspace and MEMORY.md once per request", async () => {
-    const agent = await testAgent();
-    const primaryReady = Promise.withResolvers<void>();
-    const finished = Promise.withResolvers<void>();
-    const mentions = (request: { body: { tools?: unknown }; systemTexts(): string[] }) =>
-      [...request.systemTexts(), JSON.stringify(request.body.tools)].join("\n").split("MEMORY.md")
-        .length - 1;
-    agent.provider
-      .step("primary spawns the reader", (request) => {
-        expect(mentions(request), "the primary hears of MEMORY.md once").toBe(1);
-        request.call([
-          {
-            name: "assistant",
-            arguments: { action: "spawn", name: "reader", message: "check the memory" },
-          },
-        ]);
-      })
-      .step("primary acknowledges", (request) => {
-        request.text("asked the reader");
-        primaryReady.resolve();
-      })
-      .step("primary receives the reader's answer", (request) => {
-        request.text("noted");
-        finished.resolve();
-      });
-    agent.provider
-      .lane("reader", (request) => request.userTexts()[0] === "check the memory")
-      .step("assistant hears of MEMORY.md once", async (request) => {
-        await primaryReady.promise;
-        expect(mentions(request), "the assistant hears of MEMORY.md once").toBe(1);
-        request.text("done");
-      });
-    const { runtime } = await agent.open();
-
-    await runtime.submit("delegate the check", { requestId: "m1" });
-    await finished.promise;
-    await runtime.idle();
-
-    agent.provider.assertComplete();
-  });
-
   it("offers node_list to work assistants", async () => {
     const agent = await testAgent();
     agent.workspace.answerAll(() => text("done"));

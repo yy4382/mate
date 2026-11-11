@@ -65,10 +65,9 @@ const fileTools = [
  * not repeat it. The `MEMORY.md` convention is told to the Agent only; Palace never reads the file itself.
  */
 const WORKSPACE_FACTS =
-  "Every node you may use gives you a workspace of your own, and file paths start from it. Files and the directory " +
-  "remembered for commands are separate on each node and never synced. `MEMORY.md` in your primary node's workspace " +
-  "is your memory entry: keep it up to date and read it to recover what you know. Other nodes' workspaces start " +
-  "without one.";
+  "Every node you may use gives you a workspace of your own, and file paths start from it. Files are separate on " +
+  "each node and never synced. `MEMORY.md` in your primary node's workspace is your memory entry: keep it up to " +
+  "date and read it to recover what you know. Other nodes' workspaces start without one.";
 
 const toolArguments = z.object({ node: z.string().optional() }).catchall(z.json());
 
