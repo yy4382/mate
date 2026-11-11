@@ -73,6 +73,7 @@ export { AccountNames } from "./accounts.ts";
 export {
   AccountKind,
   type AccountView,
+  type ConversationActivity,
   type ConversationView,
   type Entry,
   type LiveEvent,

@@ -54,6 +54,14 @@ export const dateText = (value: string | number, options?: Intl.DateTimeFormatOp
   new Intl.DateTimeFormat(locale, options ?? { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(value),
   );
+/** A conversation's last activity: the time today, the weekday within the past week, otherwise the date. */
+export function activityText(at: number, now: number = Date.now()): string {
+  const day = (value: number) => new Date(value).setHours(0, 0, 0, 0);
+  const days = Math.round((day(now) - day(at)) / 86_400_000);
+  if (days < 1) return dateText(at, { timeStyle: "short" });
+  if (days < 7) return dateText(at, { weekday: "short" });
+  return dateText(at, { dateStyle: "short" });
+}
 export const listText = (values: readonly string[]): string =>
   new Intl.ListFormat(locale, { style: "short", type: "conjunction" }).format(values);
 

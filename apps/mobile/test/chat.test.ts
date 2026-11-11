@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ChatApp } from "@palace/chat";
-import type { Clock } from "@palace/clock";
+import { systemClock, type Clock } from "@palace/clock";
 import { type TimelineRef } from "@palace/chat/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { MobileChat, operationKey, type ChatPlatform, type ChatState } from "../src/chat.ts";
+import { inbox, MobileChat, operationKey, type ChatPlatform, type ChatState } from "../src/chat.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -31,7 +31,10 @@ function until(chat: MobileChat, condition: (state: ChatState) => boolean): Prom
 }
 function fixture(clock?: Clock) {
   const directory = mkdtempSync(join(tmpdir(), "palace-chat-test-"));
-  const server = new ChatApp(join(directory, "chat.sqlite"));
+  let serverNow = Date.UTC(2026, 0, 1, 9);
+  const server = new ChatApp(join(directory, "chat.sqlite"), {
+    clock: { now: () => serverNow, sleep: systemClock.sleep },
+  });
   const me = server.ensureAccount({
     externalId: "me",
     displayName: "小明",
@@ -198,6 +201,9 @@ function fixture(clock?: Clock) {
     me,
     other,
     ref,
+    tick: (ms: number) => {
+      serverNow += ms;
+    },
     writes,
     urls,
     requests,
@@ -775,5 +781,87 @@ describe("native chat public interface", () => {
       dm.conversationId,
     );
     expect(ids()).toEqual(order);
+  });
+  it("lists conversations by their newest top-level entry, whether or not its timeline was ever opened", async () => {
+    const f = fixture();
+    const dm = f.server.openDm(f.me, { requestId: "dm", other: f.other });
+    const quiet = f.server.createChannel(f.me, {
+      requestId: "quiet",
+      name: "quiet",
+      visibility: "public",
+    });
+    const dmRef = { conversation: dm.conversationId };
+    const say = (from: number, ref: TimelineRef, body: string) => {
+      f.tick(1000);
+      return f.server.send(from, ref, { requestId: crypto.randomUUID(), body, freshness: false });
+    };
+    say(f.me, f.ref, "channel first");
+    say(f.other, dmRef, "dm second");
+    await f.start();
+    const order = () => inbox(f.chat.getSnapshot()).map((row) => row.conversation.conversationId);
+    expect(order(), "newest first, a conversation without entries last").toEqual([
+      dm.conversationId,
+      f.ref.conversation,
+      quiet.conversationId,
+    ]);
+
+    say(f.other, f.ref, "channel third");
+    f.push();
+    await until(f.chat, (s) => s.latest.get(f.ref.conversation)?.seq === 2);
+    expect(f.chat.timeline(f.ref).loaded, "the channel was never opened").toBe(false);
+    expect(order()).toEqual([f.ref.conversation, dm.conversationId, quiet.conversationId]);
+
+    const root = f.server.readHistory(f.me, f.ref, {})[0];
+    if (root?.kind !== "message") throw new Error("expected a message");
+    say(f.other, { thread: root.messageId }, "reply in a thread");
+    say(f.other, dmRef, "dm fourth");
+    f.push();
+    await until(f.chat, (s) => s.latest.get(dm.conversationId)?.seq === 2);
+    expect(order(), "a thread reply does not move its conversation").toEqual([
+      dm.conversationId,
+      f.ref.conversation,
+      quiet.conversationId,
+    ]);
+  });
+  it("previews the newest entry with its sender in channels, plainly in direct messages, and as You for the viewer", async () => {
+    const f = fixture();
+    const dm = f.server.openDm(f.me, { requestId: "dm", other: f.other });
+    const dmRef = { conversation: dm.conversationId };
+    const send = (from: number, ref: TimelineRef, body: string) =>
+      f.server.send(from, ref, { requestId: crypto.randomUUID(), body, freshness: false });
+    send(f.other, f.ref, "\n## 第一行\n第二行");
+    send(f.other, dmRef, "hello there");
+    await f.start();
+    const preview = (conversation: number) =>
+      inbox(f.chat.getSnapshot()).find((row) => row.conversation.conversationId === conversation)
+        ?.preview;
+    expect(preview(f.ref.conversation)).toBe("小文: 第一行");
+    expect(preview(dm.conversationId)).toBe("hello there");
+
+    send(f.me, f.ref, "my answer");
+    send(f.me, dmRef, "my reply");
+    f.push();
+    await until(f.chat, (s) => s.latest.get(dm.conversationId)?.seq === 2);
+    expect(preview(f.ref.conversation)).toBe("You: my answer");
+    expect(preview(dm.conversationId)).toBe("You: my reply");
+  });
+  it("counts unread entries in a conversation's threads toward the conversation", async () => {
+    const f = fixture();
+    const root = f.server.send(f.me, f.ref, { requestId: "root", body: "root", freshness: false });
+    if (root.status !== "sent") throw new Error("expected sent");
+    f.server.send(f.other, f.ref, { requestId: "top", body: "top level", freshness: false });
+    f.server.send(
+      f.other,
+      { thread: root.messageId },
+      {
+        requestId: "reply",
+        body: "in the thread",
+        freshness: false,
+      },
+    );
+    await f.start();
+    const row = () => inbox(f.chat.getSnapshot())[0];
+    expect(f.chat.getSnapshot().unread.timelines.some((u) => u.inThread)).toBe(true);
+    expect(row()?.count).toBe(2);
   });
 });

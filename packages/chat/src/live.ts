@@ -1,8 +1,19 @@
 import { z } from "zod";
 import { accountView, listAccounts, type Actor } from "./accounts.ts";
-import type { LiveEvent, LiveEvents, LiveSnapshot, TimelineRef } from "./contracts.ts";
-import { conversationById, conversationView, listConversations } from "./conversations.ts";
-import type { ChatDatabase } from "./database.ts";
+import type {
+  ConversationActivity,
+  LiveEvent,
+  LiveEvents,
+  LiveSnapshot,
+  TimelineRef,
+} from "./contracts.ts";
+import {
+  READABLE_BY,
+  conversationById,
+  conversationView,
+  listConversations,
+} from "./conversations.ts";
+import { idList, type ChatDatabase } from "./database.ts";
 import { loadEntries } from "./entries.ts";
 import { Id } from "./identifiers.ts";
 import { unreadSummary } from "./inbox.ts";
@@ -79,6 +90,34 @@ function positionOf(cursor: string, state: LiveState): number | undefined {
   return position >= state.pruned_through && position <= state.head ? position : undefined;
 }
 
+const ActivityRow = z.object({ conversation_id: Id, entry_id: Id });
+
+/**
+ * The newest top-level entry of each conversation `viewer` may read; a conversation with none is left out. Both
+ * reads order by entry ID, so the loaded entries line up with the rows that named them.
+ */
+function conversationActivity(db: ChatDatabase, viewer: Actor): ConversationActivity[] {
+  const rows = db.all(
+    ActivityRow,
+    `SELECT c.id AS conversation_id, e.id AS entry_id FROM conversations c ${READABLE_BY}
+     JOIN timelines t ON t.conversation_id = c.id AND t.root_entry_id IS NULL
+     JOIN entries e ON e.timeline_id = t.id AND e.seq = t.last_seq
+     ORDER BY e.id`,
+    viewer.id,
+  );
+  const entries = loadEntries(
+    db,
+    { where: "e.id IN (SELECT value FROM json_each(?))", order: "e.id" },
+    idList(rows.map((row) => row.entry_id)),
+  );
+  return rows
+    .flatMap((row, index) => {
+      const entry = entries[index];
+      return entry === undefined ? [] : [{ conversationId: row.conversation_id, entry }];
+    })
+    .sort((a, b) => a.conversationId - b.conversationId);
+}
+
 export function liveSnapshot(
   db: ChatDatabase,
   viewer: Actor,
@@ -91,6 +130,7 @@ export function liveSnapshot(
     accounts: listAccounts(db),
     conversations: listConversations(db, viewer),
     unread: unreadSummary(db, viewer),
+    activity: conversationActivity(db, viewer),
     page:
       timeline === undefined
         ? null

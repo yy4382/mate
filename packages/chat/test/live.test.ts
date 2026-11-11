@@ -122,6 +122,37 @@ describe("3.9 live event stream", () => {
     app.close();
   });
 
+  it("a snapshot names the newest top-level entry of each conversation that has one, ignoring thread replies", () => {
+    const { app, owner, ada, general } = ownerAndAda();
+    const quiet = app.createChannel(owner, {
+      requestId: rid(),
+      name: "quiet",
+      visibility: "public",
+    });
+    const dm = app.openDm(owner, { requestId: rid(), other: ada });
+    const first = post(app, ada, general, "first");
+    post(app, ada, { thread: first.messageId }, "reply in thread");
+    const second = post(app, owner, general, "second");
+    const hello = post(app, ada, { conversation: dm.conversationId }, "hello");
+    post(app, ada, { thread: first.messageId }, "another reply");
+
+    expect(app.liveSnapshot(owner).activity).toEqual([
+      {
+        conversationId: general.conversation,
+        entry: expect.objectContaining({ messageId: second.messageId, body: "second" }),
+      },
+      {
+        conversationId: dm.conversationId,
+        entry: expect.objectContaining({ messageId: hello.messageId, body: "hello" }),
+      },
+    ]);
+    expect(
+      app.liveSnapshot(owner).activity.some((a) => a.conversationId === quiet.conversationId),
+      "a conversation without entries has none",
+    ).toBe(false);
+    app.close();
+  });
+
   it("a message committed while snapshots are being read is in each snapshot or in the events after its cursor", async () => {
     const { app, file, owner, ada, general } = ownerAndAda();
     const count = 100;

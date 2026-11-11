@@ -85,6 +85,8 @@ export type ChatState = {
   me: number;
   accounts: AccountView[];
   conversations: ConversationView[];
+  /** The newest top-level entry of each conversation that has one, by conversation ID. */
+  latest: ReadonlyMap<number, Entry>;
   unread: UnreadSummary;
   timelines: ReadonlyMap<string, Timeline>;
   drafts: ReadonlyMap<string, Draft>;
@@ -138,6 +140,7 @@ export class MobileChat {
     me: 0,
     accounts: [],
     conversations: [],
+    latest: new Map(),
     unread: { total: 0, mentions: 0, timelines: [] },
     timelines: new Map(),
     drafts: new Map(),
@@ -248,6 +251,7 @@ export class MobileChat {
       error: "",
       accounts: [],
       conversations: [],
+      latest: new Map(),
       timelines: new Map(),
       drafts: new Map(),
       operations: new Map(),
@@ -282,6 +286,7 @@ export class MobileChat {
             me: snapshot.me,
             accounts: snapshot.accounts,
             conversations: snapshot.conversations,
+            latest: new Map(snapshot.activity.map((a) => [a.conversationId, a.entry])),
             unread: snapshot.unread,
             error: "",
           });
@@ -340,12 +345,18 @@ export class MobileChat {
   private apply(batch: Extract<LiveEvents, { status: "events" }>) {
     let accounts = this.state.accounts;
     let conversations = this.state.conversations;
+    const latest = new Map(this.state.latest);
     const timelines = new Map(this.state.timelines);
     for (const event of batch.events) {
       if (event.type === "entry") {
         const key = timelineKey(event.timeline);
         const old = timelines.get(key);
         if (old) timelines.set(key, { ...old, entries: mergeEntries(old.entries, [event.entry]) });
+        if (
+          "conversation" in event.timeline &&
+          event.entry.seq > (latest.get(event.conversationId)?.seq ?? 0)
+        )
+          latest.set(event.conversationId, event.entry);
       } else if (event.type === "account") {
         accounts = upsert(accounts, event.account, (a) => a.accountId);
       } else if (event.type === "conversation") {
@@ -353,7 +364,7 @@ export class MobileChat {
       }
     }
     this.cursor = batch.cursor;
-    this.publish({ accounts, conversations, timelines, unread: batch.unread });
+    this.publish({ accounts, conversations, latest, timelines, unread: batch.unread });
   }
   timeline(ref: TimelineRef): Timeline {
     return this.state.timelines.get(timelineKey(ref)) ?? emptyTimeline;
@@ -611,4 +622,89 @@ export function conversationLabel(
         conversation.members.filter((id) => id !== me).map((id) => accountName(accounts, id)),
       ) || t("chat.empty_direct_message")
     : (conversation.name ?? "");
+}
+
+/** The text each task change shows wherever a task entry stands in for a message. */
+export const taskChangeKey = {
+  created: "chat.task_created",
+  claimed: "chat.task_claimed",
+  yielded: "chat.task_yielded",
+  transferred: "chat.task_transferred",
+  completed: "chat.task_completed",
+} as const;
+
+/** One line of the conversation list, derived entirely from `ChatState`. */
+export type InboxRow = {
+  conversation: ConversationView;
+  title: string;
+  kind: "human" | "agent" | "public" | "private";
+  preview: string;
+  /** When the newest top-level entry was written; null when the conversation has none. */
+  at: number | null;
+  /** Unread entries in the conversation and in its threads. */
+  count: number;
+  mentioned: boolean;
+};
+
+const firstLine = (body: string) =>
+  (body.split("\n").find((line) => line.trim() !== "") ?? "").trim().replace(/^#+\s*/, "");
+
+function preview(
+  entry: Entry,
+  conversation: ConversationView,
+  accounts: readonly AccountView[],
+  me: number,
+): string {
+  const name = (id: number) => {
+    const text = accountName(accounts, id);
+    return id === me ? t("common.you_name", { name: text }) : text;
+  };
+  if (entry.kind === "task")
+    return t(taskChangeKey[entry.change], { name: name(entry.actor), title: entry.title });
+  const text = firstLine(entry.body);
+  if (entry.author === me) return t("chat.preview_you", { text });
+  return conversation.kind === "dm"
+    ? text
+    : t("chat.preview_from", { name: accountName(accounts, entry.author), text });
+}
+
+/**
+ * The conversations the person follows or can message, newest activity first. A conversation with no entries
+ * follows them, newest conversation first. Unread threads count toward their conversation.
+ */
+export function inbox(state: ChatState): InboxRow[] {
+  return state.conversations
+    .filter((c) => !c.archived && (c.kind === "dm" || c.member))
+    .map((conversation): InboxRow => {
+      const entry = state.latest.get(conversation.conversationId);
+      const unread = state.unread.timelines.filter(
+        (u) => u.conversationId === conversation.conversationId,
+      );
+      const peer =
+        conversation.kind === "dm"
+          ? state.accounts.find(
+              (a) => conversation.members.includes(a.accountId) && a.accountId !== state.me,
+            )
+          : undefined;
+      return {
+        conversation,
+        title: conversationLabel(conversation, state.accounts, state.me),
+        kind: peer?.kind ?? (conversation.kind === "dm" ? "human" : conversation.kind),
+        preview: entry
+          ? preview(entry, conversation, state.accounts, state.me)
+          : peer
+            ? `${peer.kind === "agent" ? t("chat.agent") : t("chat.human")} · @${peer.handle}`
+            : conversation.kind === "private"
+              ? t("chat.private_channel")
+              : t("chat.public_channel"),
+        at: entry?.at ?? null,
+        count: unread.reduce((sum, u) => sum + u.unread, 0),
+        mentioned: unread.some((u) => u.mentioned && u.unread > 0),
+      };
+    })
+    .sort(
+      (a, b) =>
+        (b.at ?? -1) - (a.at ?? -1) ||
+        b.conversation.conversationId - a.conversation.conversationId,
+    );
 }
