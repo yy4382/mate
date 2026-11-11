@@ -2,6 +2,7 @@ import type { Context, JsonValue } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
 import {
   defineExtension,
+  section,
   type Harness,
   type JsonObject,
   type ToolExecutionApi,
@@ -59,6 +60,15 @@ const fileTools = [
   tool: Pick<ToolRegistration, "name" | "description" | "parameters">;
 }[];
 
+/**
+ * What every conversation needs to know about the workspace, said once here so the `node` parameter of four tools does
+ * not repeat it. The `MEMORY.md` convention is told to the Agent only; Palace never reads the file itself.
+ */
+const WORKSPACE_FACTS =
+  "Every node you may use gives you a workspace of your own, and file paths start from it. Files are separate on " +
+  "each node and never synced. `MEMORY.md` in your primary node's workspace is your memory entry: keep it up to " +
+  "date and read it to recover what you know. Other nodes' workspaces start without one.";
+
 const toolArguments = z.object({ node: z.string().optional() }).catchall(z.json());
 
 function withNode(parameters: { readonly properties?: object }): ToolRegistration["parameters"] {
@@ -68,8 +78,7 @@ function withNode(parameters: { readonly properties?: object }): ToolRegistratio
       ...parameters.properties,
       node: {
         type: "string",
-        description:
-          "要在哪个 node 上执行，用 `node_list` 查名字。不给就在你的主 node 上执行。每个已授权的 node 都有你自己的工作区，文件路径从该工作区开始；命令从本对话在该 node 上记住的目录开始，初始为工作区。各 node 的文件和目录记忆独立，不会同步。主 node 的 `MEMORY.md` 是你维护的记忆入口；主 node 初始化 `MEMORY.md`，其他 node 准备工作区时不初始化它。",
+        description: "要在哪个 node 上执行，用 `node_list` 查名字。不给就在你的主 node 上执行。",
       },
     },
   });
@@ -135,6 +144,7 @@ export function workspaceExtension(
 
   return defineExtension({
     name: "workspace",
+    sections: [section("workspace", () => WORKSPACE_FACTS)],
     tools: [
       bash,
       commands.stop,
