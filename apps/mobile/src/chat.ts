@@ -216,25 +216,31 @@ export class MobileChat {
     );
   }
   start(): void {
-    if (this.running || this.lifetime.signal.aborted) return;
     this.held?.release();
     this.held = null;
-    const controller = new AbortController();
-    this.live = controller;
-    this.publish({ connection: this.cursor === undefined ? "loading" : "reconnecting" });
-    this.running = this.follow(controller.signal).finally(() => {
-      this.running = undefined;
-    });
+    this.run();
   }
   pause(): void {
     this.held ??= hold();
     this.live?.abort();
     this.publish({ connection: "paused" });
   }
+  /** Restarts the stream; a pause that arrives while the old stream closes wins. */
   async resume(): Promise<void> {
-    this.pause();
+    this.held?.release();
+    this.held = null;
+    this.live?.abort();
     await this.running;
-    this.start();
+    this.run();
+  }
+  private run(): void {
+    if (this.held || this.running || this.lifetime.signal.aborted) return;
+    const controller = new AbortController();
+    this.live = controller;
+    this.publish({ connection: this.cursor === undefined ? "loading" : "reconnecting" });
+    this.running = this.follow(controller.signal).finally(() => {
+      this.running = undefined;
+    });
   }
   /** A person's retry: reconnects only while the owner lets the chat run. */
   async reconnect(): Promise<void> {
