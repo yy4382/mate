@@ -137,6 +137,28 @@ describe("mobile authentication public interface", () => {
     expect(auth.getSnapshot().kind).toBe("signed-in");
   });
 
+  it("restarts into the last verified identity while the stored cookie is checked, and a 401 still ends it", async () => {
+    const p = platform({ server, restore: false });
+    const auth = new MobileAuth(p.port);
+    await auth.start();
+    await auth.login("sam", "secret");
+    const signedIn = auth.getSnapshot();
+    if (signedIn.kind !== "signed-in") throw new Error("expected a signed-in session");
+    const renamed = { ...human, displayName: "山" };
+    auth.updateHuman(signedIn, renamed);
+    const me = deferred<Response>();
+    p.respond(() => me.promise);
+    const restarted = new MobileAuth(p.port);
+    const starting = restarted.start();
+    expect(restarted.getSnapshot()).toEqual({ kind: "checking", server, human: renamed });
+    me.resolve(reply({ error: "login-required" }, 401));
+    await starting;
+    expect(restarted.getSnapshot()).toMatchObject({ kind: "signed-out", notice: "expired" });
+    const again = new MobileAuth(p.port);
+    await again.start();
+    expect(again.getSnapshot()).toEqual({ kind: "signed-out", server, notice: null });
+  });
+
   it("ends access on an expired or revoked 401, including after restarting", async () => {
     const p = platform({ server, restore: true });
     const auth = new MobileAuth(p.port);

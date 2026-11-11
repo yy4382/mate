@@ -20,7 +20,10 @@ function until<T>(store: Store<T>, done: (state: T) => boolean) {
   });
 }
 
-async function fixture() {
+function setup({
+  saved = { server, restore: true },
+  me = async () => Response.json(human),
+}: { saved?: unknown; me?: () => Promise<Response> } = {}) {
   const requests: string[] = [];
   const notificationRequests: string[] = [];
   const permission = Promise.withResolvers<NotificationPermission>();
@@ -46,15 +49,13 @@ async function fixture() {
     },
   });
   const auth = new MobileAuth({
-    read: () => ({ server, restore: true }),
+    read: () => saved,
     write: () => {},
     clearCookies: async () => {},
     beforeClear: () => notifications.endSession(),
     fetch: async (url) => {
       requests.push(String(url));
-      return String(url).endsWith("/api/logout")
-        ? new Response(null, { status: 204 })
-        : Response.json(human);
+      return String(url).endsWith("/api/logout") ? new Response(null, { status: 204 }) : me();
     },
   });
   const chats: { running: boolean; resumes: number; closed: boolean }[] = [];
@@ -96,8 +97,6 @@ async function fixture() {
       },
     },
   });
-  // Auth publishes the verified identity, which alone starts the notification check.
-  await until(notifications, (state) => state.kind === "unavailable");
   return {
     auth,
     notifications,
@@ -110,6 +109,13 @@ async function fixture() {
     stop,
     emit: (state: AppStateStatus) => listener?.(state),
   };
+}
+
+async function fixture() {
+  const f = setup();
+  // Auth publishes the verified identity, which alone starts the notification check.
+  await until(f.notifications, (state) => state.kind === "unavailable");
+  return f;
 }
 
 it("keeps an in-flight permission decision and login intact through inactive-only system dialogs", async () => {
@@ -184,6 +190,39 @@ it("closes the chat and the notification session when the login ends", async () 
     expect(chat).toMatchObject({ closed: true });
     expect(f.chat()).toBeNull();
     expect(f.notifications.getSnapshot().kind).toBe("signed-out");
+  } finally {
+    f.stop();
+  }
+});
+
+it("opens a cold start's chat for the stored identity at once but runs it only after the cookie is verified", async () => {
+  const me = Promise.withResolvers<Response>();
+  const f = setup({ saved: { server, restore: true, human }, me: () => me.promise });
+  try {
+    expect(f.auth.getSnapshot().kind).toBe("checking");
+    expect(f.chat()).toMatchObject({ running: false, resumes: 0, closed: false });
+    expect(f.notificationRequests).toEqual([]);
+    me.resolve(Response.json(human));
+    await until(f.notifications, (state) => state.kind === "unavailable");
+    expect(f.chats).toHaveLength(1);
+    expect(f.chat()).toMatchObject({ running: true, resumes: 1 });
+  } finally {
+    f.stop();
+  }
+});
+
+it("closes a cold start's unverified chat unused when the cookie belongs to another account", async () => {
+  const me = Promise.withResolvers<Response>();
+  const previous = { accountId: 8, displayName: "Bo", handle: "bo", role: "admin", active: true };
+  const f = setup({ saved: { server, restore: true, human: previous }, me: () => me.promise });
+  try {
+    const unverified = f.chat();
+    expect(unverified).toMatchObject({ running: false, resumes: 0 });
+    me.resolve(Response.json(human));
+    await until(f.notifications, (state) => state.kind === "unavailable");
+    expect(unverified).toMatchObject({ closed: true, resumes: 0 });
+    expect(f.chats).toHaveLength(2);
+    expect(f.chat()).toMatchObject({ running: true, closed: false });
   } finally {
     f.stop();
   }
