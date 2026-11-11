@@ -3,13 +3,24 @@ import { z } from "zod";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { router, Stack, useIsFocused, useLocalSearchParams } from "expo-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AppState, FlatList, KeyboardAvoidingView, Pressable, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  AppState,
+  FlatList,
+  KeyboardAvoidingView,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { SymbolView } from "expo-symbols";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { Entry, TimelineRef } from "@palace/chat/contracts";
 import { accountName, timelineKey } from "@palace/chat/client";
 import { conversationLabel, operationKey, taskChangeKey } from "../../../chat";
 import {
   ConversationActionsContent,
+  MessageSheetHeader,
   type ConversationPresentation,
   type TaskCreationPresentation,
   type TaskPresentation,
@@ -20,7 +31,17 @@ import { setStringAsync } from "expo-clipboard";
 import { ChatComposer } from "../../../chat-composer";
 import { ChatMessage } from "../../../chat-message";
 import { useChat, useChatState } from "../../../session";
-import { Button, Caption, Empty, ErrorLine, Row, Section, Sheet, styles, Copy } from "../../../ui";
+import {
+  ActionSheet,
+  Button,
+  Caption,
+  Copy,
+  Empty,
+  ErrorLine,
+  Sheet,
+  styles,
+  type SheetAction,
+} from "../../../ui";
 import { useTheme } from "../../../theme";
 
 type Message = Extract<Entry, { kind: "message" }>;
@@ -62,11 +83,18 @@ export default function ConversationScreen() {
   const [rootError, setRootError] = useState("");
   const [rootRetry, setRootRetry] = useState(0);
   const [panel, setPanel] = useState<Panel | null>(null);
+  const live = state.connection === "live";
+  const failing = state.connection === "reconnecting";
+  const [outageLasts, setOutageLasts] = useState(false);
+  useEffect(() => {
+    if (!failing) return setOutageLasts(false);
+    const timer = setTimeout(() => setOutageLasts(true), 10_000);
+    return () => clearTimeout(timer);
+  }, [failing]);
   const messageMenu = panel?.kind === "message" ? panel.entry : null;
   const task = panel?.kind === "task" ? panel.task : null;
   const sourceLocate = useRef<AbortController | null>(null);
   useEffect(() => () => sourceLocate.current?.abort(), [seq, focused, task?.taskId]);
-  const [copiedMessage, setCopiedMessage] = useState<number | null>(null);
   const entries = timeline.entries;
   const canWrite = !!conversation?.member && !conversation.archived;
   useEffect(() => {
@@ -99,6 +127,49 @@ export default function ConversationScreen() {
   const taskSource = task
     ? entries.find((e): e is Message => e.kind === "message" && e.messageId === task.messageId)
     : undefined;
+  function messageActions(entry: Message): SheetAction[] {
+    return [
+      ...(thread === null
+        ? [
+            {
+              id: "reply",
+              title: t("chat.reply_in_thread"),
+              icon: "arrowshape.turn.up.left" as const,
+              run: () =>
+                router.push({ pathname: "/conversation", params: { id, thread: entry.messageId } }),
+            },
+          ]
+        : []),
+      {
+        id: "copy",
+        title: t("chat.copy_message"),
+        icon: "doc.on.doc" as const,
+        run: () => void setStringAsync(entry.body),
+      },
+      ...(canWrite
+        ? [
+            {
+              id: "task",
+              title: t("chat.make_a_task"),
+              icon: "checklist" as const,
+              run: () => {
+                const saved = state.operations.get(
+                  operationKey.taskCreation(entry.messageId),
+                )?.input;
+                setPanel({
+                  kind: "create-task",
+                  entry,
+                  presentation: {
+                    title: saved?.kind === "task-create" ? saved.title : "",
+                    source: false,
+                  },
+                });
+              },
+            },
+          ]
+        : []),
+    ];
+  }
   function message(entry: Message, isRoot = false) {
     const knownReplies =
       thread === null &&
@@ -115,10 +186,8 @@ export default function ConversationScreen() {
         targetSeq={seq}
         isRoot={isRoot}
         knownReplies={knownReplies}
-        onMenu={(entry) => {
-          setCopiedMessage(null);
-          setPanel({ kind: "message", entry });
-        }}
+        actions={messageActions(entry)}
+        onMenu={(entry) => setPanel({ kind: "message", entry })}
         onTask={(task) =>
           setPanel({ kind: "task", task, presentation: { transfer: false, to: null, query: "" } })
         }
@@ -129,6 +198,10 @@ export default function ConversationScreen() {
     );
   }
 
+  const title =
+    thread === null && conversation
+      ? conversationLabel(conversation, state.accounts, state.me)
+      : t("chat.thread");
   if (!conversation)
     return (
       <Empty
@@ -146,10 +219,27 @@ export default function ConversationScreen() {
           gestureEnabled: agentReturn === null,
           headerTransparent: false,
           headerStyle: { backgroundColor: c.background },
-          title:
-            thread === null
-              ? conversationLabel(conversation, state.accounts, state.me)
-              : t("chat.thread"),
+          title,
+          ...(live
+            ? {}
+            : {
+                headerTitle: () => (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <ActivityIndicator accessibilityLabel={t("chat.connecting")} color={c.muted} />
+                    <View style={{ flexShrink: 1 }}>
+                      <Text
+                        accessibilityRole="header"
+                        allowFontScaling={false}
+                        numberOfLines={1}
+                        style={{ fontSize: 17, fontWeight: "600", color: c.foreground }}
+                      >
+                        {title}
+                      </Text>
+                      {outageLasts && <Caption>{t("chat.not_connected_retrying")}</Caption>}
+                    </View>
+                  </View>
+                ),
+              }),
         }}
       />
       {agentReturn !== null && (
@@ -309,8 +399,16 @@ export default function ConversationScreen() {
           </View>
         )}
       </KeyboardAvoidingView>
+      {messageMenu && (
+        <ActionSheet
+          visible
+          header={<MessageSheetHeader entry={messageMenu} accounts={state.accounts} />}
+          actions={messageActions(messageMenu)}
+          onClose={() => setPanel((p) => (p?.kind === "message" ? null : p))}
+        />
+      )}
       <Sheet
-        visible={panel !== null}
+        visible={panel !== null && panel.kind !== "message"}
         title={
           panel?.kind === "conversation"
             ? t("chat.conversation_and_members")
@@ -318,9 +416,7 @@ export default function ConversationScreen() {
               ? t("chat.original_post")
               : panel?.kind === "create-task"
                 ? t("chat.make_a_task")
-                : panel?.kind === "task"
-                  ? t("chat.message_tasks")
-                  : t("chat.message")
+                : t("chat.message_tasks")
         }
         onClose={() => {
           sourceLocate.current?.abort();
@@ -336,61 +432,6 @@ export default function ConversationScreen() {
             }
             onClose={() => setPanel((p) => (p?.kind === "conversation" ? null : p))}
           />
-        )}
-        {messageMenu && (
-          <>
-            <Caption>
-              {accountName(state.accounts, messageMenu.author)} · {dateText(messageMenu.at)}
-            </Caption>
-            <Text numberOfLines={3} style={{ fontSize: 17, color: c.foreground, lineHeight: 26 }}>
-              {messageMenu.body}
-            </Text>
-            <Section>
-              {thread === null && (
-                <Row
-                  title={t("chat.reply_in_thread")}
-                  onPress={() => {
-                    const entry = messageMenu;
-                    setPanel(null);
-                    router.push({
-                      pathname: "/conversation",
-                      params: { id, thread: entry.messageId },
-                    });
-                  }}
-                />
-              )}
-              {canWrite && (
-                <Row
-                  title={t("chat.make_a_task")}
-                  onPress={() => {
-                    const saved = state.operations.get(
-                      operationKey.taskCreation(messageMenu.messageId),
-                    )?.input;
-                    setPanel({
-                      kind: "create-task",
-                      entry: messageMenu,
-                      presentation: {
-                        title: saved?.kind === "task-create" ? saved.title : "",
-                        source: false,
-                      },
-                    });
-                  }}
-                />
-              )}
-              <Row
-                title={
-                  copiedMessage === messageMenu.messageId
-                    ? t("chat.message_copied")
-                    : t("chat.copy_message")
-                }
-                onPress={() =>
-                  void setStringAsync(messageMenu.body).then(() =>
-                    setCopiedMessage(messageMenu.messageId),
-                  )
-                }
-              />
-            </Section>
-          </>
         )}
         {panel?.kind === "root" && root && message(root, true)}
         {panel?.kind === "create-task" && (
@@ -599,139 +640,179 @@ function TimelineList({
           />
         </View>
       )}
-      <FlatList
-        ref={list}
-        data={[...entries].reverse()}
-        inverted
-        onLayout={schedulePosition}
-        keyboardDismissMode="interactive"
-        keyboardShouldPersistTaps="handled"
-        maintainVisibleContentPosition={
-          destination === "done"
-            ? { minIndexForVisible: 0, ...(seq === null ? { autoscrollToTopThreshold: 80 } : {}) }
-            : undefined
-        }
-        viewabilityConfig={{ viewAreaCoveragePercentThreshold: 30 }}
-        onViewableItemsChanged={({ viewableItems }) => {
-          visible.current = new Set(
-            viewableItems.filter((item) => item.isViewable).map((item) => item.item.seq),
-          );
-          schedulePosition();
-        }}
-        onScrollToIndexFailed={({ index, averageItemLength, highestMeasuredFrameIndex }) => {
-          const target = jump.current;
-          if (target) target.positioned = false;
-          if (target && highestMeasuredFrameIndex > target.measured) {
-            target.measured = highestMeasuredFrameIndex;
-            target.attempts = 0;
+      <View style={{ flex: 1 }}>
+        <FlatList
+          ref={list}
+          data={[...entries].reverse()}
+          inverted
+          onLayout={schedulePosition}
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
+          maintainVisibleContentPosition={
+            destination === "done"
+              ? { minIndexForVisible: 0, ...(seq === null ? { autoscrollToTopThreshold: 80 } : {}) }
+              : undefined
           }
-          list.current?.scrollToOffset({ offset: index * averageItemLength, animated: false });
-        }}
-        keyExtractor={(entry) => String(entry.seq)}
-        onScroll={(event) => setBottom(event.nativeEvent.contentOffset.y < 80)}
-        scrollEventThrottle={100}
-        onContentSizeChange={() => {
-          if (initial.current && entries.length) {
-            list.current?.scrollToOffset({ offset: 0, animated: false });
-            initial.current = false;
-          }
-          schedulePosition();
-        }}
-        renderItem={({ item, index }) => {
-          const previous = entries[entries.length - index - 2];
-          return (
-            <View
-              onLayout={() => {
-                measured.current.add(item.seq);
-                if (jump.current?.seq === item.seq) schedulePosition();
-              }}
-            >
-              {(!previous ||
-                new Date(previous.at).toDateString() !== new Date(item.at).toDateString()) && (
-                <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 }}>
-                  <Caption>
-                    {dateText(item.at, {
-                      month: "long",
-                      day: "numeric",
-                    })}
-                  </Caption>
-                </View>
-              )}
-              {renderEntry(item)}
-            </View>
-          );
-        }}
-        ListEmptyComponent={
-          <View style={styles.page}>
-            <Copy>
-              {timeline.loading
-                ? t("chat.loading")
-                : timeline.error
-                  ? t("chat.could_not_load_messages")
-                  : t("chat.no_messages_yet_say_something_below")}
-            </Copy>
-          </View>
-        }
-        ListHeaderComponent={
-          state.connection !== "live" ? (
-            <View style={{ padding: 12, backgroundColor: c.subtle }}>
-              <Copy muted>
-                {state.connection === "loading"
-                  ? t("chat.connecting")
-                  : state.connection === "connecting"
-                    ? t("chat.connecting_to_live_messages")
-                    : t("chat.disconnected_reconnecting_automatically_your_draft_is_kept")}
+          viewabilityConfig={{ viewAreaCoveragePercentThreshold: 30 }}
+          onViewableItemsChanged={({ viewableItems }) => {
+            visible.current = new Set(
+              viewableItems.filter((item) => item.isViewable).map((item) => item.item.seq),
+            );
+            schedulePosition();
+          }}
+          onScrollToIndexFailed={({ index, averageItemLength, highestMeasuredFrameIndex }) => {
+            const target = jump.current;
+            if (target) target.positioned = false;
+            if (target && highestMeasuredFrameIndex > target.measured) {
+              target.measured = highestMeasuredFrameIndex;
+              target.attempts = 0;
+            }
+            list.current?.scrollToOffset({ offset: index * averageItemLength, animated: false });
+          }}
+          keyExtractor={(entry) => String(entry.seq)}
+          onScroll={(event) => setBottom(event.nativeEvent.contentOffset.y < 80)}
+          scrollEventThrottle={100}
+          onContentSizeChange={() => {
+            if (initial.current && entries.length) {
+              list.current?.scrollToOffset({ offset: 0, animated: false });
+              initial.current = false;
+            }
+            schedulePosition();
+          }}
+          renderItem={({ item, index }) => {
+            const previous = entries[entries.length - index - 2];
+            return (
+              <View
+                onLayout={() => {
+                  measured.current.add(item.seq);
+                  if (jump.current?.seq === item.seq) schedulePosition();
+                }}
+              >
+                {(!previous ||
+                  new Date(previous.at).toDateString() !== new Date(item.at).toDateString()) && (
+                  <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 }}>
+                    <Caption>
+                      {dateText(item.at, {
+                        month: "long",
+                        day: "numeric",
+                      })}
+                    </Caption>
+                  </View>
+                )}
+                {renderEntry(item)}
+              </View>
+            );
+          }}
+          ListEmptyComponent={
+            <View style={styles.page}>
+              <Copy>
+                {timeline.loading
+                  ? t("chat.loading")
+                  : timeline.error
+                    ? t("chat.could_not_load_messages")
+                    : t("chat.no_messages_yet_say_something_below")}
               </Copy>
             </View>
-          ) : undefined
-        }
-        ListFooterComponent={
-          <View>
-            {timeline.error ? (
-              <View style={styles.page}>
-                <ErrorLine text={timeline.error} />
-                <Button
-                  title={t("chat.retry_loading")}
-                  onPress={() => {
-                    // A target that failed for want of this page is located again once it loads.
-                    if (destination === "failed") settled.current = false;
-                    void chat.retryLoad(ref, timeline.loaded);
+          }
+          ListFooterComponent={
+            <View>
+              {timeline.error ? (
+                <View style={styles.page}>
+                  <ErrorLine text={timeline.error} />
+                  <Button
+                    title={t("chat.retry_loading")}
+                    onPress={() => {
+                      // A target that failed for want of this page is located again once it loads.
+                      if (destination === "failed") settled.current = false;
+                      void chat.retryLoad(ref, timeline.loaded);
+                    }}
+                  />
+                </View>
+              ) : null}
+              {entries[0] && !timeline.exhausted && (
+                <View style={{ padding: 12 }}>
+                  <Button
+                    title={timeline.loading ? t("chat.loading") : t("chat.load_earlier_messages")}
+                    disabled={timeline.loading}
+                    onPress={() => void chat.load(ref, true)}
+                  />
+                </View>
+              )}
+            </View>
+          }
+        />
+        {!composing &&
+          (seq !== null
+            ? destination !== "missing" && destination !== "failed"
+            : !bottom && destination === "done") && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                count ? t("chat.unread_latest", { count }) : t("chat.back_to_latest_messages")
+              }
+              hitSlop={4}
+              onPress={() => {
+                if (seq !== null) router.setParams({ seq: undefined });
+                else {
+                  list.current?.scrollToOffset({ offset: 0, animated: false });
+                  setBottom(true);
+                }
+              }}
+              style={({ pressed }) => ({
+                position: "absolute",
+                right: 16,
+                bottom: 12,
+                width: 40,
+                height: 40,
+                borderRadius: 20,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: c.surface,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: c.border,
+                shadowColor: "#000",
+                shadowOpacity: 0.15,
+                shadowRadius: 4,
+                shadowOffset: { width: 0, height: 2 },
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <SymbolView
+                name="chevron.down"
+                size={18}
+                weight="semibold"
+                tintColor={c.foreground}
+              />
+              {count > 0 && (
+                <View
+                  style={{
+                    position: "absolute",
+                    top: -8,
+                    minWidth: 20,
+                    height: 20,
+                    paddingHorizontal: 6,
+                    borderRadius: 10,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: c.accent,
                   }}
-                />
-              </View>
-            ) : null}
-            {entries[0] && !timeline.exhausted && (
-              <View style={{ padding: 12 }}>
-                <Button
-                  title={timeline.loading ? t("chat.loading") : t("chat.load_earlier_messages")}
-                  disabled={timeline.loading}
-                  onPress={() => void chat.load(ref, true)}
-                />
-              </View>
-            )}
-          </View>
-        }
-      />
+                >
+                  <Text
+                    maxFontSizeMultiplier={1.2}
+                    style={{ fontSize: 12, fontWeight: "600", color: c.background }}
+                  >
+                    {count > 99 ? "99+" : numberText(count)}
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+          )}
+      </View>
       {readError ? (
         <View style={{ paddingHorizontal: 16 }}>
           <Button title={readError} onPress={markRead} />
         </View>
       ) : null}
-      {!composing &&
-        (seq !== null
-          ? destination !== "missing" && destination !== "failed"
-          : !bottom && destination === "done") && (
-          <Button
-            title={count ? t("chat.unread_latest", { count }) : t("chat.back_to_latest_messages")}
-            onPress={() => {
-              if (seq !== null) router.setParams({ seq: undefined });
-              else {
-                list.current?.scrollToOffset({ offset: 0, animated: false });
-                setBottom(true);
-              }
-            }}
-          />
-        )}
     </>
   );
 }

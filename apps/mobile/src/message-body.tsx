@@ -8,10 +8,12 @@ export function MessageBody({
   text,
   accounts,
   mentions,
+  selectable = true,
 }: {
   text: string;
   accounts: readonly AccountView[];
   mentions: readonly number[];
+  selectable?: boolean;
 }) {
   const c = useTheme();
   return (
@@ -19,7 +21,7 @@ export function MessageBody({
       <EnrichedMarkdownText
         markdown={text}
         flavor="github"
-        selectable
+        selectable={selectable}
         allowFontScaling
         maxFontSizeMultiplier={0}
         enableTaskListItemToggle={false}

@@ -1,5 +1,6 @@
-import { t } from "./i18n";
+import { t, dateText } from "./i18n";
 import { useState, type ReactNode } from "react";
+import { Text, View } from "react-native";
 import type { AccountView, ConversationView, Entry } from "@palace/chat/contracts";
 import { accountName } from "@palace/chat/client";
 import {
@@ -23,6 +24,41 @@ import {
   Row,
   Section,
 } from "./ui";
+import { useTheme } from "./theme";
+
+/** Whose message an action sheet is about: the author, the time and the first lines of the body. */
+export function MessageSheetHeader({
+  entry,
+  accounts,
+}: {
+  entry: Extract<Entry, { kind: "message" }>;
+  accounts: readonly AccountView[];
+}) {
+  const c = useTheme();
+  const author = accounts.find((a) => a.accountId === entry.author);
+  return (
+    <View accessible style={{ gap: 6 }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+        <Avatar
+          name={accountName(accounts, entry.author)}
+          kind={author?.kind ?? "human"}
+          size={28}
+        />
+        <Text
+          accessibilityRole="header"
+          numberOfLines={1}
+          style={{ flexShrink: 1, fontSize: 16, fontWeight: "600", color: c.foreground }}
+        >
+          {accountName(accounts, entry.author)}
+        </Text>
+        <Caption>{dateText(entry.at, { hour: "2-digit", minute: "2-digit" })}</Caption>
+      </View>
+      <Text numberOfLines={2} style={{ fontSize: 15, lineHeight: 21, color: c.muted }}>
+        {entry.body}
+      </Text>
+    </View>
+  );
+}
 
 function useAction(key: string) {
   const state = useChatState();
