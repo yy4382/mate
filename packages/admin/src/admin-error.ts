@@ -14,6 +14,9 @@ import type { z } from "zod";
  * - `unsupported-thinking-level`: the model does not accept that thinking level. It is refused, never lowered.
  * - `agent-closed`: the Agent is paused or closed, so there is nothing running to watch.
  * - `unknown-assistant`: the Agent has no work assistant by that name.
+ * - `unknown-webhook`: no webhook has that ID.
+ * - `invalid-webhook`: a delivery named no webhook, gave the wrong secret, or named a webhook whose Agent is gone.
+ *   The three are not told apart.
  * - `node-offline`: the Agent's node is not connected, or its connection was lost before it answered.
  * - `outside-workspace`: the path leaves the Agent's workspace, by `..`, an absolute path, or a symbolic link.
  * - `not-found`: the path, or the Agent's workspace on its node, does not exist.
@@ -31,6 +34,8 @@ export type AdminErrorReason =
   | "unsupported-thinking-level"
   | "agent-closed"
   | "unknown-assistant"
+  | "unknown-webhook"
+  | "invalid-webhook"
   | "node-offline"
   | "outside-workspace"
   | "not-found"

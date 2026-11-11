@@ -19,6 +19,7 @@ import {
 } from "../ui";
 import { AgentFallback, stateLabel, useAgent, type ReadableAgent } from "./Agents";
 import { NodeAccess } from "./NodeAccess";
+import { Webhooks } from "./Webhooks";
 import {
   useCanNavigate,
   useClient,
@@ -32,7 +33,7 @@ import { Watch } from "./Watch";
 import { Workspace } from "./Workspace";
 import { ErrorLine, Outcome } from "./ui";
 
-type Destination = "settings" | "access" | "usage";
+type Destination = "settings" | "access" | "usage" | "webhooks";
 function Settings({ agent, refresh }: { agent: ReadableAgent; refresh(): void }) {
   const client = useClient();
   const ready = useManagementAccess().kind === "ready";
@@ -134,6 +135,8 @@ export function AgentDestination({
         <ErrorLine error={agents.error} />
         {destination === "access" ? (
           <NodeAccess agent={agent} refresh={agents.refresh} />
+        ) : destination === "webhooks" ? (
+          <Webhooks agent={agent} />
         ) : (
           <Usage usage={agent.usage} />
         )}
@@ -180,6 +183,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
       settings: "/agents/[id]/settings",
       access: "/agents/[id]/access",
       usage: "/agents/[id]/usage",
+      webhooks: "/agents/[id]/webhooks",
     } as const;
     router.push({ pathname: paths[page], params: { id: agentId } });
   };
@@ -318,6 +322,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                       title={t("management.node_access")}
                       onPress={() => destination("access")}
                     />
+                    <Row title={t("management.webhooks")} onPress={() => destination("webhooks")} />
                     <Row title={t("management.usage")} onPress={() => destination("usage")} />
                   </Section>
                 </>

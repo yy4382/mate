@@ -21,7 +21,15 @@ import {
 } from "./http.ts";
 import { Humans, bootstrapHumans, SESSION_TTL_MS, type Session } from "./humans.ts";
 import { vapidKeys, webPushSender } from "./push.ts";
-import { adminRoutes, chatRoutes, matchRoute, requireRole } from "./routes.ts";
+import {
+  adminRoutes,
+  chatRoutes,
+  deliverToWebhook,
+  matchRoute,
+  requireRole,
+  WEBHOOK_BODY_MAX_BYTES,
+  WEBHOOK_DELIVERY,
+} from "./routes.ts";
 import { openShellTables } from "./store.ts";
 import { openApns, type ApnsOptions } from "./apns.ts";
 
@@ -118,7 +126,11 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
       if (method !== "GET") requireSameOrigin(request);
       // The session is looked up only once the whole request has arrived, so a request still arriving when its
       // session logs out acts as nobody.
-      const body = method === "GET" ? undefined : await readBody(request);
+      const delivery = method === "POST" ? WEBHOOK_DELIVERY.exec(url.pathname) : null;
+      const body =
+        method === "GET"
+          ? undefined
+          : await readBody(request, delivery === null ? undefined : WEBHOOK_BODY_MAX_BYTES);
       if (method === "POST" && url.pathname === "/api/login") {
         const input = parseBody(LoginInput, parseJson(request, body));
         const account = chat.findHuman(input.handle);
@@ -136,6 +148,18 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
       if (method === "POST" && url.pathname === "/api/logout") {
         if (token !== undefined) humans.logOut(token);
         return sendJson(response, 204, undefined, { "set-cookie": sessionCookie(undefined) });
+      }
+      if (delivery !== null) {
+        const { authorization } = request.headers;
+        const idempotencyKey = request.headers["idempotency-key"];
+        const key = typeof idempotencyKey === "string" ? idempotencyKey : undefined;
+        const accepted = await deliverToWebhook(
+          admin,
+          delivery[1] ?? "",
+          { authorization, key },
+          parseJson(request, body),
+        );
+        return sendJson(response, 202, accepted);
       }
       const session = humans.session(token);
       if (session === undefined) return sendJson(response, 401, { error: "login-required" });

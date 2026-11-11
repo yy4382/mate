@@ -1,13 +1,14 @@
 import { t, locale } from "../i18n.ts";
 import { pairingCommand } from "@palace/admin/client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Link2, Pencil, Server } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Link2, Pencil, Server } from "lucide-react";
+import { useState } from "react";
 import { ApiError, post, put } from "../shell/api.ts";
 import { refusalText } from "../shell/humans.ts";
 import {
   Badge,
   Button,
+  CopyBlock,
   Dialog,
   EmptyState,
   ErrorLine,
@@ -15,7 +16,6 @@ import {
   Input,
   PageHeader,
   StatusDot,
-  buttonClass,
 } from "../shell/ui.tsx";
 import { adminKeys, useNodes, type NodeView } from "./data.ts";
 
@@ -133,47 +133,6 @@ function NodeRow({ node }: { node: NodeView }) {
       </div>
       {renaming ? <RenameNode node={node} onClose={() => setRenaming(false)} /> : null}
     </li>
-  );
-}
-
-/** A mono block with a button that copies its text; the button shows a check for two seconds. */
-function CopyBlock(props: { label: string; text: string; testId?: string }) {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 2000);
-    return () => clearTimeout(timer);
-  }, [copied]);
-  return (
-    <div className="flex items-start gap-2 rounded-md border border-border bg-subtle py-2 pl-3 pr-2">
-      <code
-        className="min-w-0 flex-1 break-all py-1 font-mono text-xs leading-5"
-        {...(props.testId === undefined ? {} : { "data-testid": props.testId })}
-      >
-        {props.text}
-      </code>
-      <button
-        type="button"
-        aria-label={props.label}
-        className={buttonClass({ variant: "ghost", size: "icon-sm" })}
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(props.text);
-            setCopied(true);
-          } catch {
-            setCopied(false);
-          }
-        }}
-      >
-        {copied ? (
-          <span className="inline-flex transition-[opacity,scale] duration-150 ease-out-expo starting:opacity-0 motion-safe:starting:scale-95 motion-reduce:transition-opacity motion-reduce:duration-[120ms] [html[data-input=keyboard]_&]:transition-none">
-            <Check aria-hidden className="text-success" />
-          </span>
-        ) : (
-          <Copy aria-hidden />
-        )}
-      </button>
-    </div>
   );
 }
 

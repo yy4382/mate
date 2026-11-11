@@ -82,6 +82,8 @@ export function describe(error: unknown): string {
       "unsupported-thinking-level": t("errors.unsupported-thinking-level"),
       "agent-closed": t("errors.agent-closed"),
       "unknown-assistant": t("errors.unknown-assistant"),
+      "unknown-webhook": t("errors.unknown-webhook"),
+      "invalid-webhook": t("errors.invalid-webhook"),
       "node-offline": t("errors.node-offline"),
       "outside-workspace": t("errors.outside-workspace"),
       "not-found": t("errors.not-found"),

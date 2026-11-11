@@ -402,7 +402,9 @@
     "method-not-allowed": "This operation is not supported.",
     "requestFailed": "Request failed ({{code}}).",
     "network": "Connection failed. Check your network and try again.",
-    "unexpected": "The action failed. Please try again."
+    "unexpected": "The action failed. Please try again.",
+    "unknown-webhook": "That webhook no longer exists.",
+    "invalid-webhook": "The webhook or its secret is not valid."
   },
   "taskErrors": {
     "claimed": "This task has already been claimed.",
@@ -434,5 +436,35 @@
     "mate_background_command": "Background command",
     "mate_input_delivery": "Delivery",
     "mate_assistant_anchor": "Work assistant"
+  },
+  "Webhooks": {
+    "webhooks": "Webhooks",
+    "description": "An outside system, such as CI or a cron job, can send this Agent a message by calling a webhook. The message wakes the Agent and shows in Observe, never in chat.",
+    "newWebhook": "New webhook",
+    "name": "Name",
+    "nameHint": "Shown to the Agent as the sender, 1 to 64 characters.",
+    "create": "Create webhook",
+    "creating": "Creating…",
+    "cancel": "Cancel",
+    "none": "No webhooks yet",
+    "noneDescription": "Create one so an outside system can send this Agent a message.",
+    "url": "URL",
+    "copyCurl": "Copy curl",
+    "moreFor": "More for webhook {{name}}",
+    "rotateSecret": "Rotate secret",
+    "deleteWebhook": "Delete webhook",
+    "rotateNamed": "Rotate the secret of {{name}}?",
+    "rotateDescription": "The current secret stops working at once. Callers must switch to the new one.",
+    "rotate": "Rotate",
+    "deleteNamed": "Delete {{name}}?",
+    "deleteDescription": "The URL and its secret stop working at once. This cannot be undone.",
+    "delete": "Delete",
+    "secretTitle": "Webhook secret for {{name}}",
+    "secretDescription": "Copy it now. It is shown only once.",
+    "secret": "Secret",
+    "copySecret": "Copy secret",
+    "exampleCall": "Example call",
+    "copyExample": "Copy example",
+    "done": "Done"
   }
 }

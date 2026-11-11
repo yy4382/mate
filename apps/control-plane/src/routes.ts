@@ -1,4 +1,4 @@
-import type { Admin } from "@palace/admin";
+import { WEBHOOK_TEXT_MAX_BYTES, type Admin } from "@palace/admin";
 import type { ChatApp } from "@palace/chat";
 import { PushSubscription } from "@palace/chat/contracts";
 import type { ApnsConfig } from "./apns.ts";
@@ -310,6 +310,27 @@ export function adminRoutes(admin: Admin): Route[] {
       path: "/api/admin/agents/:id/workspace",
       json: ({ params, query }) => admin.browseWorkspace(agentId(params), query.get("path") ?? "."),
     },
+    {
+      method: "GET",
+      path: "/api/admin/agents/:id/webhooks",
+      json: ({ params }) => admin.webhooks(agentId(params)),
+    },
+    {
+      method: "POST",
+      path: "/api/admin/agents/:id/webhooks",
+      json: ({ params, body }) =>
+        admin.createWebhook(agentId(params), forwarded<{ name: string }>(body)),
+    },
+    {
+      method: "POST",
+      path: "/api/admin/webhooks/:id/rotate",
+      json: ({ params }) => admin.rotateWebhook(params.id ?? ""),
+    },
+    {
+      method: "DELETE",
+      path: "/api/admin/webhooks/:id",
+      json: ({ params }) => admin.deleteWebhook(params.id ?? ""),
+    },
     { method: "GET", path: "/api/admin/providers", json: () => admin.providers() },
     {
       method: "PUT",
@@ -335,6 +356,35 @@ export function adminRoutes(admin: Admin): Route[] {
       json: () => admin.createPairingToken(),
     },
   ]);
+}
+
+/**
+ * The most a delivery's body can be: JSON writes a text byte as at most 6 bytes (`\u00XX`), so a 32 KiB text always
+ * fits, plus room for the key and braces. Far below the 1 MiB other requests may carry.
+ */
+export const WEBHOOK_BODY_MAX_BYTES = WEBHOOK_TEXT_MAX_BYTES * 6 + 1024;
+
+/** The delivery route of an outside system. It carries no session: the webhook's secret is the credential. */
+export const WEBHOOK_DELIVERY = /^\/api\/webhooks\/([^/]+)$/;
+
+/**
+ * One delivery to a webhook: `Authorization: Bearer <secret>`, `{ text }`, and an optional `Idempotency-Key`. Without
+ * the header, or with another scheme, the secret is empty, which no webhook has.
+ */
+export async function deliverToWebhook(
+  admin: Admin,
+  webhookId: string,
+  headers: { authorization: string | undefined; key: string | undefined },
+  body: unknown,
+): Promise<{ requestId: string }> {
+  const secret = /^Bearer (\S+)$/i.exec(headers.authorization ?? "")?.[1] ?? "";
+  // The admin module checks the secret first and the body's shape after, so a caller without the secret learns
+  // nothing about what a body must look like.
+  const fields = typeof body === "object" && body !== null && !Array.isArray(body) ? body : {};
+  return admin.deliverWebhook(webhookId, secret, {
+    ...(fields as { text: string }),
+    key: headers.key,
+  });
 }
 
 /** The route for `method` and `pathname`, with its parameters. */

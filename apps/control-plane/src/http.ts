@@ -41,6 +41,8 @@ const ADMIN_STATUS: Record<AdminErrorReason, number> = {
   "unknown-node": 404,
   "unknown-provider": 404,
   "unknown-assistant": 404,
+  "unknown-webhook": 404,
+  "invalid-webhook": 401,
   "agent-exists": 409,
   "name-taken": 409,
   "no-credentials": 409,
@@ -96,12 +98,15 @@ export function sendJson(
 }
 
 /** The request's body, read to its end without looking at it; undefined when it has none. */
-export async function readBody(request: IncomingMessage): Promise<Buffer | undefined> {
+export async function readBody(
+  request: IncomingMessage,
+  maxBytes = MAX_BODY_BYTES,
+): Promise<Buffer | undefined> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request as AsyncIterable<Buffer>) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, "body-too-large");
+    if (size > maxBytes) throw new HttpError(413, "body-too-large");
     chunks.push(chunk);
   }
   return size === 0 ? undefined : Buffer.concat(chunks);

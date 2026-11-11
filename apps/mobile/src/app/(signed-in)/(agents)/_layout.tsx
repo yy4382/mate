@@ -33,6 +33,7 @@ export default function AgentsLayout() {
       <Stack.Screen name="agents/[id]/settings" options={{ title: t("management.settings") }} />
       <Stack.Screen name="agents/[id]/access" options={{ title: t("management.node_access") }} />
       <Stack.Screen name="agents/[id]/usage" options={{ title: t("management.usage") }} />
+      <Stack.Screen name="agents/[id]/webhooks" options={{ title: t("management.webhooks") }} />
       <Stack.Screen name="agents/[id]/workspace" options={{ title: t("management.workspace") }} />
       <Stack.Screen name="agents/prerequisites/nodes" options={{ title: t("common.node") }} />
       <Stack.Screen

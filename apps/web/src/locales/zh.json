@@ -402,7 +402,9 @@
     "method-not-allowed": "不支持这个操作。",
     "requestFailed": "请求失败（{{code}}）。",
     "network": "连接失败，请检查网络后重试。",
-    "unexpected": "操作失败，请重试。"
+    "unexpected": "操作失败，请重试。",
+    "unknown-webhook": "这个 webhook 已经不存在。",
+    "invalid-webhook": "webhook 或它的密钥无效。"
   },
   "taskErrors": {
     "claimed": "任务已被认领。",
@@ -434,5 +436,35 @@
     "mate_background_command": "后台命令",
     "mate_input_delivery": "投递",
     "mate_assistant_anchor": "工作助手"
+  },
+  "Webhooks": {
+    "webhooks": "Webhook",
+    "description": "CI、定时任务等外部系统可以调用 webhook，给这个 Agent 发一条消息。消息会唤醒 Agent，只在观察里显示，不会出现在聊天里。",
+    "newWebhook": "新建 webhook",
+    "name": "名称",
+    "nameHint": "作为发送者的名字告诉 Agent，1 到 64 个字符。",
+    "create": "创建 webhook",
+    "creating": "正在创建…",
+    "cancel": "取消",
+    "none": "还没有 webhook",
+    "noneDescription": "创建一个，外部系统就能给这个 Agent 发消息。",
+    "url": "地址",
+    "copyCurl": "复制 curl",
+    "moreFor": "{{name}} 的更多操作",
+    "rotateSecret": "轮换密钥",
+    "deleteWebhook": "删除 webhook",
+    "rotateNamed": "轮换 {{name}} 的密钥？",
+    "rotateDescription": "当前密钥立即失效，调用方必须换成新的密钥。",
+    "rotate": "轮换",
+    "deleteNamed": "删除 {{name}}？",
+    "deleteDescription": "地址和密钥立即失效，无法撤销。",
+    "delete": "删除",
+    "secretTitle": "{{name}} 的 webhook 密钥",
+    "secretDescription": "现在就复制，它只显示这一次。",
+    "secret": "密钥",
+    "copySecret": "复制密钥",
+    "exampleCall": "调用示例",
+    "copyExample": "复制示例",
+    "done": "完成"
   }
 }

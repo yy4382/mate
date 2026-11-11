@@ -199,3 +199,13 @@ export function observeEvents(state: Observation, events: AgentEvent[] | "ended"
 /** The command an operator runs on a node's machine to pair it with this control plane. */
 export const pairingCommand = (controlPlane: string, pairingToken: string) =>
   `palace node configure --control-plane ${controlPlane} --pairing-token ${pairingToken}`;
+
+/** The address an outside system posts to for a webhook. */
+export const webhookUrl = (controlPlane: string, webhookId: string) =>
+  `${controlPlane}/api/webhooks/${webhookId}`;
+
+/** A curl command that delivers a message; without the secret in hand it reads it from `$WEBHOOK_SECRET`. */
+export const webhookCurl = (controlPlane: string, webhookId: string, secret?: string) =>
+  `curl -X POST '${webhookUrl(controlPlane, webhookId)}' ` +
+  `-H 'Authorization: Bearer ${secret ?? "$WEBHOOK_SECRET"}' ` +
+  `-H 'Content-Type: application/json' -d '{"text":"hello"}'`;

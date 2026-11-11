@@ -1,10 +1,12 @@
 export {
   openAdmin,
+  WEBHOOK_TEXT_MAX_BYTES,
   type Admin,
   type AdminGateway,
   type AdminOptions,
   type AgentView,
   type ProviderView,
+  type WebhookView,
 } from "./admin.ts";
 export type { WorkspaceListing } from "@palace/node-protocol";
 export type { NodeStatusResult } from "@palace/gateway";
