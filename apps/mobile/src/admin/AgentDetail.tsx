@@ -129,7 +129,7 @@ export function AgentDestination({
   if (agent && agent.state !== "unreadable") {
     if (destination === "settings") return <Settings agent={agent} refresh={agents.refresh} />;
     return (
-      <Screen onRefresh={agents.refresh} refreshing={agents.loading}>
+      <Screen onRefresh={agents.refresh}>
         <Caption>{agent.displayName ?? agentId}</Caption>
         <ErrorLine error={agents.error} />
         {destination === "access" ? (
@@ -245,7 +245,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
           navigation={navigation}
         />
       ) : (
-        <Screen grouped={false} onRefresh={agents.refresh} refreshing={agents.loading}>
+        <Screen grouped={false} onRefresh={agents.refresh}>
           {!agent ? (
             <AgentFallback agents={agents} agent={agent}>
               <Button

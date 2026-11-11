@@ -82,7 +82,7 @@ export function NodeAccess({ agent, refresh }: { agent: ReadableAgent; refresh()
       {nodes.error != null && (
         <Button title={t("management.reload_nodes")} onPress={nodes.refresh} />
       )}
-      <Loading loading={nodes.loading && !nodes.data} />
+      <Loading loading={nodes.loading} />
       <Section
         title={t("management.paired_nodes")}
         footer={t("management.revoking_access_does_not_delete_files_or")}

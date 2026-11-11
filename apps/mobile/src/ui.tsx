@@ -67,17 +67,23 @@ export function Caption({ children, accent = false }: { children: ReactNode; acc
 export function Screen({
   children,
   onRefresh,
-  refreshing = false,
   topInset = false,
   grouped = true,
 }: {
   children: ReactNode;
-  onRefresh?: () => void;
-  refreshing?: boolean;
+  /** Pulling shows the spinner until the returned promise settles. */
+  onRefresh?: () => Promise<unknown>;
   topInset?: boolean;
   grouped?: boolean;
 }) {
   const c = useTheme();
+  const [pulling, setPulling] = useState(false);
+  const pull = onRefresh
+    ? () => {
+        setPulling(true);
+        void onRefresh().finally(() => setPulling(false));
+      }
+    : undefined;
   return (
     <SafeAreaView
       style={{ flex: 1, backgroundColor: grouped ? c.grouped : c.background }}
@@ -88,9 +94,7 @@ export function Screen({
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
         contentInsetAdjustmentBehavior="automatic"
-        refreshControl={
-          onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} /> : undefined
-        }
+        refreshControl={pull ? <RefreshControl refreshing={pulling} onRefresh={pull} /> : undefined}
         contentContainerStyle={styles.page}
       >
         {children}

@@ -42,7 +42,7 @@ export function Workspace({
           {t("management.reload")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
-      <Screen grouped={false} onRefresh={result.refresh} refreshing={result.loading}>
+      <Screen grouped={false} onRefresh={result.refresh}>
         {navigation}
         <Caption>{t("management.workspace_summary", { name, node: nodeName })}</Caption>
         <Section>
@@ -75,7 +75,7 @@ export function Workspace({
             )}
           </>
         )}
-        <Loading loading={result.loading && !data} />
+        <Loading loading={result.loading} />
         {data?.kind === "directory" && (
           <Section
             footer={

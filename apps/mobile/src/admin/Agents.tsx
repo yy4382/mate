@@ -48,7 +48,7 @@ export function AgentFallback({
   return (
     <>
       <ErrorLine error={agents.error} />
-      <Loading loading={agents.loading && !agents.data} />
+      <Loading loading={agents.loading} />
       {agents.data && (
         <Empty
           title={agent ? t("management.cannot_read_agent") : t("management.agent_not_found")}
@@ -86,7 +86,7 @@ export function AgentList() {
           {t("management.create_agent")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
-      <Screen onRefresh={agents.refresh} refreshing={agents.loading}>
+      <Screen onRefresh={agents.refresh}>
         <ErrorLine error={agents.error} />
         {agents.error != null && (
           <Button title={t("management.reload_agent")} onPress={agents.refresh} />
@@ -116,7 +116,7 @@ export function AgentList() {
             />
           </Section>
         )}
-        <Loading loading={agents.loading && !agents.data} />
+        <Loading loading={agents.loading} />
         {agents.data?.length === 0 && !agents.loading && (
           <Empty
             title={t("management.no_agents_yet")}
@@ -262,7 +262,7 @@ export function CreateAgent() {
                 }}
               />
             )}
-            <Loading loading={(nodes.loading && !nodes.data) || (models.loading && !models.data)} />
+            <Loading loading={nodes.loading || models.loading} />
             {(nodes.data?.length === 0 || models.data?.length === 0) && (
               <Section
                 title={t("management.prepare_the_runtime_environment_first")}
