@@ -411,7 +411,7 @@
 
 入站 webhook（经 `Admin` 接口，HTTP 在 11.1）：
 
-- 投递唤醒打开的 Agent：观察的事件里看到带 webhook 名字、ID、时间的输入和正文；同一个 `Idempotency-Key` 只生效一次，重试不改任何东西；没有 key 时每次都是新的输入。
+- 投递唤醒打开的 Agent：观察的事件里看到带 webhook 名字、ID、时间，并自述来自外部系统、正文是数据的输入和正文；同一个 `Idempotency-Key` 只生效一次，重试不改任何东西；没有 key 时每次都是新的输入。
 - 未知 webhook 和错误密钥以相同的 `invalid-webhook`（相同消息）拒绝；暂停的 Agent 以 `agent-closed` 拒绝，恢复后也没有排队的输入。
 - 轮换后旧密钥立即失效、新密钥可用；删除 webhook 后不再投递，重复删除或轮换为 `unknown-webhook`；删除 Agent 同时删掉它的 webhook；列出不含密钥；重启后 webhook 仍在。
 - 空正文、超过 32 KiB（按字节）的正文、不合法的 key 和不合法的名字以 `invalid-input` 拒绝；名字里的引号和换行伪造不出另一行抬头。
@@ -445,6 +445,8 @@
 - 控制面在**存储夹具**（整个数据目录的副本）上启动：原来的所有者成为管理员，用 handle `owner` 和 `facts.json` 里的密码登录（别的密码被拒，也没有多出别的人类），名字不变，看到夹具里的会话和未读摘要，并能发消息；alpha.2 签发的登录会话 cookie 升级后仍然有效；这个账号能改名、改 handle、添加别的人类；夹具里的 Provider 凭据还在，夹具里的配对令牌仍能配对一个 node。
 
 - PUT/DELETE /api/admin/agents/:id/nodes/:nodeId 成功均为 204；主 node 为 400 invalid-input，普通人类为 403 admin-only。浏览器验证授权、刷新保留、收回和行内反馈，主 node 没有操作按钮。
+
+- 入站 webhook（`POST /api/webhooks/:webhookId`）：不带登录会话，带正确密钥的投递回 202，管理员的观察流里出现带发送者抬头的输入，聊天快照的游标不变；同一个 `Idempotency-Key` 回相同的 `requestId` 且只唤醒一次；错误密钥、缺少密钥、其他鉴权方案和未知 webhook 的 401 完全相同；暂停的 Agent 回 409 `agent-closed`；轮换后旧密钥 401；删除 webhook 或 Agent 后 401；空正文、超过 32 KiB、缺少 `text`、不合法的 key 回 400，`text/plain` 回 415；管理路由只有管理员能用，列表不含密钥。
 
 ### 11.2 人类：角色、自己的资料和管理
 

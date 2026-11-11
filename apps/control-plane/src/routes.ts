@@ -310,6 +310,27 @@ export function adminRoutes(admin: Admin): Route[] {
       path: "/api/admin/agents/:id/workspace",
       json: ({ params, query }) => admin.browseWorkspace(agentId(params), query.get("path") ?? "."),
     },
+    {
+      method: "GET",
+      path: "/api/admin/agents/:id/webhooks",
+      json: ({ params }) => admin.webhooks(agentId(params)),
+    },
+    {
+      method: "POST",
+      path: "/api/admin/agents/:id/webhooks",
+      json: ({ params, body }) =>
+        admin.createWebhook(agentId(params), forwarded<{ name: string }>(body)),
+    },
+    {
+      method: "POST",
+      path: "/api/admin/webhooks/:id/rotate",
+      json: ({ params }) => admin.rotateWebhook(params.id ?? ""),
+    },
+    {
+      method: "DELETE",
+      path: "/api/admin/webhooks/:id",
+      json: ({ params }) => admin.deleteWebhook(params.id ?? ""),
+    },
     { method: "GET", path: "/api/admin/providers", json: () => admin.providers() },
     {
       method: "PUT",
@@ -335,6 +356,27 @@ export function adminRoutes(admin: Admin): Route[] {
       json: () => admin.createPairingToken(),
     },
   ]);
+}
+
+/** The delivery route of an outside system. It carries no session: the webhook's secret is the credential. */
+export const WEBHOOK_DELIVERY = /^\/api\/webhooks\/([^/]+)$/;
+
+/**
+ * One delivery to a webhook: `Authorization: Bearer <secret>`, `{ text }`, and an optional `Idempotency-Key`. Without
+ * the header, or with another scheme, the secret is empty, which no webhook has.
+ */
+export async function deliverToWebhook(
+  admin: Admin,
+  webhookId: string,
+  headers: { authorization: string | undefined; key: string | undefined },
+  body: unknown,
+): Promise<{ requestId: string }> {
+  const secret = /^Bearer (\S+)$/i.exec(headers.authorization ?? "")?.[1] ?? "";
+  const { text } = forwarded<{ text: string }>(body);
+  return admin.deliverWebhook(webhookId, secret, {
+    text,
+    ...(headers.key === undefined ? {} : { key: headers.key }),
+  });
 }
 
 /** The route for `method` and `pathname`, with its parameters. */

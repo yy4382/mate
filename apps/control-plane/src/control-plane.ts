@@ -21,7 +21,14 @@ import {
 } from "./http.ts";
 import { Humans, bootstrapHumans, SESSION_TTL_MS, type Session } from "./humans.ts";
 import { vapidKeys, webPushSender } from "./push.ts";
-import { adminRoutes, chatRoutes, matchRoute, requireRole } from "./routes.ts";
+import {
+  adminRoutes,
+  chatRoutes,
+  deliverToWebhook,
+  matchRoute,
+  requireRole,
+  WEBHOOK_DELIVERY,
+} from "./routes.ts";
 import { openShellTables } from "./store.ts";
 import { openApns, type ApnsOptions } from "./apns.ts";
 
@@ -136,6 +143,19 @@ export async function startControlPlane(options: ControlPlaneOptions): Promise<C
       if (method === "POST" && url.pathname === "/api/logout") {
         if (token !== undefined) humans.logOut(token);
         return sendJson(response, 204, undefined, { "set-cookie": sessionCookie(undefined) });
+      }
+      const delivery = method === "POST" ? WEBHOOK_DELIVERY.exec(url.pathname) : null;
+      if (delivery !== null) {
+        const { authorization } = request.headers;
+        const idempotencyKey = request.headers["idempotency-key"];
+        const key = typeof idempotencyKey === "string" ? idempotencyKey : undefined;
+        const accepted = await deliverToWebhook(
+          admin,
+          delivery[1] ?? "",
+          { authorization, key },
+          parseJson(request, body),
+        );
+        return sendJson(response, 202, accepted);
       }
       const session = humans.session(token);
       if (session === undefined) return sendJson(response, 401, { error: "login-required" });
