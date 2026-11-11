@@ -40,7 +40,7 @@ export default function Conversations() {
         refreshControl={
           <RefreshControl
             refreshing={state.connection === "loading"}
-            onRefresh={() => void chat.resume()}
+            onRefresh={() => void chat.reconnect()}
           />
         }
       >
@@ -67,7 +67,7 @@ export default function Conversations() {
               </Caption>
             )}
             {!!state.error && (
-              <Button title={t("chat.retry_connection")} onPress={() => void chat.resume()} />
+              <Button title={t("chat.retry_connection")} onPress={() => void chat.reconnect()} />
             )}
             {unreadThreads.length > 0 && (
               <View>

@@ -8,7 +8,7 @@ type Chat = { pause(): void; resume(): Promise<void>; close(): void };
  * The one app-state listener, and the auth subscription that drives notifications and chat: a
  * signed-in session is available only in the foreground, and only availability changes pause or
  * resume notifications and the chat stream. The chat opens for the identity the app shows, even one
- * still being checked, so a restored session appears at once, but it runs only once verified.
+ * still being checked, so a restored session appears at once, but it runs and sends only once verified.
  * Management keeps its own login scope.
  */
 export function startMobileLifecycle<C extends Chat>({
