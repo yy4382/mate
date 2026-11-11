@@ -7,7 +7,9 @@
       "palace-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
-    }
+    },
+    "./package.json": "./package.json",
+    "./docs/*.md": "./docs/*.md"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
