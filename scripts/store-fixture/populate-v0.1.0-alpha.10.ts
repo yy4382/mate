@@ -1,6 +1,6 @@
 // Fills a data directory through the public APIs of the Mate version it is run inside. `make-store-fixture.ts` copies
-// this file into `apps/control-plane/` of a checkout of the released version and runs it there, so the stores it
-// leaves are exactly what that version writes. It was written against v0.1.0-alpha.2; a later version whose APIs moved
+// `populate-<ref>.ts` into `apps/control-plane/` of a checkout of that released version and runs it there, so the
+// stores it leaves are exactly what that version writes. This copy is for v0.1.0-alpha.10; a version whose APIs moved
 // needs its own copy.
 //
 // usage: node --conditions=mate-source populate.ts <data-directory> <facts-file>
@@ -9,12 +9,12 @@ import { createPrivateKey, generateKeyPairSync, sign } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { openAdmin } from "@mate/admin";
-import { ChatApp } from "@mate/chat";
-import { systemClock } from "@mate/clock";
-import { createNodeGateway } from "@mate/gateway";
-import { FakeNode } from "@mate/testkit";
-import { OwnerLogin } from "./src/login.ts";
+import { openAdmin } from "@palace/admin";
+import { ChatApp } from "@palace/chat";
+import { systemClock } from "@palace/clock";
+import { createNodeGateway } from "@palace/gateway";
+import { FakeNode } from "@palace/testkit";
+import { Humans, bootstrapHumans, INITIAL_HUMAN } from "./src/humans.ts";
 import { vapidKeys } from "./src/push.ts";
 import { openShellTables } from "./src/store.ts";
 
@@ -36,19 +36,18 @@ const rid = () => `fixture-${++requests}`;
 const passwordFile = join(dataDirectory, "..", "initial-password");
 writeFileSync(passwordFile, `${OWNER_PASSWORD}\n`, { mode: 0o600 });
 const shell = openShellTables(dataDirectory);
-const login = await OwnerLogin.open(shell, systemClock, passwordFile);
-// A login session as a browser of that version holds it: a test proves the session still works after the upgrade.
-const session = await login.logIn(OWNER_PASSWORD);
-if (session.status !== "ok") throw new Error("the owner could not log in");
+const humans = new Humans(shell, systemClock);
 vapidKeys(shell);
 
 const chat = new ChatApp(join(dataDirectory, "chat.sqlite"));
-const owner = chat.ensureAccount({
-  externalId: "owner",
-  displayName: "Owner",
-  handle: "owner",
-  role: "owner",
+await bootstrapHumans(humans, chat, {
+  initialPasswordFile: passwordFile,
+  initialHandle: undefined,
 });
+// A login session as a browser of that version holds it: a test proves the session still works after the upgrade.
+const session = await humans.logIn(INITIAL_HUMAN, OWNER_PASSWORD);
+if (session.status !== "ok") throw new Error("the owner could not log in");
+const owner = chat.findHuman("admin")!.accountId;
 chat.subscribePush(owner, {
   endpoint: PUSH_ENDPOINT,
   keys: { p256dh: "fixture-p256dh-key", auth: "fixture-auth" },
@@ -57,7 +56,7 @@ const gateway = createNodeGateway({
   dataDirectory,
   pairingTokenTtlMs: 100 * 365 * 24 * 60 * 60 * 1000,
 });
-const admin = await openAdmin({ dataDirectory, chat, owner, gateway, clock: systemClock });
+const admin = await openAdmin({ dataDirectory, chat, gateway, clock: systemClock });
 admin.setCredentials("openai", { apiKey: API_KEY });
 
 async function createPausedAgent() {
@@ -103,8 +102,18 @@ for (const nodeId of [HOME_NODE, "abcdef01-0000-4000-8000-000000000001"]) {
 }
 await new Promise<void>((resolve) => server.close(() => resolve()));
 
-const ada = chat.ensureAccount({ externalId: AGENT_ONE, displayName: "Ada", handle: "ada" });
-const bo = chat.ensureAccount({ externalId: AGENT_TWO, displayName: "Bo", handle: "bo" });
+const ada = chat.ensureAccount({
+  externalId: AGENT_ONE,
+  kind: "agent",
+  displayName: "Ada",
+  handle: "ada",
+});
+const bo = chat.ensureAccount({
+  externalId: AGENT_TWO,
+  kind: "agent",
+  displayName: "Bo",
+  handle: "bo",
+});
 
 const general = chat.createChannel(owner, {
   requestId: rid(),

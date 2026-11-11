@@ -4,8 +4,8 @@
 // usage: node scripts/make-store-fixture.ts <git-ref> <out-dir>
 //
 // It checks the ref out in a throwaway worktree under the OS temp directory, installs that version's dependencies,
-// runs `store-fixture/populate.ts` there against that version's own packages, and copies the resulting data directory
-// to <out-dir> (replacing what was there). The worktree is removed afterwards, also when a step fails.
+// runs `store-fixture/populate-<git-ref>.ts` there against that version's own packages, and copies the resulting
+// data directory to <out-dir> (replacing what was there). The worktree is removed afterwards, also when a step fails.
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -51,12 +51,23 @@ try {
 
   const home = join(checkout, "apps", "control-plane");
   copyFileSync(
-    join(root, "scripts", "store-fixture", "populate.ts"),
+    join(root, "scripts", "store-fixture", `populate-${ref}.ts`),
     join(home, "populate-store-fixture.ts"),
   );
   const data = join(scratch, "data-directory");
   const factsFile = join(scratch, "facts.json");
-  run("node", ["--conditions=mate-source", "populate-store-fixture.ts", data, factsFile], home);
+  // The source condition is `mate-source` up to v0.1.0-alpha.2 and `palace-source` after the rename.
+  run(
+    "node",
+    [
+      "--conditions=mate-source",
+      "--conditions=palace-source",
+      "populate-store-fixture.ts",
+      data,
+      factsFile,
+    ],
+    home,
+  );
 
   const leftovers = readdirSync(data).filter(
     (name) => name.endsWith("-wal") || name.endsWith("-shm"),
