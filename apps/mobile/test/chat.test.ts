@@ -225,7 +225,7 @@ function fixture(clock?: Clock) {
       return expired;
     },
     start: async () => {
-      chat.start();
+      void chat.resume();
       await until(chat, (s) => s.connection === "live");
     },
     push: () => {
@@ -453,7 +453,7 @@ describe("native chat public interface", () => {
   it("drops late snapshots, responses, messages and drafts when its identity closes", async () => {
     const f = fixture(),
       held = f.holdSnapshot();
-    f.chat.start();
+    void f.chat.resume();
     f.chat.edit(f.ref, "旧账号草稿");
     f.chat.close();
     held.resolve(new Response(JSON.stringify(f.server.liveSnapshot(f.me, {}))));
@@ -555,7 +555,7 @@ describe("native chat public interface", () => {
       await connection.promise;
       return stream(...args);
     };
-    f.chat.start();
+    void f.chat.resume();
     try {
       await until(f.chat, (state) => state.connection === "connecting");
       await f.chat.load(f.ref);

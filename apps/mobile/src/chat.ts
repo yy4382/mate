@@ -215,25 +215,26 @@ export class MobileChat {
         : t("chat.the_server_cannot_process_this_right_now"),
     );
   }
-  start(): void {
-    this.held?.release();
-    this.held = null;
-    this.run();
-  }
   pause(): void {
     this.held ??= hold();
     this.live?.abort();
     this.publish({ connection: "paused" });
   }
-  /** Restarts the stream; a pause that arrives while the old stream closes wins. */
   async resume(): Promise<void> {
     this.held?.release();
     this.held = null;
-    this.live?.abort();
-    await this.running;
-    this.run();
+    await this.restart();
   }
-  private run(): void {
+  /** A person's retry: reconnects only while the owner lets the chat run. */
+  async reconnect(): Promise<void> {
+    if (!this.held) await this.restart();
+  }
+  /** A pause that arrives while the old stream closes wins. */
+  private async restart(): Promise<void> {
+    if (this.running) {
+      this.live?.abort();
+      await this.running;
+    }
     if (this.held || this.running || this.lifetime.signal.aborted) return;
     const controller = new AbortController();
     this.live = controller;
@@ -241,10 +242,6 @@ export class MobileChat {
     this.running = this.follow(controller.signal).finally(() => {
       this.running = undefined;
     });
-  }
-  /** A person's retry: reconnects only while the owner lets the chat run. */
-  async reconnect(): Promise<void> {
-    if (!this.held) await this.resume();
   }
   close(): void {
     this.live?.abort();
