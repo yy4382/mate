@@ -119,6 +119,13 @@ const refusals: Record<ChatErrorReason, string> = {
 };
 const errorText = (error: unknown) =>
   error instanceof Refusal ? error.message : t("chat.could_not_connect_to_the_server_check");
+function hold() {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { released, release };
+}
 /** Replaces or adds one row, keeping the server's order by ID. */
 const upsert = <T>(rows: readonly T[], row: T, id: (row: T) => number) =>
   [...rows.filter((r) => id(r) !== id(row)), row].sort((a, b) => id(a) - id(b));
@@ -142,6 +149,8 @@ export class MobileChat {
   private cursor: string | undefined;
   private snapshotVersion = 0;
   private running: Promise<void> | undefined;
+  /** Until the owner starts the chat, and while it pauses it, requests wait rather than use an unverified cookie. */
+  private held: ReturnType<typeof hold> | null = hold();
   private loads = new Map<string, Promise<void>>();
   private clock: Clock;
   constructor(
@@ -163,6 +172,7 @@ export class MobileChat {
     this.listeners.forEach((listener) => listener());
   }
   private async request<T>(path: string, schema: z.ZodType<T>, body?: unknown): Promise<T> {
+    await this.held?.released;
     if (this.lifetime.signal.aborted) throw new Error("closed");
     const timeout = new AbortController();
     const signal = AbortSignal.any([this.lifetime.signal, timeout.signal]);
@@ -204,6 +214,8 @@ export class MobileChat {
   }
   start(): void {
     if (this.running || this.lifetime.signal.aborted) return;
+    this.held?.release();
+    this.held = null;
     const controller = new AbortController();
     this.live = controller;
     this.publish({ connection: this.cursor === undefined ? "loading" : "reconnecting" });
@@ -212,6 +224,7 @@ export class MobileChat {
     });
   }
   pause(): void {
+    this.held ??= hold();
     this.live?.abort();
     this.publish({ connection: "paused" });
   }
@@ -220,9 +233,14 @@ export class MobileChat {
     await this.running;
     this.start();
   }
+  /** A person's retry: reconnects only while the owner lets the chat run. */
+  async reconnect(): Promise<void> {
+    if (!this.held) await this.resume();
+  }
   close(): void {
     this.live?.abort();
     this.lifetime.abort();
+    this.held?.release();
     this.state = {
       ...this.state,
       connection: "closed",

@@ -84,7 +84,7 @@ describe("mobile authentication public interface", () => {
     expect(p.calls).toEqual([]);
   });
 
-  it("logs in once, renders the identity from me, and saves neither the password nor the identity", async () => {
+  it("logs in once, renders the identity from me, and saves the verified identity but never the password", async () => {
     const p = platform({ server, restore: false });
     const auth = new MobileAuth(p.port);
     await auth.start();
@@ -97,7 +97,7 @@ describe("mobile authentication public interface", () => {
     await first;
     expect(auth.getSnapshot()).toEqual({ kind: "signed-in", server, human });
     expect(p.calls.map((call) => call.url)).toEqual([server + "/api/login", server + "/api/me"]);
-    expect(p.preferences).toEqual({ server, restore: true });
+    expect(p.preferences).toEqual({ server, restore: true, human });
   });
 
   it("distinguishes a wrong password from a connection failure and permits retry", async () => {
@@ -135,6 +135,33 @@ describe("mobile authentication public interface", () => {
     p.respond(async () => reply(human));
     await auth.retry();
     expect(auth.getSnapshot().kind).toBe("signed-in");
+  });
+
+  it("restarts into the last verified identity while the stored cookie is checked, and a 401 still ends it", async () => {
+    const p = platform({ server, restore: false });
+    const auth = new MobileAuth(p.port);
+    await auth.start();
+    await auth.login("sam", "secret");
+    const me = deferred<Response>();
+    p.respond(() => me.promise);
+    const restarted = new MobileAuth(p.port);
+    const starting = restarted.start();
+    expect(restarted.getSnapshot()).toEqual({ kind: "checking", server, human });
+    me.resolve(reply({ error: "login-required" }, 401));
+    await starting;
+    expect(restarted.getSnapshot()).toMatchObject({ kind: "signed-out", notice: "expired" });
+    const again = new MobileAuth(p.port);
+    await again.start();
+    expect(again.getSnapshot()).toEqual({ kind: "signed-out", server, notice: null });
+  });
+
+  it("checks the cookie without an identity when the stored one is unreadable", async () => {
+    const p = platform({ server, restore: true, human: { accountId: "seven" } } as never);
+    const auth = new MobileAuth(p.port);
+    const starting = auth.start();
+    expect(auth.getSnapshot()).toEqual({ kind: "checking", server, human: null });
+    await starting;
+    expect(auth.getSnapshot()).toEqual({ kind: "signed-in", server, human });
   });
 
   it("ends access on an expired or revoked 401, including after restarting", async () => {
@@ -209,7 +236,7 @@ describe("mobile authentication public interface", () => {
       };
       await auth.logout();
       expect(auth.getSnapshot().kind).toBe("unavailable");
-      expect(p.preferences).toEqual({ server, restore: true });
+      expect(p.preferences).toEqual({ server, restore: true, human });
       expect(p.calls.map((call) => call.url)).toEqual([server + "/api/me"]);
       await auth.retry();
       expect(auth.getSnapshot().kind).toBe("unavailable");
@@ -244,7 +271,7 @@ describe("mobile authentication public interface", () => {
     };
     await auth.changeServer(next);
     expect(auth.getSnapshot().kind).toBe("unavailable");
-    expect(p.preferences).toEqual({ server, restore: true });
+    expect(p.preferences).toEqual({ server, restore: true, human });
     await auth.retry();
     expect(auth.getSnapshot().kind).toBe("unavailable");
     p.port.write = write;

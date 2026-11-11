@@ -53,6 +53,7 @@ function fixture(clock?: Clock) {
   const ref = { conversation: channel.conversationId };
   let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
   const urls: string[] = [];
+  const requests: string[] = [];
   const writes: { requestId: string; body: string; mentions?: number[] }[] = [];
   let failSend = false;
   let historyUnavailable = false;
@@ -76,6 +77,7 @@ function fixture(clock?: Clock) {
     new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
   const transport: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
+    requests.push(url.pathname);
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (url.pathname.endsWith("/snapshot")) {
       if (snapshotGate) return snapshotGate.promise;
@@ -198,6 +200,7 @@ function fixture(clock?: Clock) {
     ref,
     writes,
     urls,
+    requests,
     platform,
     operationRequests,
     get historyRequests() {
@@ -395,6 +398,34 @@ describe("native chat public interface", () => {
     await loading;
     expect(f.chat.timeline(f.ref).entries).toEqual([]);
     expect(f.chat.draft(f.ref).text).toBe("保留草稿");
+  });
+  it("holds sends until its owner starts it, so nothing goes out before the cookie is verified", async () => {
+    const f = fixture();
+    f.chat.edit(f.ref, "验证前写的消息");
+    const sending = f.chat.send(f.ref);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.requests).toEqual([]);
+    expect(f.chat.draft(f.ref).pending?.status).toBe("sending");
+    await f.start();
+    await sending;
+    expect(f.writes.map((w) => w.body)).toEqual(["验证前写的消息"]);
+    expect(f.chat.draft(f.ref)).toMatchObject({ text: "", pending: null, error: "" });
+  });
+  it("keeps a paused chat quiet on reconnect and drops its held sends when its identity closes", async () => {
+    const f = fixture();
+    await f.start();
+    f.chat.pause();
+    const before = f.requests.length;
+    await f.chat.reconnect();
+    f.chat.edit(f.ref, "另一个账号不能收到");
+    const sending = f.chat.send(f.ref);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.requests).toHaveLength(before);
+    expect(f.chat.getSnapshot().connection).toBe("paused");
+    f.chat.close();
+    await sending;
+    expect(f.requests).toHaveLength(before);
+    expect(f.writes).toEqual([]);
   });
   it("drops late snapshots, responses, messages and drafts when its identity closes", async () => {
     const f = fixture(),

@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Redirect } from "expo-router";
 import { auth } from "./auth-native";
-import type { SignedOutNotice } from "./auth";
+import { sessionIdentity, type SignedOutNotice } from "./auth";
 import { notifications } from "./notifications-native";
 import { useTheme } from "./theme";
 import {
@@ -174,7 +174,7 @@ export function HomeScreen({ account = false }: { account?: boolean }) {
   const [editingServer, setEditingServer] = useState(false);
   const server = "server" in state ? state.server : "";
   const clearing = state.kind === "clearing";
-  if (state.kind === "signed-in" && !account && !editingServer) return <Redirect href="/chat" />;
+  if (sessionIdentity(state) && !account && !editingServer) return <Redirect href="/chat" />;
   const content = (
     <SafeAreaView
       style={{ flex: 1, backgroundColor: c.grouped }}
