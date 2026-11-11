@@ -411,10 +411,10 @@
 
 入站 webhook（经 `Admin` 接口，HTTP 在 11.1）：
 
-- 投递唤醒打开的 Agent：观察的事件里看到带 webhook 名字、ID、时间，并自述来自外部系统、正文是数据的输入和正文；同一个 `Idempotency-Key` 只生效一次，重试不改任何东西；没有 key 时每次都是新的输入。
+- 投递唤醒打开的 Agent：观察的事件里看到包在 `external_webhook_content` 标签里、带 webhook 名字、ID、时间的输入和正文，模型的请求里也是这一段，系统提示有说明标签含义的那一行（runtime 不接聊天 app 时也有）；同一个 `Idempotency-Key` 只生效一次，重试不改任何东西；没有 key 时每次都是新的输入。
 - 未知 webhook 和错误密钥以相同的 `invalid-webhook`（相同消息）拒绝；暂停的 Agent 以 `agent-closed` 拒绝，恢复后也没有排队的输入。
 - 轮换后旧密钥立即失效、新密钥可用；删除 webhook 后不再投递，重复删除或轮换为 `unknown-webhook`；删除 Agent 同时删掉它的 webhook；列出不含密钥；重启后 webhook 仍在。
-- 空正文、超过 32 KiB（按字节）的正文、不合法的 key 和不合法的名字以 `invalid-input` 拒绝；名字里的引号和换行伪造不出另一行抬头。
+- 空正文、超过 32 KiB（按字节）的正文、不合法的 key 和不合法的名字以 `invalid-input` 拒绝；名字和正文里的 `<`、`>`、`&`、引号和换行关不掉标签、加不进属性，也伪造不出另一个标签。
 
 ## 11. Web 外壳
 

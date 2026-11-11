@@ -22,6 +22,7 @@ import { agentModels, type CredentialsLookup, type ModelResolver } from "./model
 import { reminders } from "./reminders.ts";
 import { agentChange, configureConversations, settingsOf, type AgentSettings } from "./settings.ts";
 import { createAgentStorage, openAgentStorage, type DatabaseWrapper } from "./storage.ts";
+import { webhookContentExtension } from "./webhook-content.ts";
 import { workspaceExtension, type WorkspacePort } from "./workspace-tools.ts";
 
 export type AgentRuntimeOptions = {
@@ -115,6 +116,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
   const primaryOnlyExtensions: readonly Extension[] = [
     assistantsPrimary,
     remindersExtension,
+    webhookContentExtension,
     ...(options.chat === undefined ? [] : [chatExtension(options.chat)]),
   ];
   // `harness` exists by the time a tool runs: no task is scheduled before `resume()`.
