@@ -2,6 +2,9 @@ import { t } from "./i18n";
 import {
   createContext,
   useContext,
+  useEffect,
+  useMemo,
+  useRef,
   useState,
   type ComponentRef,
   type ReactNode,
@@ -9,10 +12,14 @@ import {
 } from "react";
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   FlatList,
   Modal,
+  PanResponder,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -21,7 +28,8 @@ import {
   useWindowDimensions,
   type TextInputProps,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useIsFocused } from "expo-router";
 import { useTheme, type as typography } from "./theme";
@@ -443,6 +451,177 @@ export function Sheet({
           <View style={{ flex: 1 }}>{children}</View>
         )}
       </SafeAreaView>
+    </Modal>
+  );
+}
+export type SheetAction = {
+  id: string;
+  title: string;
+  icon: SymbolViewProps["name"];
+  run(): void;
+};
+const sheetTravel = 600;
+/**
+ * A compact bottom sheet of icon rows for one object, dismissed by tapping outside, dragging
+ * the header down, or the VoiceOver escape gesture. A chosen action runs after the sheet has
+ * left the screen, so an action that presents another modal never overlaps this one.
+ */
+export function ActionSheet({
+  visible,
+  header,
+  actions,
+  onClose,
+}: {
+  visible: boolean;
+  header: ReactNode;
+  actions: readonly SheetAction[];
+  onClose(): void;
+}) {
+  const ready = useContext(PresentationAccess);
+  const focused = useIsFocused();
+  const c = useTheme();
+  const insets = useSafeAreaInsets();
+  const { fontScale } = useWindowDimensions();
+  const open = visible && ready && focused;
+  const [mounted, setMounted] = useState(false);
+  const offset = useRef(new Animated.Value(sheetTravel)).current;
+  const closing = useRef(false);
+  const afterDismiss = useRef<(() => void) | null>(null);
+  function dismiss(then?: () => void) {
+    if (closing.current) return;
+    closing.current = true;
+    Animated.timing(offset, {
+      toValue: sheetTravel,
+      duration: 200,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(() => {
+      afterDismiss.current = () => {
+        closing.current = false;
+        onClose();
+        then?.();
+      };
+      setMounted(false);
+    });
+  }
+  const latest = useRef(dismiss);
+  latest.current = dismiss;
+  useEffect(() => {
+    if (!open) return setMounted(false);
+    closing.current = false;
+    offset.setValue(sheetTravel);
+    setMounted(true);
+    Animated.timing(offset, {
+      toValue: 0,
+      duration: 250,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [open, offset]);
+  const drag = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onPanResponderMove: (_, g) => offset.setValue(Math.max(0, g.dy)),
+        onPanResponderRelease: (_, g) => {
+          if (g.dy > 80 || g.vy > 0.8) latest.current();
+          else Animated.spring(offset, { toValue: 0, useNativeDriver: true }).start();
+        },
+        onPanResponderTerminate: () =>
+          Animated.spring(offset, { toValue: 0, useNativeDriver: true }).start(),
+      }),
+    [offset],
+  );
+  return (
+    <Modal
+      visible={mounted}
+      transparent
+      animationType="none"
+      onRequestClose={() => dismiss()}
+      onDismiss={() => {
+        const next = afterDismiss.current;
+        afterDismiss.current = null;
+        next?.();
+      }}
+    >
+      <View style={{ flex: 1, justifyContent: "flex-end" }}>
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              backgroundColor: "#000",
+              opacity: offset.interpolate({
+                inputRange: [0, sheetTravel],
+                outputRange: [0.4, 0],
+                extrapolate: "clamp",
+              }),
+            },
+          ]}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("common.close")}
+            onPress={() => dismiss()}
+            style={StyleSheet.absoluteFill}
+          />
+        </Animated.View>
+        <Animated.View
+          accessibilityViewIsModal
+          onAccessibilityEscape={() => dismiss()}
+          style={{
+            transform: [{ translateY: offset }],
+            maxHeight: "85%",
+            backgroundColor: c.grouped,
+            borderTopLeftRadius: 20,
+            borderTopRightRadius: 20,
+            paddingBottom: insets.bottom + 8,
+          }}
+        >
+          <View {...drag.panHandlers} style={{ paddingTop: 8, paddingHorizontal: 16, gap: 12 }}>
+            <View
+              style={{
+                alignSelf: "center",
+                width: 36,
+                height: 5,
+                borderRadius: 3,
+                backgroundColor: c.border,
+              }}
+            />
+            {header}
+          </View>
+          <ScrollView bounces={false} contentContainerStyle={{ padding: 16 }}>
+            <Section>
+              {actions.map((action, index) => (
+                <Pressable
+                  key={action.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={action.title}
+                  onPress={() => dismiss(action.run)}
+                  style={({ pressed }) => ({
+                    minHeight: 52,
+                    paddingVertical: 12,
+                    paddingHorizontal: 16,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 14,
+                    opacity: pressed ? 0.6 : 1,
+                    borderBottomWidth: index < actions.length - 1 ? StyleSheet.hairlineWidth : 0,
+                    borderColor: c.border,
+                  })}
+                >
+                  <SymbolView
+                    name={action.icon}
+                    size={Math.round(22 * Math.min(fontScale, 1.5))}
+                    tintColor={c.foreground}
+                    accessibilityElementsHidden
+                  />
+                  <Text style={{ flex: 1, fontSize: 17, color: c.foreground }}>{action.title}</Text>
+                </Pressable>
+              ))}
+            </Section>
+          </ScrollView>
+        </Animated.View>
+      </View>
     </Modal>
   );
 }

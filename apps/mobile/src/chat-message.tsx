@@ -4,7 +4,7 @@ import type { AccountView, Entry } from "@palace/chat/contracts";
 import { accountName } from "@palace/chat/client";
 import { taskStatus } from "./chat";
 import { MessageBody } from "./message-body";
-import { Avatar, Caption, Copy } from "./ui";
+import { Avatar, Caption, Copy, type SheetAction } from "./ui";
 import { useTheme } from "./theme";
 type Message = Extract<Entry, { kind: "message" }>;
 type Task = Extract<Entry, { kind: "task" }>;
@@ -16,6 +16,7 @@ export function ChatMessage({
   targetSeq,
   isRoot = false,
   knownReplies,
+  actions,
   onMenu,
   onTask,
   onThread,
@@ -27,14 +28,19 @@ export function ChatMessage({
   targetSeq: number | null;
   isRoot?: boolean;
   knownReplies: boolean;
+  actions: readonly SheetAction[];
   onMenu(entry: Message): void;
   onTask(task: Task): void;
   onThread(entry: Message): void;
 }) {
   const c = useTheme();
   const author = accounts.find((a) => a.accountId === entry.author);
+  const name = accountName(accounts, entry.author);
+  const time = dateText(entry.at, { hour: "2-digit", minute: "2-digit" });
   return (
-    <View
+    <Pressable
+      accessible={false}
+      onLongPress={isRoot ? undefined : () => onMenu(entry)}
       style={{
         paddingHorizontal: 20,
         paddingVertical: 10,
@@ -47,48 +53,29 @@ export function ChatMessage({
       {entry.seq === targetSeq && !isRoot && (
         <Caption accent>{t("chat.located_message", { seq: numberText(targetSeq) })}</Caption>
       )}
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-        <Avatar
-          name={accountName(accounts, entry.author)}
-          kind={author?.kind ?? "human"}
-          size={30}
-        />
-        <View style={{ flex: 1, gap: 2 }}>
-          <Text style={{ color: c.foreground, fontSize: 16, fontWeight: "600" }}>
-            {accountName(accounts, entry.author)}
-          </Text>
-          {author?.kind === "agent" && <Caption>{t("chat.agent")}</Caption>}
-        </View>
-        <Caption>
-          {dateText(entry.at, {
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
-        </Caption>
-        {!isRoot && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t("chat.message_actions", {
-              name: accountName(accounts, entry.author),
-            })}
-            onPress={() => {
-              onMenu(entry);
-            }}
-            style={({ pressed }) => ({
-              minWidth: 44,
-              minHeight: 44,
-              alignItems: "center",
-              justifyContent: "center",
-              opacity: pressed ? 0.5 : 1,
-            })}
-          >
-            <Text allowFontScaling={false} style={{ fontSize: 22, color: c.muted }}>
-              ···
-            </Text>
-          </Pressable>
-        )}
+      <View
+        accessible
+        accessibilityLabel={`${name}, ${time}`}
+        accessibilityActions={
+          isRoot ? undefined : actions.map((a) => ({ name: a.id, label: a.title }))
+        }
+        onAccessibilityAction={(event) =>
+          actions.find((a) => a.id === event.nativeEvent.actionName)?.run()
+        }
+        style={{ flexDirection: "row", alignItems: "center", gap: 10 }}
+      >
+        <Avatar name={name} kind={author?.kind ?? "human"} size={30} />
+        <Text style={{ flex: 1, color: c.foreground, fontSize: 16, fontWeight: "600" }}>
+          {name}
+        </Text>
+        <Caption>{time}</Caption>
       </View>
-      <MessageBody text={entry.body} accounts={accounts} mentions={entry.mentions} />
+      <MessageBody
+        text={entry.body}
+        accounts={accounts}
+        mentions={entry.mentions}
+        selectable={isRoot}
+      />
       {entry.attachments.map((a, i) => (
         <Caption key={i}>
           {t("chat.attachment", { name: a.name, count: a.size, size: numberText(a.size) })}
@@ -150,6 +137,6 @@ export function ChatMessage({
           <Text style={{ fontSize: 15, color: c.accent }}>{t("chat.view_thread")}</Text>
         </Pressable>
       )}
-    </View>
+    </Pressable>
   );
 }
