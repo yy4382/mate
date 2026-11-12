@@ -248,33 +248,6 @@ node 的工作区按普通文件备份即可。node 换机器时，在新机器�
 
 ### 5.3 更新
 
-#### 从 Mate 升级到 Palace
-
-这次改名需要一次手动切换。`palace node`、`PALACE_*`、`palace-node-*.tar.gz` 和新的服务名取代原来的外部名称，不提供旧命令或旧环境变量的别名。旧 CLI 不能安装新布局的发布包，新 CLI 也不读取旧安装目录；不要直接用原来的自动部署脚本升级。
-
-1. 若已启用 §5.5 的自动部署，在推送首个 Palace 版本标签之前，暂时移除 GitHub `production` 环境的 `DEPLOY_HOST`，让这次标签只发布产物。保存原值，完成以下切换后再恢复。保留旧镜像、原版 node 发布包、Compose 文件、`.env` 和自动部署配置，供手动回退。
-2. 在各 node 账号下执行旧的 `mate node stop`，再停止控制面。备份控制面完整数据目录，以及每个 node 的配置、身份和工作区。用旧的 `mate node uninstall` 移除旧程序和服务；它保留配置、身份与工作区。确认旧服务已停止并停用，再安装 Palace，避免两个服务持有同一 node 身份。
-3. 换用本版本的 Compose 文件，将 `.env`、直接启动命令和自定义配置里的 `MATE_*` 变量名改为对应的 `PALACE_*`。保留原有值中的宿主路径、UID/GID、账号、域名和联系地址；现有数据目录不用改名。镜像改为 `ghcr.io/yy4382/palace-control-plane:<版本>`，容器内路径由新 Compose 设置。自定义挂载中的 `/var/lib/mate`、`/opt/mate` 改为 `/var/lib/palace`、`/opt/palace`。用日常 `compose.yaml` 启动控制面，不再次初始化。
-4. 按 §3.2 安装同版本的 Palace node，在首次启动前复制下面两项；目标已有配置或身份时先核对，不能覆盖另一套安装。POSIX 保留目录 0700、文件 0600 和原账号所有权，Windows 在原登录账号下复制。**身份文件不能重新生成**，否则已有 Agent 仍指向旧 node ID。
-
-   | 内容 | Mate 原位置 | Palace 新位置 |
-   |---|---|---|
-   | Linux/macOS 配置 | `~/.config/mate/node.json` | `~/.config/palace/node.json` |
-   | Linux/macOS 身份与日志目录 | `~/.local/share/mate/node` | `~/.local/share/palace/node` |
-   | Windows 配置 | `%LOCALAPPDATA%\Mate\config\node.json` | `%LOCALAPPDATA%\Palace\config\node.json` |
-   | Windows 身份与日志目录 | `%LOCALAPPDATA%\Mate\data` | `%LOCALAPPDATA%\Palace\data` |
-
-   配置中的 `workspacesRoot` 保留原来的绝对路径，已有工作区可以继续留在 `~/mate/workspaces`。不要复制旧服务定义或旧程序目录，也不需要重新配对。把新命令目录加入 PATH，执行 `palace node start`，用 `palace node status` 和网页确认同一个 node 在线、原 Agent 工作区可读。
-5. 自动部署要重新按 §5.5 安装 `palace-deploy`、`/etc/palace-deploy.env`，并更新 SSH key 的 forced-command 路径。`PALACE_PLANE_DIR`、`PALACE_NODE_USER` 保留实际目录和账号，`PALACE_IMAGE_REPO` 使用新镜像名。将当前 Palace 包及其 `.sha256` 放进 `/var/lib/palace-deploy/bundles/`，之后才恢复 `DEPLOY_HOST`。旧 Mate 包保留作手动回退；新脚本的自动回退仅适用于 Palace 版本之间。新 GHCR 包首次发布后确认其可见性为 public，目标主机能匿名拉取，再启用自动部署。
-
-本次改名没有增加数据库迁移。登录 cookie `__Host-mate_session`、Agent 文档及任务的 `mate.*` 标识、原生本地存储键和推送本地化键保留，以便继续读取已有状态；同一 origin 下已有网页会话继续有效。旧版本存储夹具及其生成脚本保留历史包名和源码条件。
-
-iOS 的展示名、scheme 和 bundle identifier 分别改为 `Palace`、`palace`、`dev.yyang.palace`。它是独立的原生 app 身份：需要对应的 App ID、签名和推送能力，控制面的 `PALACE_APNS_TOPIC` 必须匹配。旧 app 的登录与本地设置不会自动转移到新 app；切换前在旧 app 关闭通知并退出，新 app 重新填服务器、登录和登记通知。重新 prebuild 后构建（§6.1），不要沿用旧生成工程。保留推送本地化键让升级期间的旧客户端仍能解析提示，但新的 APNs topic 不能向旧 app 的 token 投递。
-
-需要回退时，停止并卸载 Palace node，停止新控制面，恢复第 2 步的控制面备份和旧 Compose、`.env`、镜像，用原版包重新安装 Mate node 并使用保留的旧配置、身份和工作区。回退完成前保持自动部署关闭；备份之后的控制面写入随恢复备份丢失。
-
-#### Palace 版本之间更新
-
 先停 node，再停控制面，两边换成同一版本，先启动控制面并确认能登录，再启动 node。node 一侧：
 
 ```sh
