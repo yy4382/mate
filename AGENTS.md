@@ -3,16 +3,28 @@
 - CODE AS SOURCE OF TRUTH. If documentation or this memory file conflict with code behaviour, obey the code. If you find a disagreement between code and documentation, search along git history/ GitHub issues and PR for context, and let the user decide.
 - Read `docs/ARCHITECTURE.md` before any design or code change, and `docs/MODULE_TESTS.md` before writing tests, and `docs/DESIGN.md` before changing the web UI.
 - Name things with the terms in `GLOSSARY.md`; add a term there when you introduce a new concept.
-- Tests drive a module only through its public interface and assert only what that interface exposes. Unit tests are out of scope.
 - Fix a recurring class of bug by changing the structure until it cannot occur, not by adding a guard for one case.
 - When a decision changes, update the docs in the same commit and delete the code it supersedes.
 - Use pnpm.
-- Commit to local branches. A minor improvement or bug fix ships without asking: open a PR, merge it once CI is green, then push the next `v*` tag, which deploys it (`docs/DEPLOYMENT.md` 5.5); report the version. Anything larger, anything that migrates a store, and changes to the deploy itself wait for the user on the PR.
 - Avoid spamming markdown files as documents, they often quickly become irrelevant or outdated.
   - Think twice before creating new project document (those that describe how to develop our project, e.g. `docs/ARCHITECTURE.md`, not those user-oriented documents that describe how to use our project), adding this kind of documentation requires user permission.
 - Be curious about WHY. Find out why we want this change and why the previous code has such logic. Not only get an idea on what the logic (more specifically, code's control flow) is, but also care about why we did that in the past. This can avoid unnecessary changes or anomalies in the project’s expected behavior.
+
+## Autonomy
+
+- The agent is free to merge PR or directly push to main branch.
+- For changes that doesn't change the deploy process, the agent is free to release a new server version (push a `v*` tag). 
+  - For iOS versions, agent is free to release testflight versions, but not that frequently.
+    - Only a big enough iOS change triggers a testflight release.
+    - When there are other work still going, wait them to finish and the batch the changes in 1 release.
+    - The frequency should be around 3 per day, if we do have more important changes to release, this is not a hard limit.
+
+## Tests
+
+- Tests drive a module only through its public interface and assert only what that interface exposes. Unit tests are out of scope.
 - Keep tests and CI fast. Avoid unnecessary sleeps in tests and duplicate checks across CI workflows.
 - Smoke tests are often unnecessary or even misleading. They may run in a slightly different environment or test a slightly different version of the code, making their results less representative and quick to become outdated. It is fine to use smoke tests during development, but do not commit them to Git as permanent tests that run on every change.
+
 
 ## Lessons from corrections
 
