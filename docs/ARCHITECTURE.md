@@ -17,7 +17,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palac
 每个 Agent 有一个 **runtime**，它只做两件事：
 
 1. 维持 agent loop：调用模型、执行工具、把结果交回模型，一直跑下去。上下文太长时自动压缩。
-2. 把模型的工具调用送到该执行的地方：聊天工具送到聊天 app，命令和文件工具送到 node，等等。
+2. 把模型的工具调用送到该执行的地方：聊天工具送到聊天 app，命令和文件工具送到 node，等等。聊天工具由 Manager 以插件交给 runtime，runtime 自己不认识聊天。
 
 其余一切都属于**环境**：聊天 app、node、提醒、管理界面。环境和 runtime 之间只通过事先定义好的接口相连。聊天 app 不知道 runtime 存在；在聊天 app 眼里，Agent 就是一个普通账号。
 
@@ -28,7 +28,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palac
 1. **每个事实只有一个主人。** runtime 的状态只存在该 Agent 的 Durable 存储里，聊天的状态只存在聊天 app 的数据库里，两边不互相镜像，也就不需要跨库对账。
 2. **跨边界只靠幂等 ID。** 一次跨模块调用如果可能被重复，就带一个稳定的 ID（事件 ID、工具调用 ID、客户端生成的请求 ID）。接收方按这个 ID 去重：同一个 ID 只生效一次，重复调用返回第一次的结果。
 3. **状态用结构表示，不用标记表示。** "这个 Agent 存在"等于"它的文件存在"。一个 Agent 要么打开（有 runtime），要么关闭，没有第三种状态。"已暂停"只是关闭的 Agent 在自己文件里留的一条记录，让它重启后仍然关闭；这条记录只在 Agent 关闭时读写，所以不存在一个和已打开的 runtime 并存、需要保持一致的标记。
-4. **每类事情只有一个入口。** runtime 接收外界输入只有一种方式：提交到 Durable 收件箱。消息、提醒、助手汇报都走这一条路。
+4. **每类事情只有一个入口。** runtime 接收外界输入只有一种方式：由某个输入种类生成输入，提交到 Durable 收件箱。通知、webhook、提醒、助手汇报都走这一条路，没有不经过输入种类的字符串入口。
 
 第 9 节逐条列出旧问题，以及新结构为什么让它们不可能出现。
 
@@ -73,8 +73,9 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palac
 | 包 | 内容 |
 |---|---|
 | `packages/chat`（`@palace/chat`） | 聊天 app |
-| `packages/runtime`（`@palace/runtime`） | Agent runtime 及其扩展 |
-| `packages/manager`（`@palace/manager`） | Agent Manager 和连接器 |
+| `packages/agent-plugin`（`@palace/agent-plugin`） | Agent 插件契约：插件和输入种类。一个能力的工具、提示、输入和文档在拥有它的包里用插件交给 runtime |
+| `packages/runtime`（`@palace/runtime`） | Agent runtime：内置扩展，并装入各包交来的插件 |
+| `packages/manager`（`@palace/manager`） | Agent Manager、连接器和聊天插件 |
 | `packages/node-protocol`（`@palace/node-protocol`） | 网关与 node 之间的消息格式，包括工具名和工具结果的形状 |
 | `packages/clock`（`@palace/clock`） | 时钟：`now` 和可中止的 `sleep`，各模块共用，测试里换成可控时钟 |
 | `packages/gateway`（`@palace/gateway`） | node 网关 |
@@ -95,11 +96,12 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palac
 | 模块 | 管什么 | 文档 |
 | --- | --- | --- |
 | 聊天 app | 账号、会话、时间线、已读位置、任务、收件事件、实时事件和推送队列。不知道 runtime 存在，Agent 在它眼里只是一种账号 | [packages/chat](../packages/chat/ARCHITECTURE.md) |
-| Agent runtime | 一个 Agent 的 Durable Harness 和扩展：聊天、工作区、提醒、助手、历史、按需文档，以及后台命令 | [packages/runtime](../packages/runtime/ARCHITECTURE.md) |
-| Agent Manager 和连接器 | 唯一能打开 runtime 的地方，每个 Agent 一条串行队列；连接器把收件事件变成 runtime 收件箱里的通知 | [packages/manager](../packages/manager/ARCHITECTURE.md) |
+| Agent 插件契约 | 插件和输入种类：一个能力在拥有它的包里增删，不改 runtime | [packages/agent-plugin](../packages/agent-plugin/ARCHITECTURE.md) |
+| Agent runtime | 一个 Agent 的 Durable Harness 和内置扩展：工作区、提醒、助手、历史，以及后台命令；装入插件，按插件的文档提供按需文档 | [packages/runtime](../packages/runtime/ARCHITECTURE.md) |
+| Agent Manager 和连接器 | 唯一能打开 runtime 的地方，每个 Agent 一条串行队列；聊天插件（聊天工具、聊天系统提示、未读通知）；连接器把收件事件变成通知交给 runtime | [packages/manager](../packages/manager/ARCHITECTURE.md) |
 | Node 网关 | node 的配对、认证、心跳，把整个工具调用转发给 node | [packages/gateway](../packages/gateway/ARCHITECTURE.md) |
 | Node | 宿主账号下的进程，在 Agent 的工作区里执行命令和文件工具；`palace node` CLI | [apps/node](../apps/node/ARCHITECTURE.md) |
-| 管理模块 | 拥有 Agent Manager，管理 Agent、提供商凭据、node 授权、webhook、观察和工作区浏览 | [packages/admin](../packages/admin/ARCHITECTURE.md) |
+| 管理模块 | 拥有 Agent Manager，管理 Agent、提供商凭据、node 授权、webhook（含 webhook 插件和它的按需文档）、观察和工作区浏览 | [packages/admin](../packages/admin/ARCHITECTURE.md) |
 | 控制面外壳 | 组装各模块，人类登录与管理、HTTP 路由、SSE、Web Push 和 APNs 发送器 | [apps/control-plane](../apps/control-plane/ARCHITECTURE.md) |
 | 网页客户端 | 聊天和管理两个互不 import 的前端模块，共享外壳 | [apps/web](../apps/web/ARCHITECTURE.md) |
 | 移动客户端 | Expo iOS app，覆盖聊天、管理、观察和原生通知 | [apps/mobile](../apps/mobile/ARCHITECTURE.md) |

@@ -1,27 +1,20 @@
 import { bashTool } from "@palace/node-protocol";
 import { ScriptedProvider } from "@palace/testkit";
 import { describe, expect, it, onTestFinished } from "vitest";
-import { testChat } from "./test-chat.ts";
-import { defaultSettings, testAgent, text } from "./support.ts";
+import { defaultSettings, said, saidNow, testAgent, text } from "./support.ts";
 
 describe("agent loop", () => {
-  it("answers an input through the model and posts its final text nowhere", async () => {
+  it("answers an input through the model", async () => {
     const agent = await testAgent();
-    const chat = testChat();
     agent.provider.step("answer", (request) => {
       expect(request.userTexts()).toContain("hello there");
       request.text("hi owner");
     });
-    const { runtime } = await agent.open({ chat: chat.port });
+    const { runtime } = await agent.open();
 
-    const input = await runtime.submit("hello there", { requestId: "m1" });
+    const input = await runtime.submit(said.input("m1", "hello there"));
 
     expect(await input.settled()).toBe("done");
-    expect(
-      chat.chat.search(chat.owner, "hi owner"),
-      "the final text is in no conversation the owner can read, which is every one",
-    ).toEqual([]);
-    expect(chat.chat.unreadSummary(chat.owner).total, "and notified nobody").toBe(0);
     expect(agent.workspace.calls).toEqual([]);
     agent.provider.assertComplete();
   });
@@ -31,8 +24,8 @@ describe("agent loop", () => {
     agent.provider.step("answer", (request) => request.text("once"));
     const { runtime } = await agent.open();
 
-    const first = await runtime.submit("ping", { requestId: "same" });
-    const second = await runtime.submit("ping", { requestId: "same" });
+    const first = await runtime.submit(said.input("same", "ping"));
+    const second = await runtime.submit(said.input("same", "ping"));
     await Promise.all([first.settled(), second.settled()]);
     await runtime.idle();
 
@@ -54,7 +47,7 @@ describe("agent loop", () => {
       });
     const { runtime } = await agent.open();
 
-    await (await runtime.submit("what is here?", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "what is here?"))).settled();
 
     expect(agent.workspace.calls).toEqual([
       {
@@ -74,7 +67,7 @@ describe("agent loop", () => {
       request.text("ok");
     });
     const { runtime } = await agent.open();
-    await (await runtime.submit("hi", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "hi"))).settled();
 
     expect(offered?.["description"], "what bash promises is what the node does").toBe(
       bashTool.description,
@@ -103,9 +96,9 @@ describe("agent loop", () => {
       });
     const { runtime } = await agent.open();
 
-    const input = await runtime.submit("build it", { requestId: "m1" });
+    const input = await runtime.submit(said.input("m1", "build it"));
     const call = await agent.workspace.nextCall();
-    await runtime.submit("also run the tests", { requestId: "m2", whenBusy: "steer" });
+    await runtime.submit(saidNow.input("m2", "also run the tests"));
     call.resolve(text("built"));
 
     expect(await input.settled()).toBe("done");
@@ -127,14 +120,15 @@ describe("agent loop", () => {
       });
     const { runtime } = await agent.open();
 
-    await runtime.submit("build it", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "build it"));
     const call = await agent.workspace.nextCall();
-    await runtime.submit("stale notice", { requestId: "m2", whenBusy: "steer" });
-    expect(await runtime.withdraw("m2")).toBe("withdrawn");
+    const stale = saidNow.input("m2", "stale notice");
+    await runtime.submit(stale);
+    expect(await runtime.withdraw(stale.requestId)).toBe("withdrawn");
     call.resolve(text("built"));
     await runtime.idle();
 
-    expect(await runtime.withdraw("m2")).toBe("settled");
+    expect(await runtime.withdraw(stale.requestId)).toBe("settled");
     expect(await runtime.withdraw("never-sent")).toBe("not_found");
     agent.provider.assertComplete();
   });
@@ -149,13 +143,14 @@ describe("agent loop", () => {
       .step("finish", (request) => request.text("done"));
     const { runtime } = await agent.open();
 
-    await runtime.submit("build it", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "build it"));
     const call = await agent.workspace.nextCall();
-    const steered = await runtime.submit("note", { requestId: "m2", whenBusy: "steer" });
+    const note = saidNow.input("m2", "note");
+    const steered = await runtime.submit(note);
     call.resolve(text("built"));
     await agent.provider.received(2);
 
-    expect(await runtime.withdraw("m2")).not.toBe("withdrawn");
+    expect(await runtime.withdraw(note.requestId)).not.toBe("withdrawn");
     expect(await steered.settled()).toBe("done");
     await runtime.idle();
     agent.provider.assertComplete();
@@ -183,12 +178,12 @@ describe("agent loop", () => {
     const [a, b] = await Promise.all([alice.open(), bob.open()]);
 
     await Promise.all([
-      (await a.runtime.submit("alice: secret one", { requestId: "m1" })).settled(),
-      (await b.runtime.submit("bob: secret two", { requestId: "m1" })).settled(),
+      (await a.runtime.submit(said.input("m1", "alice: secret one"))).settled(),
+      (await b.runtime.submit(said.input("m1", "bob: secret two"))).settled(),
     ]);
     await Promise.all([
-      (await a.runtime.submit("alice: more", { requestId: "m2" })).settled(),
-      (await b.runtime.submit("bob: more", { requestId: "m2" })).settled(),
+      (await a.runtime.submit(said.input("m2", "alice: more"))).settled(),
+      (await b.runtime.submit(said.input("m2", "bob: more"))).settled(),
     ]);
 
     for (const who of ["alice", "bob"]) {

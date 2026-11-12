@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceNode } from "../src/index.ts";
-import { testAgent, text } from "./support.ts";
+import { testAgent, text, said } from "./support.ts";
 
 const home: WorkspaceNode = { name: "server", online: true, platform: "linux", home: true };
 const laptop: WorkspaceNode = { name: "laptop", online: false, platform: null, home: false };
@@ -48,7 +48,7 @@ describe("workspace targets", () => {
         });
       const { runtime } = await agent.open();
 
-      await (await runtime.submit("use the workspace", { requestId: "m1" })).settled();
+      await (await runtime.submit(said.input("m1", "use the workspace"))).settled();
 
       expect(
         agent.workspace.calls.map((call) => ({ tool: call.tool, arguments: call.arguments })),
@@ -91,7 +91,7 @@ describe("workspace targets", () => {
       });
     const { runtime } = await agent.open();
 
-    await (await runtime.submit("where can you work?", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "where can you work?"))).settled();
 
     expect(agent.workspace.calls, "listing nodes does not run a workspace tool").toEqual([]);
     agent.provider.assertComplete();
@@ -130,7 +130,7 @@ describe("workspace targets", () => {
       .step("assistant answers", (request) => request.text("I can list the available nodes"));
     const { runtime } = await agent.open();
 
-    await runtime.submit("delegate the check", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "delegate the check"));
     await finished.promise;
     await runtime.idle();
 

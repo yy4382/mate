@@ -9,21 +9,20 @@ import {
   type Conversation,
   type Cursor,
   defineDoc,
-  type Extension,
 } from "@earendil-works/pi-durable";
 import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { AgentStateDoc, type AgentUsage } from "./agent-state.ts";
 import { AssistantsDoc, assistants } from "./assistants.ts";
-import { chatExtension, type ChatPort } from "./chat-tools.ts";
+import type { InputKind, Plugin, PluginInput } from "@palace/agent-plugin";
 import { systemClock, type Clock } from "@palace/clock";
-import { docsExtension } from "./docs.ts";
+import { DOCS_EXTENSION, docsExtension } from "./docs.ts";
 import { historyExtension } from "./history.ts";
 import { Lifetime, guardDatabase } from "./lifetime.ts";
 import { agentModels, type CredentialsLookup, type ModelResolver } from "./models.ts";
+import { installPlugins, type Capability } from "./plugins.ts";
 import { reminders } from "./reminders.ts";
 import { agentChange, configureConversations, settingsOf, type AgentSettings } from "./settings.ts";
 import { createAgentStorage, openAgentStorage, type DatabaseWrapper } from "./storage.ts";
-import { webhookContentExtension } from "./webhook-content.ts";
 import { workspaceExtension, type WorkspacePort } from "./workspace-tools.ts";
 
 export type AgentRuntimeOptions = {
@@ -32,8 +31,11 @@ export type AgentRuntimeOptions = {
   /** Each provider's credentials, read at every model request, so a changed key applies from the next request. */
   readonly credentials: CredentialsLookup;
   readonly workspace: WorkspacePort;
-  /** The chat app bound to this Agent's account. Without it the Agent has no chat tools. */
-  readonly chat?: ChatPort;
+  /**
+   * The capabilities owned outside the runtime, installed after its own in this order. A primary plugin is absent from
+   * assistants' conversations.
+   */
+  readonly plugins?: readonly Plugin[];
   readonly resolveModel?: ModelResolver;
   readonly wrapDatabase?: DatabaseWrapper;
   /** Called once if the runtime's storage fails. The runtime is then dead and the Agent should be reopened. */
@@ -41,9 +43,6 @@ export type AgentRuntimeOptions = {
   /** Defaults to the system clock. Override in tests. */
   readonly clock?: Clock;
 };
-
-/** When an input arrives while the Agent is working: join the current work after this tool round, or wait for it. */
-export type WhenBusy = "steer" | "followUp";
 
 export type SubmittedInput = {
   /**
@@ -98,6 +97,33 @@ export async function createAgentStore(
 /** Open an existing Agent's runtime and resume whatever its last process left unfinished. */
 export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<AgentRuntime> {
   const lifetime = new Lifetime();
+  const clock = options.clock ?? systemClock;
+  const registry = createRegistry();
+  const { primary: assistantsPrimary, identity: assistantsIdentity } = assistants(() =>
+    capabilities.filter(({ scope }) => scope === "primary").map(({ extension }) => extension),
+  );
+  const { extension: remindersExtension, run: runReminders } = reminders(clock, lifetime.signal);
+  // `harness` exists by the time a tool runs: no task is scheduled before `resume()`.
+  const workspace = workspaceExtension(options.workspace, lifetime.signal, (id, context) =>
+    harness.abortTask(id, context),
+  );
+  const installed = installPlugins(
+    options.plugins ?? [],
+    [workspace, historyExtension, assistantsPrimary, remindersExtension, assistantsIdentity]
+      .map(({ name }) => name)
+      .concat(DOCS_EXTENSION),
+  );
+  const docs = docsExtension(installed.topics);
+  // The install order is the order of the prompt's sections.
+  const capabilities: readonly Capability[] = [
+    { extension: workspace, scope: "every" },
+    { extension: historyExtension, scope: "every" },
+    ...(docs === undefined ? [] : [{ extension: docs, scope: "every" } as const]),
+    { extension: assistantsPrimary, scope: "primary" },
+    { extension: remindersExtension, scope: "primary" },
+    ...installed.capabilities,
+    { extension: assistantsIdentity, scope: "every" },
+  ];
   const { storage, database } = await openAgentStorage(
     options.file,
     options.wrapDatabase,
@@ -107,29 +133,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
         options.onFatal?.(error);
       }),
   );
-  const clock = options.clock ?? systemClock;
-  const registry = createRegistry();
-  const { primary: assistantsPrimary, identity: assistantsIdentity } = assistants(
-    () => primaryOnlyExtensions,
-  );
-  const { extension: remindersExtension, run: runReminders } = reminders(clock, lifetime.signal);
-  // Extensions available in the primary conversation only; assistants must not have them.
-  const primaryOnlyExtensions: readonly Extension[] = [
-    assistantsPrimary,
-    remindersExtension,
-    webhookContentExtension,
-    ...(options.chat === undefined ? [] : [chatExtension(options.chat)]),
-  ];
-  // `harness` exists by the time a tool runs: no task is scheduled before `resume()`.
-  registry.install(
-    workspaceExtension(options.workspace, lifetime.signal, (id, context) =>
-      harness.abortTask(id, context),
-    ),
-  );
-  registry.install(historyExtension);
-  registry.install(docsExtension());
-  for (const extension of primaryOnlyExtensions) registry.install(extension);
-  registry.install(assistantsIdentity);
+  for (const { extension } of capabilities) registry.install(extension);
   const harness = await Harness.open(
     storage,
     {
@@ -140,7 +144,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     BACKGROUND_CONTEXT,
   );
   const root = await harness.root(BACKGROUND_CONTEXT);
-  const runtime = new AgentRuntime(harness, storage, root, lifetime);
+  const runtime = new AgentRuntime(harness, storage, root, lifetime, installed.kinds);
   harness.resume();
   // Run the reminder loop in the background; it exits when the lifetime ends.
   void runReminders(harness, root);
@@ -152,33 +156,36 @@ export class AgentRuntime {
   readonly #storage: SqliteStorage;
   readonly #root: Conversation;
   readonly #lifetime: Lifetime;
+  readonly #kinds: ReadonlySet<InputKind<never>>;
   #closed: Promise<void> | undefined;
 
-  constructor(harness: Harness, storage: SqliteStorage, root: Conversation, lifetime: Lifetime) {
+  constructor(
+    harness: Harness,
+    storage: SqliteStorage,
+    root: Conversation,
+    lifetime: Lifetime,
+    kinds: ReadonlySet<InputKind<never>>,
+  ) {
     this.#harness = harness;
     this.#storage = storage;
     this.#root = root;
     this.#lifetime = lifetime;
+    this.#kinds = kinds;
   }
 
   /**
-   * Admit an input to the primary conversation. The same `requestId` is admitted once, however often it is sent.
-   * With `replaces`, every input still queued whose requestId starts with it, other than `requestId` itself, is
-   * withdrawn first; one the model was handed meanwhile stays, so the model then sees both.
+   * Admit an input to the primary conversation under its `requestId`, once however often it is sent, with its kind's
+   * `whenBusy`. When the kind `replacesQueued`, every input of the kind still queued, other than this one, is withdrawn
+   * first; one the model was handed meanwhile stays, so the model then sees both. Rejects, and admits nothing, when
+   * the input's kind is not installed in this runtime.
    */
-  async submit(
-    content: string,
-    options: { requestId: string; whenBusy?: WhenBusy; replaces?: string },
-  ): Promise<SubmittedInput> {
-    if (options.replaces !== undefined)
-      await this.#withdrawQueued(options.replaces, options.requestId);
+  async submit(input: PluginInput): Promise<SubmittedInput> {
+    const { kind, requestId } = input;
+    if (!this.#kinds.has(kind))
+      throw new Error(`input kind ${kind.name} is not installed in this Agent`);
+    if (kind.replacesQueued) await this.#withdrawQueued(`${kind.name}:`, requestId);
     const submission = await this.#root.submit(
-      {
-        type: "input",
-        content,
-        requestId: options.requestId,
-        whenBusy: options.whenBusy ?? "followUp",
-      },
+      { type: "input", content: input.content, requestId, whenBusy: kind.whenBusy },
       BACKGROUND_CONTEXT,
     );
     return {

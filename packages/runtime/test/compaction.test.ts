@@ -1,7 +1,7 @@
 import type { ScriptedRequest, ScriptedRequestBody } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { defaultSettings, testAgent, text, within } from "./support.ts";
+import { defaultSettings, testAgent, text, within, said } from "./support.ts";
 
 /**
  * A 100k-token window. Palace compacts before a request that would leave less than 16384 tokens of it, and the summary
@@ -45,7 +45,7 @@ async function agentWithLongLogs(reportedTokens?: number) {
     );
   const summaries = agent.provider.lane("summaries", summarizing);
   const first = await agent.open();
-  await (await first.runtime.submit("check the build", { requestId: "m1" })).settled();
+  await (await first.runtime.submit(said.input("m1", "check the build"))).settled();
   return { agent, summaries, first };
 }
 
@@ -118,7 +118,7 @@ describe("compaction", () => {
         request.text("The disk quota on /var/build was exceeded.");
       });
 
-    const input = await first.runtime.submit("what exactly failed?", { requestId: "m2" });
+    const input = await first.runtime.submit(said.input("m2", "what exactly failed?"));
 
     expect(await input.settled()).toBe("done");
     agent.provider.assertComplete();
@@ -138,7 +138,7 @@ describe("compaction", () => {
       request.text("The disk quota was exceeded.");
     });
 
-    const input = await first.runtime.submit("what exactly failed?", { requestId: "m2" });
+    const input = await first.runtime.submit(said.input("m2", "what exactly failed?"));
 
     expect(await input.settled()).toBe("done");
     expect(
@@ -180,7 +180,7 @@ describe("compaction", () => {
         request.text("The disk quota was exceeded.");
       });
 
-      const input = await first.runtime.submit("what exactly failed?", { requestId: "m2" });
+      const input = await first.runtime.submit(said.input("m2", "what exactly failed?"));
 
       expect(await input.settled()).toBe("done");
       agent.provider.assertComplete();
@@ -196,7 +196,7 @@ describe("closing during compaction", () => {
       "at close",
       (request) => void request.partialText("SUMMARY-A: the bu").then(cancelled.resolve),
     );
-    await first.runtime.submit("what exactly failed?", { requestId: "m2" });
+    await first.runtime.submit(said.input("m2", "what exactly failed?"));
     await within(2000, "the summary request", summaries.received(1));
 
     await within(2000, "close", first.runtime.close());

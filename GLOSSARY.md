@@ -88,7 +88,7 @@ Palace 内置的类 Slack 聊天系统。它不知道 runtime 和模型的存在
 避免：订阅、participant（只说了一半）。
 
 **账号视角**（AccountChat）
-`ChatApp.forAccount(account)` 返回的对象：一组绑定到这个账号的读写方法，参数与 `ChatApp` 相同、去掉 account。它在结构上满足 runtime 的聊天端口。
+`ChatApp.forAccount(account)` 返回的对象：一组绑定到这个账号的读写方法，参数与 `ChatApp` 相同、去掉 account。它是聊天插件（`chatPlugin`）的入参，聊天工具只通过它调用聊天 app。
 
 **未读摘要**（unread summary）
 某个账号当前各条时间线的未读数量，以及其中有没有 @ 自己的消息。每条时间线还带上会话类型、显示名（频道名；私信为对方的 handle）、是否讨论串和最新一条未读的发送者，足够直接渲染一条通知。
@@ -138,7 +138,7 @@ Palace 内置的类 Slack 聊天系统。它不知道 runtime 和模型的存在
 ## Agent runtime
 
 **runtime**（agent runtime）
-运行一个 Agent 的组件。它包装一个 Durable Harness，加上 Palace 的扩展。每个 Agent 一个 runtime、一个存储文件。
+运行一个 Agent 的组件。它包装一个 Durable Harness，加上 Palace 的内置扩展和装入的插件。每个 Agent 一个 runtime、一个存储文件。
 
 **Durable**
 `@earendil-works/pi-durable` 库。它负责 agent loop、重试、对话记录、收件箱和上下文压缩。
@@ -147,7 +147,7 @@ Palace 内置的类 Slack 聊天系统。它不知道 runtime 和模型的存在
 Durable 里"一个存储，加上在这个存储上运行 agent 的机制"。runtime 打开时打开它，关闭时关闭它。
 
 **主对话**（primary conversation）
-一个 Agent 的主上下文。它在所有频道、讨论串和私信之间延续，只有它能使用聊天工具。
+一个 Agent 的主上下文。它在所有频道、讨论串和私信之间延续，只有它能使用主对话专属插件的工具，如聊天工具。
 避免：session（在聊天语境里有歧义）。
 
 **工作助手**（assistant）
@@ -157,13 +157,20 @@ Agent 派生出来的另一个 Durable 对话，有自己的上下文。它和�
 把一条输入交给这个 Agent 的某个对话的 Durable 后台任务，跑在主对话里。目标是工作助手时，它等助手回答，再把回答作为助手汇报提交给主对话，恰好一次。进入助手对话的输入只走这一条路：主对话发给助手的消息、助手自己的后台命令汇报都是投递。
 
 **收件箱**（inbox）
-Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入都提交到这里：通知、提醒、助手汇报。Agent 正在运行时，以 steer 方式提交的输入会插在当前这轮工具调用之后。
+Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入都提交到这里：由插件的输入种类生成的输入（通知、webhook）、提醒、助手汇报。Agent 正在运行时，以 steer 方式提交的输入会插在当前这轮工具调用之后。
 
 **run**
 从一条输入开始，到模型给出最终回答为止的这段工作。run 只是 Durable 内部的概念，Palace 不记录它，也不检查它"是否仍然有效"。
 
 **扩展**（extension）
-装进 Durable 的一组工具和系统提示片段，比如聊天、工作区、提醒、助手、历史。
+装进 Durable 的一组工具和系统提示片段。runtime 的内置能力（工作区、提醒、助手、历史）是扩展；插件装入时也成为一个同名扩展。
+
+**插件**（plugin）
+一个 Agent 能力的纯数据描述，由拥有这个能力的包用 `definePlugin` 交给 runtime：名字、作用范围（只有主对话，或工作助手也有）、系统提示的一段、工具、输入种类和按需文档。聊天是 manager 的插件，webhook 是 admin 的插件。增删一个能力只改这一处，不改 runtime。插件名存进助手对话的配置里，发布后不能改。runtime 自己的内置能力不是插件。
+避免：把内置扩展也叫插件。
+
+**输入种类**（input kind）
+插件声明的一种输入，由 `defineInput` 定义：系统提示里关于它的一句说明（`explain`）、把载荷变成文字的渲染、requestId 的命名空间（`<种类名>:<key>`）、Agent 忙时是 `steer` 还是 `followUp`、是否撤回同种类未交付的旧输入。`AgentRuntime.submit` 只收种类生成的输入，所以一种输入不可能没有说明就进到 Agent。
 
 **可重做**（replay-safe）
 声明了 `replay: "safe"` 的工具，崩溃后会被重新执行。只有只读的工具，或者按 requestId 幂等的工具才能这样声明。
@@ -173,9 +180,6 @@ Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入
 
 **结果未知**（unknown result）
 node 工具调用进行中连接断开时，返回给模型的结果：命令可能执行了，也可能没有，不会重试。
-
-**聊天端口**（ChatPort）
-runtime 自己定义的、绑定到 Agent 账号的聊天操作接口，聊天工具只通过它调用聊天 app。Agent Manager 用 `ChatApp.forAccount` 得到的账号视角实现它。runtime 不 import 聊天 app。
 
 **游标**（cursor）
 runtime 存在自己 Durable 存储里的一个命名位置，只进不退，比如连接器在收件事件里处理到的事件 ID（`chat-inbox`）。
@@ -286,7 +290,7 @@ Agent 把一次工具调用送到已授权的非主 node，在该 node 上自己
 管理模块判断的主 node 或访问关系，主 node 为 `home`，获准访问的非主 node 为 `visit`，经网关交给 node。两者使用相同的 Agent 工作区路径，但主工作区只显式初始化，访问工作区的准备不初始化 MEMORY.md。
 
 **Palace 文档**（Palace docs）
-`packages/runtime/docs/<topic>.md`：讲某个 Palace 功能怎么工作的、写给模型的英文文档，每个主题一个文件，front matter 的 `description` 是索引里的一行。Agent 用 `palace_docs({ topic })` 按需阅读，不进系统提示；工具描述就是索引。Agent 为读懂收到的东西而必须知道的（如 webhook 标签的含义）不在这里，留在提示或输入里。
+拥有该功能的包里的 `docs/<topic>.md`（如 `packages/admin/docs/webhooks.md`），由它的插件交给 runtime：讲某个 Palace 功能怎么工作的、写给模型的英文文档，每个主题一个文件，front matter 的 `description` 是索引里的一行。Agent 用 `palace_docs({ topic })` 按需阅读，不进系统提示；工具描述就是索引。Agent 为读懂收到的东西而必须知道的（如 webhook 标签的含义）不在这里，留在提示或输入种类的说明里。
 避免：把它叫"技能"（skill）：Palace 没有技能机制；也不是用户手册。
 
 **node 授权**（node grant）

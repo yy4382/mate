@@ -13,6 +13,7 @@ import {
   type Extension,
   type Tx,
 } from "@earendil-works/pi-durable";
+import { builtinRequestId } from "./plugins.ts";
 
 type Assistant = {
   conversationId: ConversationId;
@@ -96,7 +97,7 @@ const Deliverer = defineTask<DelivererInput, DelivererState, null>({
           type: "input",
           content,
           whenBusy,
-          requestId: requestId ?? `assistant:${delivery.id}`,
+          requestId: requestId ?? builtinRequestId("assistant", delivery.id),
         },
         context,
       );
@@ -136,7 +137,7 @@ const Deliverer = defineTask<DelivererInput, DelivererState, null>({
             type: "input",
             content: report,
             whenBusy: "followUp",
-            requestId: `assistant-report:${delivery.id}`,
+            requestId: builtinRequestId("assistant-report", delivery.id),
           },
           context,
         );

@@ -1,64 +1,11 @@
 import { Type, type Static, type TSchema } from "@earendil-works/pi-ai";
 import {
-  defineExtension,
   defineTool,
-  section,
   type ToolExecutionResult,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
-
-/** Where entries live: a conversation's top level, or the replies under one top-level message. */
-export type ChatTimeline = { readonly conversation: number } | { readonly thread: number };
-
-export type ChatTaskChange =
-  | { readonly kind: "claim" }
-  | { readonly kind: "yield" }
-  | { readonly kind: "complete" }
-  | { readonly kind: "transfer"; readonly to: number };
-
-/**
- * The chat app as one Agent's account sees it: what the chat tools call. Every write and every forward read carries
- * the tool call's `requestId`, and the chat app answers a repeated `requestId` with the first result, so a call rerun
- * after a crash changes nothing twice. Results are handed to the model as JSON, as the chat app returned them; any
- * method may return a promise. A refusal is thrown as an `Error` with a string `reason`; it becomes an error result the
- * model reads, not a failed tool call.
- *
- * `freshness: true` is the runtime's decision, never the model's: an Agent's write is always held when someone else
- * wrote in the timeline after the Agent last read it.
- */
-export interface ChatPort {
-  readUnread(timeline: ChatTimeline, request: { readonly requestId: string }): unknown;
-  readHistory(
-    timeline: ChatTimeline,
-    query: { readonly before?: number; readonly limit?: number },
-  ): unknown;
-  search(query: string): unknown;
-  send(
-    timeline: ChatTimeline,
-    request: {
-      readonly requestId: string;
-      readonly body: string;
-      readonly mentions?: number[];
-      readonly freshness: true;
-    },
-  ): unknown;
-  join(request: { readonly requestId: string; readonly conversationId: number }): unknown;
-  leave(request: { readonly requestId: string; readonly conversationId: number }): unknown;
-  openDm(request: { readonly requestId: string; readonly other: number }): unknown;
-  listConversations(): unknown;
-  createTask(request: {
-    readonly requestId: string;
-    readonly messageId: number;
-    readonly title: string;
-    readonly freshness: true;
-  }): unknown;
-  changeTask(request: {
-    readonly requestId: string;
-    readonly taskId: number;
-    readonly change: ChatTaskChange;
-    readonly freshness: true;
-  }): unknown;
-}
+import { defineInput, definePlugin, type Plugin } from "@palace/agent-plugin";
+import type { AccountChat, UnreadSummary } from "@palace/chat";
 
 const Id = (description: string) => Type.Integer({ minimum: 1, description });
 
@@ -81,17 +28,17 @@ const HELD =
   "If someone wrote in the timeline after you last read it, nothing is done: the result has status held, carries " +
   "the entries you missed, and moves your read position past them. Then resend as it was or revised; both are fine.";
 
-/** The tool that reads a timeline forward, which inputs about unread chat point the model to. */
-export const CHAT_READ_UNREAD = "chat_read_unread";
+/** The tool that reads a timeline forward, which the unread notice points the model to. */
+const CHAT_READ_UNREAD = "chat_read_unread";
 
-const tools: readonly ((port: ChatPort) => ToolRegistration)[] = [
+const tools: readonly ((account: AccountChat) => ToolRegistration)[] = [
   chatTool({
     name: CHAT_READ_UNREAD,
     description:
       "Read a timeline forward from your read position and move the position to its end. When the unread entries " +
       "exceed the budget you get the newest that fit, and the result names the skipped range and the mentions in it.",
     parameters: Type.Object({ timeline: Timeline }),
-    call: (port, args, requestId) => port.readUnread(args.timeline, { requestId }),
+    call: (account, args, requestId) => account.readUnread(args.timeline, { requestId }),
   }),
   chatTool({
     name: "chat_read_history",
@@ -102,8 +49,8 @@ const tools: readonly ((port: ChatPort) => ToolRegistration)[] = [
       before: Type.Optional(Type.Integer({ minimum: 0, description: "Default: the newest entry" })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: "Default 50" })),
     }),
-    call: (port, { timeline, before, limit }) =>
-      port.readHistory(timeline, {
+    call: (account, { timeline, before, limit }) =>
+      account.readHistory(timeline, {
         ...(before === undefined ? {} : { before }),
         ...(limit === undefined ? {} : { limit }),
       }),
@@ -113,7 +60,7 @@ const tools: readonly ((port: ChatPort) => ToolRegistration)[] = [
     description:
       "Find entries containing a text, in every timeline you can read. Does not move any read position.",
     parameters: Type.Object({ query: Type.String({ minLength: 1 }) }),
-    call: (port, args) => port.search(args.query),
+    call: (account, args) => account.search(args.query),
   }),
   chatTool({
     name: "chat_send",
@@ -125,8 +72,8 @@ const tools: readonly ((port: ChatPort) => ToolRegistration)[] = [
         Type.Array(Type.Integer({ minimum: 1 }), { description: "Account IDs to notify" }),
       ),
     }),
-    call: (port, { timeline, body, mentions }, requestId) =>
-      port.send(timeline, {
+    call: (account, { timeline, body, mentions }, requestId) =>
+      account.send(timeline, {
         requestId,
         body,
         freshness: true,
@@ -137,26 +84,28 @@ const tools: readonly ((port: ChatPort) => ToolRegistration)[] = [
     name: "chat_join",
     description: "Join a channel, so you can post in it and are notified of its messages.",
     parameters: Type.Object({ conversationId: Id("Channel ID") }),
-    call: (port, args, requestId) => port.join({ requestId, conversationId: args.conversationId }),
+    call: (account, args, requestId) =>
+      account.join({ requestId, conversationId: args.conversationId }),
   }),
   chatTool({
     name: "chat_leave",
     description: "Leave a channel.",
     parameters: Type.Object({ conversationId: Id("Channel ID") }),
-    call: (port, args, requestId) => port.leave({ requestId, conversationId: args.conversationId }),
+    call: (account, args, requestId) =>
+      account.leave({ requestId, conversationId: args.conversationId }),
   }),
   chatTool({
     name: "chat_open_dm",
     description:
       "Open the direct-message conversation with another account; returns its conversation ID.",
     parameters: Type.Object({ account: Id("The other account's ID") }),
-    call: (port, args, requestId) => port.openDm({ requestId, other: args.account }),
+    call: (account, args, requestId) => account.openDm({ requestId, other: args.account }),
   }),
   chatTool({
     name: "chat_list_conversations",
     description: "List the conversations you can see, with their members and whether you are one.",
     parameters: Type.Object({}),
-    call: (port) => port.listConversations(),
+    call: (account) => account.listConversations(),
   }),
   chatTool({
     name: "chat_create_task",
@@ -165,8 +114,8 @@ const tools: readonly ((port: ChatPort) => ToolRegistration)[] = [
       messageId: Id("The message the task belongs to"),
       title: Type.String({ minLength: 1, maxLength: 200 }),
     }),
-    call: (port, { messageId, title }, requestId) =>
-      port.createTask({ requestId, messageId, title, freshness: true }),
+    call: (account, { messageId, title }, requestId) =>
+      account.createTask({ requestId, messageId, title, freshness: true }),
   }),
   chatTool({
     name: "chat_change_task",
@@ -185,8 +134,8 @@ const tools: readonly ((port: ChatPort) => ToolRegistration)[] = [
         ),
       ]),
     }),
-    call: (port, { taskId, change }, requestId) =>
-      port.changeTask({ requestId, taskId, change, freshness: true }),
+    call: (account, { taskId, change }, requestId) =>
+      account.changeTask({ requestId, taskId, change, freshness: true }),
   }),
 ];
 
@@ -194,12 +143,14 @@ type ChatToolSpec<P extends TSchema> = {
   readonly name: string;
   readonly description: string;
   readonly parameters: P;
-  readonly call: (port: ChatPort, args: Static<P>, requestId: string) => unknown;
+  readonly call: (account: AccountChat, args: Static<P>, requestId: string) => unknown;
 };
 
-/** One chat tool, to be bound to the Agent's port. Its result, or the chat app's refusal, goes to the model as JSON. */
-function chatTool<P extends TSchema>(spec: ChatToolSpec<P>): (port: ChatPort) => ToolRegistration {
-  return (port) =>
+/** One chat tool, to be bound to the Agent's account. Its result, or the chat app's refusal, goes to the model as JSON. */
+function chatTool<P extends TSchema>(
+  spec: ChatToolSpec<P>,
+): (account: AccountChat) => ToolRegistration {
+  return (account) =>
     defineTool({
       name: spec.name,
       description: spec.description,
@@ -207,7 +158,7 @@ function chatTool<P extends TSchema>(spec: ChatToolSpec<P>): (port: ChatPort) =>
       replay: "safe",
       async execute(args, api): Promise<ToolExecutionResult> {
         try {
-          const result = await spec.call(port, args, `tool:${api.taskId}`);
+          const result = await spec.call(account, args, `tool:${api.taskId}`);
           return { content: [{ type: "text", text: JSON.stringify(result) ?? "null" }] };
         } catch (error) {
           if (!isRefusal(error)) throw error;
@@ -223,22 +174,53 @@ function isRefusal(error: unknown): error is Error & { reason: string } {
 }
 
 /**
+ * The unread notice: how much is unread at least and where, never what. The counts may be stale by the time the model
+ * reads them, and reading is the model's choice, so `explain` says once that a notice is only a hint. Each line
+ * carries the timeline exactly as the chat tools take it. requestId `notice:<event ID>`; a newer notice withdraws one
+ * still queued, so there is at most one undelivered.
+ */
+export const chatNotice = defineInput<{ summary: UnreadSummary; at: number }>({
+  name: "notice",
+  explain:
+    "Inputs that report unread chat are only hints and may be out of date; " +
+    `read with ${CHAT_READ_UNREAD} when you decide to.`,
+  whenBusy: "steer",
+  replacesQueued: true,
+  render: ({ summary, at }) => {
+    const time = new Date(at)
+      .toISOString()
+      .replace("T", " ")
+      .replace(/\.\d+Z$/, " UTC");
+    const lines = summary.timelines.map((timeline) => {
+      const place = timeline.kind === "dm" ? `私信 @${timeline.label}` : `#${timeline.label}`;
+      // Typed as the chat tools' argument, so the line stays something the model can pass to the read tool as is.
+      const argument: Static<typeof Timeline> = timeline.timeline;
+      const where = `${place}${timeline.inThread ? "/讨论串" : ""} ${JSON.stringify(argument)}`;
+      const mention = timeline.mentioned ? " · @了你" : "";
+      return `${where} 至少 ${timeline.unread} 条 · 最新发送者 @${timeline.latestSender}${mention}`;
+    });
+    return [
+      `截至 ${time}，至少有 ${summary.total} 条未读（其中 ${summary.mentions} 条 @ 了你），` +
+        `分布在 ${summary.timelines.length} 处，之后可能还有更多：`,
+      ...lines,
+      `每行花括号里就是 ${CHAT_READ_UNREAD} 要的 timeline。`,
+    ].join("\n");
+  },
+});
+
+/**
  * The chat tools and the prompt section that says how the Agent speaks. Primary conversation only: an assistant has no
  * chat tools. Every tool is a read or is idempotent on its requestId, the Durable tool task's ID, so all of them rerun
  * safely after a crash and get the chat app's stored result.
  */
-export function chatExtension(port: ChatPort) {
-  return defineExtension({
+export function chatPlugin(account: AccountChat): Plugin {
+  return definePlugin({
     name: "chat",
-    tools: tools.map((tool) => tool(port)),
-    sections: [
-      section(
-        "chat",
-        () =>
-          "You talk with people only through the chat tools. Your plain text output goes nowhere: nobody reads it. " +
-          "To say anything to anyone, call chat_send. Inputs that report unread chat are only hints and may be out " +
-          `of date; read with ${CHAT_READ_UNREAD} when you decide to.`,
-      ),
-    ],
+    scope: "primary",
+    prompt:
+      "You talk with people only through the chat tools. Your plain text output goes nowhere: nobody reads it. " +
+      "To say anything to anyone, call chat_send.",
+    tools: tools.map((tool) => tool(account)),
+    inputs: [chatNotice],
   });
 }

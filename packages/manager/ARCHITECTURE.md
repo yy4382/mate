@@ -10,9 +10,10 @@
 
 ### 接口
 
-`openAgentManager({ directory, chat, workspaces, credentials, clock?, report? })`，签名在 `src/index.ts`。
+`openAgentManager({ directory, chat, workspaces, credentials, plugins?, clock?, report? })`，签名在 `src/index.ts`。
 
 - `workspaces` 是 `WorkspaceHost`：`prepare(nodeId, agentId)` 准备工作区，`port(nodeId, agentId)` 返回工作区端口。生产环境由管理模块把 node 网关接进来。
+- `plugins` 是管理模块等调用方交来的插件，装进每个 Agent 的 runtime，排在聊天插件之前。Manager 给每个 Agent 装同一组插件。
 - `report(error, agentId)` 接收打不开的 Agent、出错的连接器和存储失败的 runtime，不让进程崩溃。
 - `AgentManager` 提供 `list`、`create`、`delete`、`pause`、`resume`、`describe`（`open`、`paused` 或 `closed`）、`configure`、`runtime(id)` 和 `close`。生命周期操作都返回 Promise，ID 不合法时 reject。
 
@@ -36,17 +37,31 @@
 
    已存在的 ID 以 `AgentIdInUse` 拒绝，什么都不改。改名之后 runtime 打不开时，Manager 报告错误，`create` 照常返回，Agent 处于关闭状态，`resume` 可以再打开它。
 
-5. **打开一个 Agent：** 从文件读是否暂停和 node ID，暂停了就不打开。用 `chat.findAccount(agentId)` 找到账号，把 `forAccount` 的结果作为聊天端口；用 `workspaces.port(nodeId, agentId)` 得到工作区端口；打开 runtime，再挂上连接器。node ID 之后不变，端口自己解析每次调用的可选目标 node。
+5. **打开一个 Agent：** 从文件读是否暂停和 node ID，暂停了就不打开。用 `chat.findAccount(agentId)` 找到账号，用 `forAccount` 的结果造这个 Agent 的聊天插件；用 `workspaces.port(nodeId, agentId)` 得到工作区端口；打开 runtime（装入 `plugins` 和聊天插件），再挂上连接器。node ID 之后不变，端口自己解析每次调用的可选目标 node。
 
 6. **删除的顺序：** 关闭 runtime，停用聊天账号，最后删除文件。中途失败时 Agent 仍然存在，重做即可。
 
 7. **runtime 死了，Agent 就关闭。** runtime 存储出错（`onFatal`）时，Manager 报告错误，并在这个 Agent 的队列里停掉连接器、关闭 runtime。Manager 不自动重开，因为同样的故障多半会让重开再次失败。它没被记为暂停，所以 `resume` 或下次启动会重新打开，Durable 从已提交的地方继续。
 
+## 聊天插件
+
+### 职责
+
+Agent 的聊天能力：聊天工具、告诉模型怎么发言的系统提示，以及未读通知这种输入。三者在 `src/chat-plugin.ts` 一处，通知的文字和它指向的工具 `chat_read_unread` 在同一个文件里。插件名是 `chat`（作用范围只有主对话，工作助手没有聊天工具）；名字存在助手对话的配置里，不能改。
+
+### 规则
+
+1. **聊天工具只通过账号视角调用聊天 app。** `chatPlugin(account)` 接收 `ChatApp.forAccount` 的结果（`AccountChat`）。聊天 app 不知道 runtime，runtime 也不知道聊天 app，只有 Manager 同时认识两边。工具的参数是模型给的参数加上 `requestId = tool:<Durable 工具任务 ID>`，结果原样转成 JSON 交给模型。发送和任务操作总是带 `freshness: true`，模型参数里没有这一项。聊天 app 的拒绝作为错误结果交给模型，不算工具失败。
+2. **系统提示一段。** 普通输出不会发到任何地方，发言必须调用发送工具，后面接上通知这种输入的说明：通知只是提示、可能已过时，什么时候读由 Agent 决定。这句话是通知输入种类的 `explain`，不在每条通知里重复。
+3. **通知是一个输入种类（`notice`）。** requestId 是 `notice:<事件 ID>`，`steer`，新通知撤回同种类里还没交给模型的旧通知（`replacesQueued`）。这三件事由种类自己决定，连接器只给事件 ID 和载荷。
+
+`chatPlugin` 从包里导出，因为聊天工具"崩溃后重做"的测试需要在真实 runtime 上注入故障存储适配器，而 `openAgentManager` 不暴露存储适配器。
+
 ## 连接器
 
 ### 职责
 
-把聊天 app 的收件事件变成 runtime 收件箱里的通知。每个 Agent 一个，由 Manager 在打开 runtime 时挂上（`connectInbox`）。它只用 runtime 的 `cursor`、`advanceCursor` 和 `submit`。
+把聊天 app 的收件事件变成通知，交给 runtime。每个 Agent 一个，由 Manager 在打开 runtime 时挂上（`connectInbox`）。它只用 runtime 的 `cursor`、`advanceCursor` 和 `submit`。
 
 ### 一遍处理
 
@@ -61,10 +76,10 @@
    每行花括号里就是 chat_read_unread 要的 timeline。
    ```
 
-   工具名取自 runtime 导出的 `CHAT_READ_UNREAD`。"通知只是提示、可能已过时"由聊天系统提示说一次，通知里不重复。摘要为空（这些消息都已读过）时不提交，只推进位置。
-3. 以 `requestId = notice:<最新事件 ID>`、`whenBusy = "steer"`、`replaces = "notice:"` 提交。Agent 正在运行时，通知插在当前这轮工具调用之后，收件箱里还没交给模型的旧通知先被撤回。哪些通知未交付由 Durable 的提交记录决定，所以任何时候最多一条未交付的通知。
+   工具名和通知文字都在聊天插件里。"通知只是提示、可能已过时"由聊天系统提示说一次，通知里不重复。摘要为空（这些消息都已读过）时不提交，只推进位置。
+3. 用 `chatNotice.input(<最新事件 ID>, { summary, at })` 提交，即 `requestId = notice:<最新事件 ID>`、`steer`、撤回同种类未交付的旧通知。Agent 正在运行时，通知插在当前这轮工具调用之后，收件箱里还没交给模型的旧通知先被撤回。哪些通知未交付由 Durable 的提交记录决定，所以任何时候最多一条未交付的通知。
 4. 把位置推进到最新事件 ID。
 
 打开时跑一遍，之后每收到一次这个账号的收件信号跑一遍。同一时间只跑一遍，跑的过程中来的信号只让它结束后再跑一遍。一遍出错只报告，位置不动，下一个信号重来。runtime 关闭前，Manager 先停掉连接器并等这一遍跑完。
 
-第 3、4 步之间崩溃的话，重启后重新处理同一批事件，生成同一个 `requestId`。`replaces` 不撤回与这次 `requestId` 相同的那条，Durable 去重，所以通知不会丢也不会重复，不需要跨库事务。
+第 3、4 步之间崩溃的话，重启后重新处理同一批事件，生成同一个 `requestId`。撤回不动与这次 `requestId` 相同的那条，Durable 去重，所以通知不会丢也不会重复，不需要跨库事务。

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { testAgent, text } from "./support.ts";
+import { testAgent, text, said } from "./support.ts";
 
 const DURABLE_TOOL_RESULT_LIMIT = 50 * 1024;
 const Page = z.object({
@@ -46,7 +46,7 @@ describe("history tools", () => {
       });
     const { runtime } = await agent.open();
 
-    const input = await runtime.submit("go", { requestId: "m1" });
+    const input = await runtime.submit(said.input("m1", "go"));
 
     expect(await input.settled()).toBe("done");
     expect(firstPageBytes).toBeGreaterThan(0);
@@ -73,7 +73,7 @@ describe("history tools", () => {
       });
     const { runtime } = await agent.open();
 
-    await (await runtime.submit("go", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "go"))).settled();
 
     expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(DURABLE_TOOL_RESULT_LIMIT);
     const page = Page.parse(JSON.parse(output));

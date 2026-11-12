@@ -1,20 +1,19 @@
+import { definePlugin } from "@palace/agent-plugin";
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { testAgent } from "./support.ts";
+import { said, testAgent } from "./support.ts";
 
-const shipped = dirname(fileURLToPath(import.meta.resolve("@palace/runtime/docs/webhooks.md")));
+const shipped = fileURLToPath(new URL("./docs", import.meta.url));
+// Primary scope: the docs reach assistants all the same.
+const docsPlugin = definePlugin({ name: "lighthouse", scope: "primary", docs: shipped });
 const topics = readdirSync(shipped)
   .filter((file) => file.endsWith(".md"))
   .map((file) => file.slice(0, -".md".length));
 const palaceDocs = (topic: string) => ({ name: "palace_docs", arguments: { topic } });
 
 describe("Palace docs", () => {
-  it("ships at least one topic", () => {
-    expect(topics.length).toBeGreaterThan(0);
-  });
-
   it("offers every shipped topic on every request, in the primary conversation and in an assistant", async () => {
     const agent = await testAgent();
     const finished = Promise.withResolvers<void>();
@@ -43,9 +42,9 @@ describe("Palace docs", () => {
         offered.assistant.push(tool(request));
         request.text("done");
       });
-    const { runtime } = await agent.open();
+    const { runtime } = await agent.open({ plugins: [docsPlugin] });
 
-    await runtime.submit("delegate it", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "delegate it"));
     await finished.promise;
     await runtime.idle();
 
@@ -75,9 +74,9 @@ describe("Palace docs", () => {
         );
       request.text("hi");
     });
-    const { runtime } = await agent.open();
+    const { runtime } = await agent.open({ plugins: [docsPlugin] });
 
-    await (await runtime.submit("hello", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "hello"))).settled();
 
     agent.provider.assertComplete();
   });
@@ -94,9 +93,9 @@ describe("Palace docs", () => {
         outputs = calls.map((id) => request.toolOutput(id));
         request.text("read them");
       });
-    const { runtime } = await agent.open();
+    const { runtime } = await agent.open({ plugins: [docsPlugin] });
 
-    await (await runtime.submit("how does it work?", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "how does it work?"))).settled();
 
     expect(outputs).toEqual(
       topics.map((topic) => readFileSync(join(shipped, `${topic}.md`), "utf8")),
@@ -116,9 +115,9 @@ describe("Palace docs", () => {
         output = request.toolOutput(call[0] ?? "") ?? "";
         request.text("sorry");
       });
-    const { runtime } = await agent.open();
+    const { runtime } = await agent.open({ plugins: [docsPlugin] });
 
-    expect(await (await runtime.submit("explain", { requestId: "m1" })).settled()).toBe("done");
+    expect(await (await runtime.submit(said.input("m1", "explain"))).settled()).toBe("done");
 
     expect(output, "the model got a refusal, not a doc").not.toBe("");
     for (const topic of topics)
@@ -128,7 +127,7 @@ describe("Palace docs", () => {
 
   it("reruns a call interrupted by a crash after reopening", async () => {
     const agent = await testAgent();
-    const first = await agent.open();
+    const first = await agent.open({ plugins: [docsPlugin] });
     const started = Promise.withResolvers<void>();
     await first.runtime.watchEvents((events) => {
       if (!events.some((event) => event.type === "tool_execution_start")) return;
@@ -136,7 +135,7 @@ describe("Palace docs", () => {
       started.resolve();
     });
     agent.provider.step("reads", (request) => void request.call([palaceDocs(topics[0] ?? "")]));
-    await first.runtime.submit("how does it work?", { requestId: "m1" });
+    await first.runtime.submit(said.input("m1", "how does it work?"));
     await started.promise;
 
     let output = "";
@@ -144,12 +143,36 @@ describe("Palace docs", () => {
       output = request.toolOutputs().join();
       request.text("read it");
     });
-    const second = await agent.open();
+    const second = await agent.open({ plugins: [docsPlugin] });
     await second.runtime.idle();
 
     expect(output, "the call completed instead of being reported as interrupted").toBe(
       readFileSync(join(shipped, `${topics[0]}.md`), "utf8"),
     );
     agent.provider.assertComplete();
+  });
+
+  it("offers no palace_docs tool when no plugin has docs", async () => {
+    const agent = await testAgent();
+    agent.provider.step("answers", (request) => {
+      expect(request.toolNames()).not.toContain("palace_docs");
+      request.text("hi");
+    });
+    const { runtime } = await agent.open();
+
+    await (await runtime.submit(said.input("m1", "hello"))).settled();
+
+    agent.provider.assertComplete();
+  });
+
+  it("refuses to open when two plugins offer the same topic", async () => {
+    const agent = await testAgent();
+    const other = definePlugin({
+      name: "other",
+      scope: "every",
+      docs: fileURLToPath(new URL("./more-docs", import.meta.url)),
+    });
+
+    await expect(agent.open({ plugins: [docsPlugin, other] })).rejects.toThrow(/lighthouse/);
   });
 });
