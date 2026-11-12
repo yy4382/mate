@@ -21,38 +21,10 @@ import {
   type SubmissionRecord,
 } from "@earendil-works/pi-durable";
 import type { Clock } from "@palace/clock";
+import { IDLE_POLICY, type IdlePolicy } from "./idle-policy.ts";
 import type { Lifetime } from "./lifetime.ts";
 
 const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-
-type IdlePolicy = {
-  /** How long after the last request started an idle conversation is compacted. */
-  readonly compactAt: number;
-  /** The provider's prompt-cache lifetime, after which the checkpoint request would be read uncached and save nothing. */
-  readonly cacheGone: number;
-  /** Input tokens of the last request (uncached, cache read and cache write) below which compaction is not worth it. */
-  readonly minInputTokens: number;
-};
-
-/**
- * Every model a new release brings gets this without a code change. Most providers keep a prefix for minutes to an
- * hour; on one that has already dropped it, the checkpoint request pays the reread now instead of when the Agent wakes.
- */
-const DEFAULT_POLICY: IdlePolicy = {
-  compactAt: 25 * MINUTE,
-  cacheGone: 30 * MINUTE,
-  minInputTokens: 200_000,
-};
-
-/** Overrides of `DEFAULT_POLICY`, keyed `provider/modelId`. */
-const IDLE_COMPACTION: Readonly<Record<string, Partial<IdlePolicy>>> = {
-  // Durable's background compaction starts near 223k of its 272k window, which leaves 200k too narrow a band.
-  "openai/gpt-6.1-sol": { minInputTokens: 150_000 },
-  // DeepSeek's V4.1 Flash paper: global KV stays in the persistent cache at least 72 hours.
-  "deepseek/deepseek-flash": { compactAt: 70 * HOUR, cacheGone: 72 * HOUR },
-};
-
 const CHECKPOINT_PROMPT =
   "[Palace] You have been idle for a while. Write a checkpoint summary of this conversation that you can continue " +
   "from: the goal, constraints and preferences, what is done, what is in progress, key decisions, next steps, and the " +
@@ -86,6 +58,15 @@ type Plan =
   | { readonly kind: "ask"; readonly after: EntryId }
   | { readonly kind: "compact"; readonly answer: EntryId };
 
+/** The default, then the provider's entry, then the model's: each replaces only the fields it names. */
+function policyFor(provider: string, model: string): IdlePolicy {
+  return {
+    ...IDLE_POLICY.default,
+    ...IDLE_POLICY.providers[provider],
+    ...IDLE_POLICY.models[`${provider}/${model}`],
+  };
+}
+
 /** Every rule of idle compaction, in order. */
 function decide(observed: Observation, now: number): Plan {
   const { last, next } = observed;
@@ -98,9 +79,10 @@ function decide(observed: Observation, now: number): Plan {
   if (observed.asked) return { kind: "off" };
   const { provider, model, usage, timestamp } = last.message;
   if (next?.provider !== provider || next.modelId !== model) return { kind: "off" };
-  const policy = { ...DEFAULT_POLICY, ...IDLE_COMPACTION[`${provider}/${model}`] };
-  if (usage.input + usage.cacheRead + usage.cacheWrite < policy.minInputTokens)
-    return { kind: "off" };
+  const policy = policyFor(provider, model);
+  const line = observed.summarizesAbove ?? Number.POSITIVE_INFINITY;
+  const threshold = Math.min(policy.maxThresholdTokens, policy.thresholdShare * line);
+  if (usage.input + usage.cacheRead + usage.cacheWrite < threshold) return { kind: "off" };
   // Durable would summarize uncached alongside the checkpoint request, paying the reread this is meant to save.
   if (
     observed.summarizesAbove !== undefined &&
@@ -108,9 +90,10 @@ function decide(observed: Observation, now: number): Plan {
   )
     return { kind: "off" };
   // pi-ai stamps an answer with the wall-clock time its request started, which is when the provider cached it.
-  if (now < timestamp + policy.compactAt)
-    return { kind: "wait", until: timestamp + policy.compactAt };
-  if (now < timestamp + policy.cacheGone) return { kind: "ask", after: last.id };
+  const cacheGone = timestamp + policy.cacheTtlMinutes * MINUTE;
+  const compactAt = timestamp + policy.cacheTtlMinutes * MINUTE * policy.compactAfterShare;
+  if (now < compactAt) return { kind: "wait", until: compactAt };
+  if (now < cacheGone) return { kind: "ask", after: last.id };
   return { kind: "off" };
 }
 

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { FakeClock, defaultSettings, testAgent, text, within, type TestAgent } from "./support.ts";
 import type { AgentRuntime, AgentSettings } from "../src/index.ts";
 
-/** In pi-ai's catalog, on the Responses API the scripted provider speaks. Compacted from 150k tokens. */
+/** In pi-ai's catalog, on the Responses API the scripted provider speaks. Its 272k window puts Durable's compaction line at 222,848, two thirds of which is 148,565. */
 const sol: AgentSettings = { model: { provider: "openai", modelId: "gpt-6.1-sol" } };
 const MINUTE = 60_000;
 /** Past a delay counted from the first answer, and so from a later answer of the same test too. */
@@ -17,7 +17,7 @@ const CHECKPOINT =
  * An Agent on gpt-6.1-sol that checked the build, its answer read `tokens` of input and ended in `padding`. Durable's
  * summarizer requests go to `summaries`, which has no steps: any request there fails `assertComplete()`.
  */
-async function idleAgent(tokens = 150_000, settings: AgentSettings = sol, padding = "") {
+async function idleAgent(tokens = 148_566, settings: AgentSettings = sol, padding = "") {
   const clock = new FakeClock(Date.now());
   const agent = await testAgent(settings, { clock });
   agent.workspace.answerAll(() => text("hi"));
@@ -100,7 +100,7 @@ const HistoryPage = z.object({
 });
 
 describe("idle compaction", () => {
-  it("asks an idle Agent at its model's 150k tokens for a checkpoint that continues its cached request, then works on from that checkpoint", async () => {
+  it("asks an idle Agent past two thirds of its Durable compaction line for a checkpoint that continues its cached request, then works on from that checkpoint", async () => {
     const { agent, first, idleFor } = await idleAgent();
     agent.provider.step("checkpoint", (request) => {
       const answered = requestOf(agent, "answers").body;
@@ -154,8 +154,8 @@ describe("idle compaction", () => {
 
   const quiet: [string, () => ReturnType<typeof idleAgent>, number][] = [
     [
-      "its last request read less than its model's 150k tokens",
-      () => idleAgent(149_999),
+      "its last request read less than two thirds of Durable's compaction line",
+      () => idleAgent(148_565),
       25 * MINUTE + PAST,
     ],
     ["the delay has not passed", () => idleAgent(), 24 * MINUTE],
