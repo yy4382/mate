@@ -412,7 +412,7 @@ iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模�
 
 认证沿用控制面的 Secure HttpOnly cookie，无需 bearer API 或 CORS 配置。启动和从后台回到前台重新验证登录，权限弹窗的 inactive → active 不触发重验；连接失败可重试，401 需要重新登录。退出与换服务器会先尝试撤销旧服务器上的会话，再清理 app 的原生 cookie；离线退出仅保证关闭本机访问，并提示远端撤销未确认。地址与恢复标记存在 Expo SQLite 键值设置中，不保存密码。正常使用后的重启恢复依赖原生 cookie 存储，不保证登录后立即强杀的持久化。`expo-sqlite` 和 `@preeternal/react-native-cookie-manager` 需要用上述 `ios` 命令构建开发版或 Release 包，Expo Go 不能验证这个 app 的 cookie 清理集成。
 
-`dev.yyang.palace` 是当前 iOS bundle identifier。签名使用对应的 App ID 和 provisioning profile，控制面的 `PALACE_APNS_TOPIC` 也必须与它一致。自用分发使用本地 Xcode Archive 和 TestFlight，首个 `0.1.0 (1)` 已上传。根 `pnpm build` 构建已有网页和服务端包。移动端按下面的独立流程归档。
+`dev.yyang.palace` 是当前 iOS bundle identifier。签名使用对应的 App ID 和 provisioning profile，控制面的 `PALACE_APNS_TOPIC` 也必须与它一致。自用分发使用本地 Xcode Archive 和 TestFlight，已上传的构建由 `ios-testflight-*` 标签记录。根 `pnpm build` 构建已有网页和服务端包。移动端按下面的独立流程归档。
 
 #### 命令行 iOS 分发（asc）
 
