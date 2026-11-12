@@ -2,15 +2,7 @@ import { CompactionEntry, type AgentEvent } from "@earendil-works/pi-durable";
 import type { ScriptedRequest } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import {
-  FakeClock,
-  defaultSettings,
-  said,
-  testAgent,
-  text,
-  within,
-  type TestAgent,
-} from "./support.ts";
+import { FakeClock, defaultSettings, testAgent, text, within, type TestAgent } from "./support.ts";
 import type { AgentRuntime, AgentSettings } from "../src/index.ts";
 
 /** In pi-ai's catalog, on the Responses API the scripted provider speaks. Compacted from 150k tokens. */
@@ -36,7 +28,7 @@ async function idleAgent(tokens = 150_000, settings: AgentSettings = sol, paddin
   );
   agent.provider.lane("summaries", (request) => request.toolNames().length === 0);
   const first = await agent.open();
-  await (await first.runtime.submit(said.input("m1", "check the build"))).settled();
+  await (await first.runtime.submit("check the build", { requestId: "m1" })).settled();
   // Every timer loop asleep: nothing more happens until time moves or input comes.
   const resting = () => clock.resting();
   await resting();
@@ -98,7 +90,7 @@ async function expectContextKept(agent: TestAgent, runtime: AgentRuntime) {
     expect(request.userTexts()).toEqual(["check the build", "what next?"]);
     request.text("Free some space.");
   });
-  await (await runtime.submit(said.input("next", "what next?"))).settled();
+  await (await runtime.submit("what next?", { requestId: "next" })).settled();
   agent.provider.assertComplete();
 }
 
@@ -151,7 +143,7 @@ describe("idle compaction", () => {
     const compacted = compaction(first.runtime);
     idleFor(25 * MINUTE + PAST);
     await compacted;
-    await (await first.runtime.submit(said.input("m2", "what next?"))).settled();
+    await (await first.runtime.submit("what next?", { requestId: "m2" })).settled();
 
     expect(
       agent.provider.requests.map(({ step }) => step),
@@ -210,7 +202,7 @@ describe("idle compaction", () => {
       expect(request.userTexts()).toEqual(["check the build", "what next?"]);
       request.text("Free some space.");
     });
-    await (await first.runtime.submit(said.input("next", "what next?"))).settled();
+    await (await first.runtime.submit("what next?", { requestId: "next" })).settled();
     agent.provider.assertComplete();
   });
 
@@ -251,7 +243,7 @@ describe("idle compaction", () => {
       expect(request.userTexts().slice(0, -1)).toEqual(["check the build", "check again"]);
       request.text(CHECKPOINT);
     });
-    await first.runtime.submit(said.input("m2", "check again"));
+    await first.runtime.submit("check again", { requestId: "m2" });
     await within(2000, "the long run's request", agent.provider.received(2));
     const compacted = compaction(first.runtime);
 
@@ -305,7 +297,7 @@ describe("idle compaction", () => {
         ).toHaveLength(1);
         request.text("Free some space.");
       });
-      await (await first.runtime.submit(said.input("next", "what next?"))).settled();
+      await (await first.runtime.submit("what next?", { requestId: "next" })).settled();
       agent.provider.assertComplete();
     },
   );
@@ -331,7 +323,7 @@ describe("idle compaction", () => {
       expect(JSON.stringify(request.body.input)).toContain(CHECKPOINT);
       request.text("Free some space.");
     });
-    await (await second.runtime.submit(said.input("m2", "what next?"))).settled();
+    await (await second.runtime.submit("what next?", { requestId: "m2" })).settled();
 
     expect(
       agent.provider.requests.map(({ step }) => step),
@@ -344,7 +336,7 @@ describe("idle compaction", () => {
     const { agent, first, idleFor } = await idleAgent();
     agent.provider
       .step("checkpoint", async (request) => {
-        await first.runtime.submit(said.input("m2", "and the tests?"));
+        await first.runtime.submit("and the tests?", { requestId: "m2" });
         request.text(CHECKPOINT);
       })
       .step("answers the real input", (request) => {
@@ -369,7 +361,7 @@ describe("idle compaction", () => {
       expect(input).not.toContain("check the build");
       request.text("Free some space.");
     });
-    await (await first.runtime.submit(said.input("m3", "what next?"))).settled();
+    await (await first.runtime.submit("what next?", { requestId: "m3" })).settled();
     agent.provider.assertComplete();
   });
 });

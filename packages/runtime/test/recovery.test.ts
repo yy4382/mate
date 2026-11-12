@@ -1,7 +1,7 @@
 import type { ScriptedRequest } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "../src/index.ts";
-import { testAgent, text, within, said } from "./support.ts";
+import { testAgent, text, within } from "./support.ts";
 
 describe("crash and reopen", () => {
   it("does not rerun a command interrupted by a crash, and tells the model it was interrupted", async () => {
@@ -11,7 +11,7 @@ describe("crash and reopen", () => {
       (request) => void request.call([{ name: "bash", arguments: { command: "deploy" } }]),
     );
     const first = await agent.open();
-    await first.runtime.submit(said.input("m1", "deploy it"));
+    await first.runtime.submit("deploy it", { requestId: "m1" });
     const call = await agent.workspace.nextCall();
 
     first.database().freeze();
@@ -35,7 +35,7 @@ describe("crash and reopen", () => {
       (request) => void request.call([{ name: "read", arguments: { path: "MEMORY.md" } }]),
     );
     const first = await agent.open();
-    await first.runtime.submit(said.input("m1", "recall"));
+    await first.runtime.submit("recall", { requestId: "m1" });
     const call = await agent.workspace.nextCall();
     first.database().freeze();
 
@@ -61,7 +61,7 @@ describe("crash and reopen", () => {
       (request) => void request.partialCall("bash", '{"command":"rm -'),
     );
     const first = await agent.open();
-    await first.runtime.submit(said.input("m1", "clean up"));
+    await first.runtime.submit("clean up", { requestId: "m1" });
     await agent.provider.received(1);
     first.database().freeze();
     await first.runtime.close().catch(() => undefined);
@@ -78,12 +78,12 @@ describe("crash and reopen", () => {
     const agent = await testAgent();
     agent.provider.step("one", (request) => request.text("first answer"));
     const first = await agent.open();
-    await (await first.runtime.submit(said.input("m1", "first"))).settled();
+    await (await first.runtime.submit("first", { requestId: "m1" })).settled();
     await first.runtime.close();
 
     agent.provider.step("two", (request) => request.text("second answer"));
     const second = await agent.open();
-    await (await second.runtime.submit(said.input("m2", "second"))).settled();
+    await (await second.runtime.submit("second", { requestId: "m2" })).settled();
 
     const [before, after] = agent.provider.requests;
     expect(after?.body.input.slice(0, before?.body.input.length)).toEqual(before?.body.input);
@@ -109,7 +109,7 @@ describe("closing", () => {
       },
     });
     runtime = first.runtime;
-    await first.runtime.submit(said.input("m1", "think hard"));
+    await first.runtime.submit("think hard", { requestId: "m1" });
     await within(2000, "the request being prepared", closeCalled.promise);
     await within(2000, "close", closing ?? Promise.resolve());
 
@@ -136,7 +136,7 @@ describe("closing", () => {
       const cancelled = Promise.withResolvers<void>();
       agent.provider.step("at close", (request) => void answer(request).then(cancelled.resolve));
       const first = await agent.open();
-      await first.runtime.submit(said.input("m1", "think hard"));
+      await first.runtime.submit("think hard", { requestId: "m1" });
       await agent.provider.received(1);
 
       await within(2000, "close", first.runtime.close());
@@ -162,7 +162,7 @@ describe("closing", () => {
       (request) => void request.call([{ name: "bash", arguments: { command: "sleep 100" } }]),
     );
     const { runtime } = await agent.open();
-    await runtime.submit(said.input("m1", "wait"));
+    await runtime.submit("wait", { requestId: "m1" });
     const call = await agent.workspace.nextCall();
 
     await runtime.close();
@@ -176,12 +176,12 @@ describe("closing", () => {
     const first = await agent.open({ onFatal: fatal.resolve });
     first.database().failNextWrites(1);
 
-    await expect(first.runtime.submit(said.input("m1", "hello"))).rejects.toThrow();
+    await expect(first.runtime.submit("hello", { requestId: "m1" })).rejects.toThrow();
     await expect(fatal.promise).resolves.toBeInstanceOf(Error);
 
     agent.provider.step("answer", (request) => request.text("hi"));
     const second = await agent.open();
-    await (await second.runtime.submit(said.input("m1", "hello"))).settled();
+    await (await second.runtime.submit("hello", { requestId: "m1" })).settled();
     agent.provider.assertComplete();
   });
 });
@@ -195,7 +195,7 @@ describe("storage failure", () => {
     );
     const fatal = Promise.withResolvers<unknown>();
     const first = await agent.open({ onFatal: fatal.resolve });
-    const input = await first.runtime.submit(said.input("m1", "build it"));
+    const input = await first.runtime.submit("build it", { requestId: "m1" });
     const call = await agent.workspace.nextCall();
 
     first.database().failNextWrites(1);
@@ -225,7 +225,7 @@ describe("storage failure", () => {
       });
     const second = await agent.open();
     await second.runtime.idle();
-    const next = await second.runtime.submit(said.input("m2", "and test it"));
+    const next = await second.runtime.submit("and test it", { requestId: "m2" });
     expect(await within(2000, "the new input settling", next.settled())).toBe("done");
     agent.provider.assertComplete();
   });
@@ -239,9 +239,9 @@ describe("settings", () => {
       .step("after", (request) => request.text("b"));
     const { runtime } = await agent.open();
 
-    await (await runtime.submit(said.input("m1", "one"))).settled();
+    await (await runtime.submit("one", { requestId: "m1" })).settled();
     await runtime.configure({ model: { provider: "openai", modelId: "gpt-4.1-mini" } });
-    await (await runtime.submit(said.input("m2", "two"))).settled();
+    await (await runtime.submit("two", { requestId: "m2" })).settled();
 
     expect(agent.provider.requests.map((request) => request.body.model)).toEqual([
       "gpt-4.1",
@@ -255,7 +255,7 @@ describe("settings", () => {
     agent.provider.step("answer", (request) => request.text("hi", { inputTokens: 120 }));
     const { runtime } = await agent.open();
 
-    await (await runtime.submit(said.input("m1", "hello"))).settled();
+    await (await runtime.submit("hello", { requestId: "m1" })).settled();
 
     const usage = await runtime.usage();
     expect(usage.models["openai/gpt-4.1"]).toMatchObject({ input: 120, output: 10 });
@@ -278,7 +278,7 @@ describe("settings", () => {
         request.text("one file");
       });
     const { runtime } = await agent.open();
-    const input = await runtime.submit(said.input("m1", "what is here?"));
+    const input = await runtime.submit("what is here?", { requestId: "m1" });
     await agent.provider.received(1);
 
     await runtime.configure({
@@ -305,9 +305,9 @@ describe("settings", () => {
       .step("still answering", (request) => request.text("b"));
     const { runtime } = await agent.open();
 
-    await (await runtime.submit(said.input("m1", "one"))).settled();
+    await (await runtime.submit("one", { requestId: "m1" })).settled();
     expect((await runtime.usage()).models["openai/gpt-4.1"]?.input).toBe(1_000_000_000_000);
-    const next = await runtime.submit(said.input("m2", "two"));
+    const next = await runtime.submit("two", { requestId: "m2" });
 
     expect(await next.settled(), "a trillion tokens later the Agent still answers").toBe("done");
     agent.provider.assertComplete();

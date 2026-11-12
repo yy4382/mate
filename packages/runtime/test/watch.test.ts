@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { testAgent, within, said } from "./support.ts";
+import { testAgent, within } from "./support.ts";
 
 describe("watching a runtime", () => {
   it("ends every watch when the runtime is closed", async () => {
@@ -23,7 +23,7 @@ describe("watching a runtime", () => {
     const second = await runtime.watchEvents(() => undefined);
 
     database().failNextWrites(1);
-    await expect(runtime.submit(said.input("m1", "hello"))).rejects.toThrow();
+    await expect(runtime.submit("hello", { requestId: "m1" })).rejects.toThrow();
     await within(2000, "onFatal", fatal.promise);
 
     await within(2000, "the first watch ending", primary.ended);
@@ -35,7 +35,7 @@ describe("watching a runtime", () => {
     const fatal = Promise.withResolvers<unknown>();
     const { runtime, database } = await agent.open({ onFatal: fatal.resolve });
     database().failNextWrites(1);
-    await expect(runtime.submit(said.input("m1", "hello"))).rejects.toThrow();
+    await expect(runtime.submit("hello", { requestId: "m1" })).rejects.toThrow();
     await within(2000, "onFatal", fatal.promise);
 
     await expect(runtime.watchEvents(() => undefined)).rejects.toThrow();

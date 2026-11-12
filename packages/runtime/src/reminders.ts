@@ -8,7 +8,6 @@ import {
   type Harness,
 } from "@earendil-works/pi-durable";
 import type { Clock } from "@palace/clock";
-import { builtinRequestId } from "./plugins.ts";
 
 type Reminder = { id: string; at: number; note: string };
 
@@ -95,7 +94,7 @@ export function reminders(clock: Clock, closing: AbortSignal) {
             {
               type: "input",
               content: `Reminder you set for ${new Date(due.at).toISOString()}: ${due.note}`,
-              requestId: builtinRequestId("reminder", due.id),
+              requestId: `reminder:${due.id}`,
               whenBusy: "steer",
             },
             BACKGROUND_CONTEXT,

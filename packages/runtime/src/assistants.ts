@@ -17,7 +17,6 @@ import {
   type Harness,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { builtinRequestId } from "./plugins.ts";
 
 type Assistant = {
   conversationId: ConversationId;
@@ -101,7 +100,7 @@ const Deliverer = defineTask<DelivererInput, DelivererState, null>({
           type: "input",
           content,
           whenBusy,
-          requestId: requestId ?? builtinRequestId("assistant", delivery.id),
+          requestId: requestId ?? `assistant:${delivery.id}`,
         },
         context,
       );
@@ -141,7 +140,7 @@ const Deliverer = defineTask<DelivererInput, DelivererState, null>({
             type: "input",
             content: report,
             whenBusy: "followUp",
-            requestId: builtinRequestId("assistant-report", delivery.id),
+            requestId: `assistant-report:${delivery.id}`,
           },
           context,
         );

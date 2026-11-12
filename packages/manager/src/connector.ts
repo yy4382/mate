@@ -1,7 +1,7 @@
 import type { ChatApp } from "@palace/chat";
 import type { Clock } from "@palace/clock";
 import type { AgentRuntime } from "@palace/runtime";
-import { chatNotice } from "./chat-plugin.ts";
+import { renderNotice } from "./chat-plugin.ts";
 
 /** What the connector needs of a runtime: its inbox and its position in the chat inbox events. */
 export type NoticeTarget = Pick<AgentRuntime, "cursor" | "advanceCursor" | "submit">;
@@ -52,7 +52,11 @@ export async function connectInbox(options: InboxConnectorOptions): Promise<Inbo
     const summary = chat.unreadSummary(account);
     // Everything was read already: there is nothing to point at, but the events are handled.
     if (summary.timelines.length > 0)
-      await runtime.submit(chatNotice.input(String(last), { summary, at: clock.now() }));
+      await runtime.submit(renderNotice(summary, clock.now()), {
+        requestId: `notice:${last}`,
+        whenBusy: "steer",
+        replaces: "notice:",
+      });
     await runtime.advanceCursor(CURSOR, last);
   };
 

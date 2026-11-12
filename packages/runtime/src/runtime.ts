@@ -13,7 +13,7 @@ import {
 import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { AgentStateDoc, type AgentUsage } from "./agent-state.ts";
 import { AssistantsDoc, IDENTITY_SECTION, assistants, reconcileAssistants } from "./assistants.ts";
-import type { InputKind, Plugin, PluginInput } from "@palace/agent-plugin";
+import type { Plugin } from "@palace/agent-plugin";
 import { systemClock, type Clock } from "@palace/clock";
 import { DOCS_EXTENSION, docsExtension } from "./docs.ts";
 import { historyExtension } from "./history.ts";
@@ -44,6 +44,9 @@ export type AgentRuntimeOptions = {
   /** Defaults to the system clock. Override in tests. */
   readonly clock?: Clock;
 };
+
+/** When an input arrives while the Agent is working: join the current work after this tool round, or wait for it. */
+export type WhenBusy = "steer" | "followUp";
 
 export type SubmittedInput = {
   /**
@@ -169,7 +172,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     await harness.close(BACKGROUND_CONTEXT).catch(() => undefined);
     throw error;
   }
-  const runtime = new AgentRuntime(harness, storage, root, lifetime, installed.kinds);
+  const runtime = new AgentRuntime(harness, storage, root, lifetime);
   harness.resume();
   // Run the reminder and idle compaction loops in the background; they exit when the lifetime ends.
   void runReminders(harness, root);
@@ -184,36 +187,33 @@ export class AgentRuntime {
   readonly #storage: SqliteStorage;
   readonly #root: Conversation;
   readonly #lifetime: Lifetime;
-  readonly #kinds: ReadonlySet<InputKind<never>>;
   #closed: Promise<void> | undefined;
 
-  constructor(
-    harness: Harness,
-    storage: SqliteStorage,
-    root: Conversation,
-    lifetime: Lifetime,
-    kinds: ReadonlySet<InputKind<never>>,
-  ) {
+  constructor(harness: Harness, storage: SqliteStorage, root: Conversation, lifetime: Lifetime) {
     this.#harness = harness;
     this.#storage = storage;
     this.#root = root;
     this.#lifetime = lifetime;
-    this.#kinds = kinds;
   }
 
   /**
-   * Admit an input to the primary conversation under its `requestId`, once however often it is sent, with its kind's
-   * `whenBusy`. When the kind `replacesQueued`, every input of the kind still queued, other than this one, is withdrawn
-   * first; one the model was handed meanwhile stays, so the model then sees both. Rejects, and admits nothing, when
-   * the input's kind is not installed in this runtime.
+   * Admit an input to the primary conversation. The same `requestId` is admitted once, however often it is sent.
+   * With `replaces`, every input still queued whose requestId starts with it, other than `requestId` itself, is
+   * withdrawn first; one the model was handed meanwhile stays, so the model then sees both.
    */
-  async submit(input: PluginInput): Promise<SubmittedInput> {
-    const { kind, requestId } = input;
-    if (!this.#kinds.has(kind))
-      throw new Error(`input kind ${kind.name} is not installed in this Agent`);
-    if (kind.replacesQueued) await this.#withdrawQueued(`${kind.name}:`, requestId);
+  async submit(
+    content: string,
+    options: { requestId: string; whenBusy?: WhenBusy; replaces?: string },
+  ): Promise<SubmittedInput> {
+    if (options.replaces !== undefined)
+      await this.#withdrawQueued(options.replaces, options.requestId);
     const submission = await this.#root.submit(
-      { type: "input", content: input.content, requestId, whenBusy: kind.whenBusy },
+      {
+        type: "input",
+        content,
+        requestId: options.requestId,
+        whenBusy: options.whenBusy ?? "followUp",
+      },
       BACKGROUND_CONTEXT,
     );
     return {

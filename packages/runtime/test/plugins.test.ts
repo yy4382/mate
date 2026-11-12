@@ -1,8 +1,8 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
-import { defineInput, definePlugin, type Plugin } from "@palace/agent-plugin";
+import { definePlugin, type Plugin } from "@palace/agent-plugin";
 import { describe, expect, it } from "vitest";
-import { said, testAgent, type TestAgent } from "./support.ts";
+import { testAgent, type TestAgent } from "./support.ts";
 
 const lantern = defineTool({
   name: "lantern",
@@ -13,18 +13,11 @@ const lantern = defineTool({
     return { content: [{ type: "text", text: "lit" }] };
   },
 });
-const beacon = defineInput<string>({
-  name: "beacon",
-  explain: "Beacon inputs report ships in the bay.",
-  whenBusy: "followUp",
-  render: (ship) => `ship ${ship}`,
-});
 const primaryKeeper = definePlugin({
   name: "keeper",
   scope: "primary",
   tools: [lantern],
   prompt: "You keep the lantern.",
-  inputs: [beacon],
 });
 const everyKeeper = definePlugin({
   name: "keeper",
@@ -66,7 +59,7 @@ async function offered(agent: TestAgent, plugins: readonly Plugin[]) {
       request.text("done");
     });
   const { runtime } = await agent.open({ plugins });
-  await runtime.submit(said.input("m1", "delegate it"));
+  await runtime.submit("delegate it", { requestId: "m1" });
   await finished.promise;
   await runtime.idle();
   agent.provider.assertComplete();
@@ -74,15 +67,13 @@ async function offered(agent: TestAgent, plugins: readonly Plugin[]) {
 }
 
 describe("plugins", () => {
-  it("give the primary conversation their tools, their prompt and each input kind's explanation", async () => {
+  it("give the primary conversation their tools and their prompt", async () => {
     const agent = await testAgent();
 
     const { primary } = await offered(agent, [primaryKeeper]);
 
     expect(primary?.tools).toContain("lantern");
-    expect(primary?.system).toContain(
-      "You keep the lantern. Beacon inputs report ships in the bay.",
-    );
+    expect(primary?.system).toContain("You keep the lantern.");
   });
 
   it("leave nothing behind in an Agent they are not installed in", async () => {
@@ -92,7 +83,6 @@ describe("plugins", () => {
 
     expect(primary?.tools).not.toContain("lantern");
     expect(primary?.system).not.toContain("lantern");
-    expect(primary?.system).not.toContain("Beacon");
   });
 
   it("of primary scope are absent from an assistant, and of every scope are present", async () => {
@@ -105,41 +95,14 @@ describe("plugins", () => {
     expect(withEvery.assistant?.system).toContain("You keep the lantern.");
   });
 
-  it("refuse an input whose kind is not installed, and the model never sees it", async () => {
+  it("are refused at open when two share a name or one is named like a built-in", async () => {
     const agent = await testAgent();
-    const { runtime } = await agent.open();
-
-    await expect(runtime.submit(beacon.input("b1", "Mary Rose"))).rejects.toThrow(/beacon/);
-
-    await runtime.idle();
-    expect(agent.provider.requests).toHaveLength(0);
-  });
-
-  it("are refused at open when two share a name, two input kinds share a name, or one is named like a built-in", async () => {
-    const agent = await testAgent();
-    const named = (name: string, ...inputs: (typeof beacon)[]) =>
-      definePlugin({ name, scope: "primary", inputs });
-    const sameKind = defineInput<string>({
-      name: "beacon",
-      explain: "Another beacon.",
-      whenBusy: "followUp",
-      render: (text) => text,
-    });
-    const reminderKind = defineInput<string>({
-      name: "reminder",
-      explain: "Pretends to be a reminder.",
-      whenBusy: "steer",
-      render: (text) => text,
-    });
+    const named = (name: string) => definePlugin({ name, scope: "primary" });
 
     await expect(agent.open({ plugins: [named("same"), named("same")] })).rejects.toThrow(/same/);
-    await expect(
-      agent.open({ plugins: [named("one", beacon), named("two", sameKind)] }),
-    ).rejects.toThrow(/beacon/);
     await expect(agent.open({ plugins: [named("reminders")] })).rejects.toThrow(/reminders/);
     // The identity section's key: an assistant would lose this plugin's section to it.
     await expect(agent.open({ plugins: [named("assistant")] })).rejects.toThrow(/assistant/);
-    await expect(agent.open({ plugins: [named("one", reminderKind)] })).rejects.toThrow(/reminder/);
   });
 
   it("of primary scope never reach an assistant spawned before they were installed", async () => {
@@ -171,12 +134,12 @@ describe("plugins", () => {
       request.text("done again");
     });
     const first = await agent.open();
-    await (await first.runtime.submit(said.input("m1", "delegate it"))).settled();
+    await (await first.runtime.submit("delegate it", { requestId: "m1" })).settled();
     await first.runtime.idle();
     await first.runtime.close();
 
     const second = await agent.open({ plugins: [primaryKeeper] });
-    await second.runtime.submit(said.input("m2", "ask it again"));
+    await second.runtime.submit("ask it again", { requestId: "m2" });
     await finished.promise;
     await second.runtime.idle();
 

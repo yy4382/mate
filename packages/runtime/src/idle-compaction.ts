@@ -22,7 +22,6 @@ import {
 } from "@earendil-works/pi-durable";
 import type { Clock } from "@palace/clock";
 import type { Lifetime } from "./lifetime.ts";
-import { builtinRequestId } from "./plugins.ts";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -172,7 +171,7 @@ export function idleCompaction(
       const input = view.entries.findLast((entry) => UserEntry.is(entry) && entry.id < last.id);
       const previous =
         input && view.entries.findLast((entry) => AssistantEntry.is(entry) && entry.id < input.id);
-      const record = previous && (await lookup(builtinRequestId("idle-summary", previous.id)));
+      const record = previous && (await lookup(`idle-summary:${previous.id}`));
       const checkpoint =
         previous === undefined || record === undefined || record.entry !== input?.id
           ? undefined
@@ -192,8 +191,8 @@ export function idleCompaction(
         next,
         last: { id: last.id, message },
         checkpoint,
-        asked: (await lookup(builtinRequestId("idle-summary", last.id))) !== undefined,
-        compacted: (await lookup(builtinRequestId("idle-compaction", last.id))) !== undefined,
+        asked: (await lookup(`idle-summary:${last.id}`)) !== undefined,
+        compacted: (await lookup(`idle-compaction:${last.id}`)) !== undefined,
         checkpointTokens,
         summarizesAbove,
       };
@@ -211,7 +210,7 @@ export function idleCompaction(
           {
             type: "input",
             content: CHECKPOINT_PROMPT,
-            requestId: builtinRequestId("idle-summary", after),
+            requestId: `idle-summary:${after}`,
             whenBusy: "reject",
           },
           BACKGROUND_CONTEXT,
@@ -233,7 +232,7 @@ export function idleCompaction(
       await root.submit(
         {
           type: "write",
-          requestId: builtinRequestId("idle-compaction", answer),
+          requestId: `idle-compaction:${answer}`,
           entry: {
             kind: CompactionEntry.kind,
             head: answer,

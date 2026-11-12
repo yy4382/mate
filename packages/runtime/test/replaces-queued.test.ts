@@ -1,40 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { said, saidNow, testAgent, text, update } from "./support.ts";
+import { testAgent, text } from "./support.ts";
 
 const make = { name: "bash", arguments: { command: "make" } };
+const notice = (id: number) => ({
+  requestId: `notice:${id}`,
+  whenBusy: "steer" as const,
+  replaces: "notice:",
+});
 
-describe("a kind that replaces its queued inputs", () => {
-  it("withdraws an earlier update the model was not handed yet, and keeps inputs of other kinds", async () => {
+describe("replacing queued inputs", () => {
+  it("withdraws an earlier notice the model was not handed yet, and keeps inputs of other kinds", async () => {
     const agent = await testAgent();
     agent.provider
       .step("start", (request) => void request.call([make]))
       // Durable hands the model one steered input per boundary.
-      .step("continue with the other kind", (request) => {
-        expect(request.userTexts(), "the other kind stays").toEqual(["build it", "stand-up"]);
+      .step("continue with the reminder", (request) => {
+        expect(request.userTexts(), "the reminder stays").toEqual([
+          "build it",
+          "reminder: stand-up",
+        ]);
         request.text("noted");
       })
-      .step("continue with the update", (request) => {
-        expect(request.userTexts(), "only the newer update").toEqual([
+      .step("continue with the notice", (request) => {
+        expect(request.userTexts(), "only the newer notice").toEqual([
           "build it",
-          "stand-up",
+          "reminder: stand-up",
           "2 unread",
         ]);
         request.text("done");
       });
     const { runtime } = await agent.open();
-    await runtime.submit(said.input("m1", "build it"));
+    await runtime.submit("build it", { requestId: "m1" });
     const call = await agent.workspace.nextCall();
 
-    await runtime.submit(saidNow.input("r1", "stand-up"));
-    await runtime.submit(update.input("1", "1 unread"));
-    await runtime.submit(update.input("2", "2 unread"));
+    await runtime.submit("reminder: stand-up", { requestId: "reminder:r1", whenBusy: "steer" });
+    await runtime.submit("1 unread", notice(1));
+    await runtime.submit("2 unread", notice(2));
     call.resolve(text("built"));
     await runtime.idle();
 
     agent.provider.assertComplete();
   });
 
-  it("leaves an update the model was already handed, so the model sees both", async () => {
+  it("leaves a notice the model was already handed, so the model sees both", async () => {
     const agent = await testAgent();
     agent.provider
       .step("start", (request) => void request.call([make]))
@@ -43,44 +51,44 @@ describe("a kind that replaces its queued inputs", () => {
         request.call([{ name: "bash", arguments: { command: "make test" } }]);
       })
       .step("finish", (request) => {
-        expect(request.userTexts(), "both updates").toEqual(["build it", "1 unread", "2 unread"]);
+        expect(request.userTexts(), "both notices").toEqual(["build it", "1 unread", "2 unread"]);
         request.text("done");
       });
     const { runtime } = await agent.open();
-    await runtime.submit(said.input("m1", "build it"));
+    await runtime.submit("build it", { requestId: "m1" });
     const build = await agent.workspace.nextCall();
-    await runtime.submit(update.input("1", "1 unread"));
+    await runtime.submit("1 unread", notice(1));
     build.resolve(text("built"));
     const tests = await agent.workspace.nextCall();
 
-    await runtime.submit(update.input("2", "2 unread"));
+    await runtime.submit("2 unread", notice(2));
     tests.resolve(text("passed"));
     await runtime.idle();
 
     agent.provider.assertComplete();
   });
 
-  it("admits an update once when it is submitted again after a crash", async () => {
+  it("admits a notice once when it is submitted again after a crash", async () => {
     const agent = await testAgent();
     agent.provider.step(
       "start",
       (request) => void request.call([{ name: "read", arguments: { path: "MEMORY.md" } }]),
     );
     const first = await agent.open();
-    await first.runtime.submit(said.input("m1", "recall"));
+    await first.runtime.submit("recall", { requestId: "m1" });
     await agent.workspace.nextCall();
-    await first.runtime.submit(update.input("1", "1 unread"));
-    // Dies before its producer stored its position, so the same update comes again.
+    await first.runtime.submit("1 unread", notice(1));
+    // Dies before the connector stored its position, so the same notice comes again.
     first.database().freeze();
 
     agent.provider.step("after restart", (request) => {
-      expect(request.userTexts(), "the update, once").toEqual(["recall", "1 unread"]);
+      expect(request.userTexts(), "the notice, once").toEqual(["recall", "1 unread"]);
       request.text("recalled");
     });
     const second = await agent.open();
-    // The read reruns and is still working, so the update is still queued when it comes again.
+    // The read reruns and is still working, so the notice is still queued when it comes again.
     const rerun = await agent.workspace.nextCall();
-    await second.runtime.submit(update.input("1", "1 unread"));
+    await second.runtime.submit("1 unread", notice(1));
     rerun.resolve(text("notes"));
     await second.runtime.idle();
 
