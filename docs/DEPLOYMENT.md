@@ -21,9 +21,11 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64）
 
 **为什么分两个账号。** Agent 的命令以 node 账号运行。控制面的数据目录里有模型 API key、密码哈希和所有对话；它如果也属于 node 账号，任何 Agent 都能 `cat` 出来。所以数据目录属于另一个账号，node 账号连进入它的权限都没有。同理，node 账号不能在 docker 组里：能用 Docker 就等于宿主上的 root。控制面由 root（或你别的管理账号）用 `docker compose` 管理。
 
-- **规模假设**：几个人、少量 Agent（ARCHITECTURE §10）。一台低配置 VPS 足够；资源主要花在模型 API 费用上，不在本机。
-- **Palace 不做的事**：不创建系统用户，不切换身份，不安装系统软件，不改 sudo、Docker 权限或 linger，不装证书或反向代理。Agent 在命令里自己写的 `sudo` 能不能成功，由宿主的 sudo 配置决定。
-- **控制面和 node 可以不在同一台机器上。** node 主动连控制面，只需要能访问控制面的地址。控制面部分按 Linux 同机部署来写；§3.2 覆盖三个平台的 node。
+规模按几个人、少量 Agent 设计（ARCHITECTURE §10），一台低配置 VPS 足够，主要开销是模型 API 费用。
+
+Palace 不创建系统用户，不切换身份，不安装系统软件，不改 sudo、Docker 权限或 linger，不装证书或反向代理。Agent 命令里的 `sudo` 能否成功由宿主的 sudo 配置决定。
+
+控制面和 node 可以在不同机器上，node 只需要能访问控制面的地址。控制面部分按 Linux 同机部署来写，§3.2 覆盖三个平台的 node。
 
 ## 2. 前提
 
@@ -41,12 +43,16 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64）
 
 控制面是 `deploy/control-plane/` 里的一个镜像加两个 Compose 文件：`compose.yaml` 是日常配置，`compose.initialize.yaml` 只在第一次启动时叠加，把第一个管理员的初始密码文件和 handle 交给控制面。镜像用 `docker build --file deploy/control-plane/Dockerfile .` 从仓库根目录构建，构建出的镜像带网页前端；发布时由 CI 推到镜像仓库，用确切的版本号，不用 `latest`。
 
-镜像构建只安装控制面和网页需要的 workspace 包，移动端等客户端的依赖不进入镜像构建。镜像保留编译后的 workspace 包，由 `pnpm deploy --prod` 装入独立的生产依赖，不把服务端和第三方包合成一个 JavaScript 文件。依赖在目标架构上安装，保留原生模块和包内资源。每个 PR 和 main 都复用发布构建任务，构建 x64 Linux 镜像和 node 发布包，跳过发布步骤；下载的 Node 运行时按 `deploy/node/node-runtimes.ts` 缓存。只有 Markdown、MDX、reST、AsciiDoc、`docs/` 下的文件或根目录 LICENSE/NOTICE 变动时，跳过这个构建任务，其余检查照常；`v*` 标签始终构建并发布。node 发布包里的 JavaScript 由 tsdown 打包。
+镜像只安装控制面和网页需要的 workspace 包，不含移动端依赖。编译后的 workspace 包保持原样，`pnpm deploy --prod` 在目标架构上装入生产依赖，所以原生模块和包内资源都在，不打包成单个 JavaScript 文件。node 发布包的 JavaScript 由 tsdown 打包。
+
+每个 PR 和 main 都运行同一个发布构建任务，构建 x64 Linux 镜像和 node 发布包，但不发布。下载的 Node 运行时按 `deploy/node/node-runtimes.ts` 缓存。只改了文档（Markdown、MDX、reST、AsciiDoc、`docs/` 下的文件、根目录 LICENSE/NOTICE）时跳过这个任务，其余检查照常。`v*` 标签总是构建并发布。
 
 1. 建一个只属于控制面系统账号的私有数据目录，权限 0700，放在 node 账号进不去的地方，例如 `sudo install -d -m 700 -o palace-control -g palace-control /srv/palace-control-plane/data`。Compose 不会替你建它（目录不存在就拒绝启动），因为让 Docker 建出来的会属于 root。
 2. 镜像在 GHCR 上公开，可以匿名拉取，不需要登录。
 3. 把 `compose.yaml`、`compose.initialize.yaml` 和 `.env.example`（改名 `.env`）放在同一个目录，填好 `.env`（变量见下表）。`PALACE_UID`、`PALACE_GID` 用 `id -u palace-control`、`id -g palace-control` 查。这个目录和 `.env` 只给管理账号看（例如放在 root 的 `/srv/palace-control-plane`，权限 0700；容器的绑定挂载不受上级目录权限影响）。
-4. 写初始密码文件（至少 12 字节，末尾的换行不算），属于控制面系统账号、权限 0600（容器以它的身份读这个文件），路径写进 `.env` 的 `PALACE_INITIAL_PASSWORD`；第一个管理员的 handle 写进 `PALACE_INITIAL_HANDLE`（缺省 `admin`，字母、数字、`_`、`.`、`-`，不分大小写）。控制面只在库里还没有任何人类时读它们：用这个 handle 建第一个人类账号（显示名同 handle）并设为管理员，密码只存 scrypt 哈希（ARCHITECTURE §4.7、MODULE_TESTS 11.1）；第一次启动没有密码文件，或 handle 不合法，就拒绝启动。之后其他人由管理员添加（`POST /api/humans`），每个人用自己的 handle 和密码登录，角色是管理员或普通人类，普通人类只能聊天。
+4. 写初始密码文件，至少 12 字节（末尾换行不算），属于控制面系统账号，权限 0600，路径写进 `.env` 的 `PALACE_INITIAL_PASSWORD`。第一个管理员的 handle 写进 `PALACE_INITIAL_HANDLE`，缺省 `admin`，可用字母、数字、`_`、`.`、`-`，不分大小写。
+
+   控制面只在库里还没有任何人类时读这两项，用它们建第一个管理员（显示名同 handle），密码只存 scrypt 哈希（ARCHITECTURE §4.7）。第一次启动时缺密码文件或 handle 不合法，控制面拒绝启动。之后由管理员在网页添加其他人，角色是管理员或普通人类，普通人类只能聊天。
 5. 第一次启动叠加两个文件：
 
    ```sh
@@ -54,7 +60,10 @@ VPS（Ubuntu 24.04 / Debian 13，x86_64）
    ```
 
    用初始 handle 和初始密码登录网页，确认能登录后，删掉初始密码文件，之后只用 `compose.yaml`：`docker compose up -d`。
-6. 让 HTTPS 反向代理把你的域名转发到控制面端口（宿主 `127.0.0.1:8787`），**并把浏览器请求里原来的 `Host` 传过去**。控制面拒绝 `Origin` 和 `Host` 不一致的写请求（跨站防护，ARCHITECTURE §4.7），而 nginx 的 `proxy_pass` 缺省把 `Host` 换成上游地址，结果连登录都回 403 `cross-origin`；nginx 里要写 `proxy_set_header Host $host;`（Caddy 缺省就保留原 `Host`）。登录 cookie 带 `Secure`，浏览器只在 HTTPS（或 `localhost`）上保存它，所以经 HTTP 访问 VPS 的 IP 登录不上；Web Push 也需要 HTTPS。反向代理不要缓冲 `text/event-stream` 响应：nginx 认控制面发的 `X-Accel-Buffering: no`，其他代理要自己关缓冲；控制面每 25 秒发一次心跳，读超时设得比这长。
+6. 让 HTTPS 反向代理把你的域名转发到控制面端口（宿主 `127.0.0.1:8787`），配置时注意三点：
+   - 保留浏览器请求原来的 `Host`。控制面拒绝 `Origin` 和 `Host` 不一致的写请求（ARCHITECTURE §4.7）。nginx 的 `proxy_pass` 缺省会改写 `Host`，登录会回 403 `cross-origin`，需要加 `proxy_set_header Host $host;`。Caddy 缺省保留 `Host`。
+   - 只经 HTTPS 访问。登录 cookie 带 `Secure`，浏览器只在 HTTPS 或 `localhost` 上保存它，Web Push 也需要 HTTPS。
+   - 不缓冲 `text/event-stream` 响应。nginx 认控制面发的 `X-Accel-Buffering: no`，其他代理要自己关闭缓冲。控制面每 25 秒发一次心跳，读超时要比这长。
 
 `.env` 里的变量（`compose.yaml` 读它们）：
 
@@ -118,7 +127,7 @@ Remove-Item -Recurse .\palace-node
 
 `install` 自己也校验整个包，再在暂存目录解包检查：只能有普通文件和目录，路径在 `palace-node/` 内，文件与清单 `manifest.json` 一一对应，平台和架构与本机相同。任何一项不通过，已有安装不变。
 
-安装放好程序、命令和服务定义，**不启动服务**。POSIX 的命令是 `~/.local/bin/palace` 符号链接；Windows 是 `%LOCALAPPDATA%\Palace\bin\palace.cmd` 普通文件，不需要符号链接特权。CLI 不改用户的持久 PATH；把对应 bin 目录加入自己的 PATH，或使用安装输出中的完整命令路径。
+安装放好程序、命令和服务定义，但不启动服务。POSIX 的命令是 `~/.local/bin/palace` 符号链接；Windows 是 `%LOCALAPPDATA%\Palace\bin\palace.cmd` 普通文件，不需要符号链接特权。CLI 不改用户的持久 PATH；把对应 bin 目录加入自己的 PATH，或使用安装输出中的完整命令路径。
 
 Windows 的已安装命令在更新或卸载时，先把管理入口和运行时复制到 TEMP 下的临时目录，从那里执行，每次留下的运行时副本约 80 MB，管理命令结束后可删除 `%TEMP%\palace-node-cli-*` 目录。这样管理进程不会锁住待替换的 `node.exe`。服务仍直接使用程序目录中的运行时。
 
@@ -207,7 +216,7 @@ POSIX 管理命令拒绝 root。Palace 不创建账号、不配置 linger、不�
 | 看 node 状态、日志 | `palace node status`（版本、服务状态、链路、配置，不打印令牌）、`palace node logs [--lines <n>] [--follow]` |
 | 启停 node | `palace node stop`（停止并停用）、`palace node start`（启用并启动）。stop 之后保持停止，重复 `install` 也不会启动它 |
 | 看控制面日志、启停 | 在放 `compose.yaml` 的目录里 `docker compose logs -f`、`docker compose stop`、`docker compose start`。日常命令只用 `compose.yaml`，不叠加 `compose.initialize.yaml` |
-| 暂停或恢复某个 Agent | 网页"管理"。暂停 = 立刻关闭它的 runtime，进行中的模型请求和 node 上的命令都被停掉（网关逐个通知 node 停掉仍能追踪的命令进程组；POSIX 脱组进程和 Windows 已失去父链的孤儿不在保证内，见 ARCHITECTURE 4.5）；恢复后从停下的地方接着跑 |
+| 暂停或恢复某个 Agent | 网页"管理"。暂停立刻关闭它的 runtime，停掉进行中的模型请求和 node 上能追踪到的命令（例外见 ARCHITECTURE 4.5）。恢复后从停下的地方继续 |
 | 看 Agent 在想什么、做了什么 | 网页"管理"里的实时对话记录 |
 | 看用量 | 网页"管理"。只用于观察，没有任何配额 |
 
@@ -266,7 +275,7 @@ iOS 的展示名、scheme 和 bundle identifier 分别改为 `Palace`、`palace`
 
 #### Palace 版本之间更新
 
-先停 node，再停控制面，两边换成**同一版本**，先启动控制面并确认能登录，再启动 node。node 一侧：
+先停 node，再停控制面，两边换成同一版本，先启动控制面并确认能登录，再启动 node。node 一侧：
 
 ```sh
 palace node stop
@@ -288,20 +297,20 @@ palace node start
 
 ### 5.4 卸载
 
-`palace node uninstall` 停止并停用服务，删除程序目录、Palace 命令和服务定义，保留配置、身份和工作区（MODULE_TESTS §9）；中断后重新执行即可完成。它只删 Palace 的东西：程序目录里有清单外的文件时拒绝并列出它们，不是 Palace 写的单元文件或 `palace` 命令留着不动并报告。控制面用 `docker compose down` 删除容器，数据目录保留。
-
-不是 Palace 写的单元文件，`uninstall` 不删，也不停用它定义的服务。
+`palace node uninstall` 停止并停用服务，删除程序目录、Palace 命令和服务定义，保留配置、身份和工作区。中断后重新执行即可完成。它只删 Palace 的东西：程序目录里有清单外的文件时拒绝并列出它们；不是 Palace 写的单元文件或 `palace` 命令保留不动，也不停用它们定义的服务，只在输出中报告。控制面用 `docker compose down` 删除容器，数据目录保留。
 
 ### 5.5 自动部署
 
-控制面和 node 在同一台 Linux 机器上时，可以让 CI 在每次发版后自动升级：推送 `v*` 标签（标签要打在 main 上的提交上；它不重跑检查，而是等这个提交在 main 上的 `checks` 通过，没通过就不发版；重跑 main 上失败的任务后再重跑发版任务），镜像和发布包发布之后，`.github/workflows/ci.yml` 的 Deploy 任务用一把专用 SSH key 连到这台机器，执行 `deploy/auto-update/palace-deploy`，把 5.3 的步骤做一遍。没有预发环境，所以每次部署都先备份数据目录，失败就自动回退。
+控制面和 node 在同一台 Linux 机器上时，CI 可以在每次发版后自动升级。在 main 的提交上推送 `v*` 标签即发版。发版任务不重跑检查，而是等这个提交在 main 上的 `checks` 通过，没通过就不发版；这时先重跑 main 上失败的任务，再重跑发版任务。
+
+镜像和发布包发布之后，`.github/workflows/ci.yml` 的 Deploy 任务用一把专用 SSH key 连到这台机器，执行 `deploy/auto-update/palace-deploy`，完成 5.3 的步骤。没有预发环境，所以每次部署都先备份数据目录，失败就自动回退。
 
 `palace-deploy` 以 root 运行，从 SSH 拿到 `deploy <版本> <sha256>`，从标准输入拿到这台机器架构的 node 发布包：
 
 1. 校验发布包，拉取 `PALACE_IMAGE_REPO:<版本>` 镜像。已经是这个版本时什么都不做。
 2. 停 node，`docker compose down`，把数据目录复制到 `<控制面目录>/backups/before-<版本>-<时间>`。
-3. 改 `.env` 的 `PALACE_IMAGE`，`docker compose up -d --wait`，确认 `/api/me` 回 401、`/login` 回 200。
-4. `palace node update` 新发布包，`palace node start`，然后每秒看一次 `palace node status`，`PALACE_NODE_CONNECT_WAIT` 秒（默认 60）内出现 `Link: connected` 才算起好，期间一旦出现就继续；超时则打印 node 日志并回退。随后控制面仍然健康。控制面有 `PALACE_HEALTH_WAIT` 秒（默认 30）变健康。
+3. 改 `.env` 的 `PALACE_IMAGE`，`docker compose up -d --wait`，等控制面健康，即 `/api/me` 回 401、`/login` 回 200，最多等 `PALACE_HEALTH_WAIT` 秒（默认 30）。
+4. `palace node update` 新发布包，`palace node start`，每秒看一次 `palace node status`，最多等 `PALACE_NODE_CONNECT_WAIT` 秒（默认 60）出现 `Link: connected`。超时则打印 node 日志并回退。node 连上后再确认一次控制面健康。
 5. 保留最近 `PALACE_KEEP_BACKUPS` 份备份，以及新旧两个版本的发布包（在 `/var/lib/palace-deploy/bundles/`）。每次部署的输出也追加到 `/var/lib/palace-deploy/deploy.log`；CI 中途断开时部署照常做完或回退，结果看这里。
 
 第 2 步之后任何一步失败，都回到原来的镜像，用刚才的备份替换数据目录，把 node 换回原来的发布包并启动（原来的版本可能还没有 `Link:` 行，所以这里只等控制面健康，不等链路），然后以失败退出，CI 里这次部署显示为失败。回退要用正在运行的那个版本的发布包，所以第一次启用前要把它放进 `/var/lib/palace-deploy/bundles/`（连同 `.sha256`），没有它时 `palace-deploy` 不动手。同一时间只有一次部署在跑。
@@ -386,7 +395,7 @@ curl -i -X POST localhost:8787/api/login -H 'content-type: application/json' -d 
 
 ### 6.1 原生移动客户端
 
-`apps/mobile` 是自用的 iOS 27+ Expo app，在 app 内保存一个 HTTPS 服务器地址，用已有 handle 和密码登录，进入聊天、管理、个人资料与通知设置。所有依赖从仓库根安装，只有一个 `pnpm-lock.yaml`。SDK 58 使用 React Native 0.88、React 19.3 和 app 自己的 TypeScript 6.0；版本依据 [Expo SDK 参考](https://docs.expo.dev/versions/latest/)、[官方 TypeScript 指南](https://docs.expo.dev/guides/typescript/) 和 SDK 58 模板。网页继续使用自己的 React 版本。
+`apps/mobile` 是自用的 iOS 27+ Expo app（SDK 58，React Native 0.88，React 19.3，TypeScript 6.0），连接一个 HTTPS 控制面，用已有 handle 和密码登录。依赖从仓库根安装，与网页共用一个 `pnpm-lock.yaml`，网页使用自己的 React 版本。
 
 从仓库根运行：
 
@@ -398,7 +407,7 @@ pnpm --filter @palace/mobile exec expo install --check
 pnpm --filter @palace/mobile bundle:check     # 导出 iOS JS/Hermes bundle 到 apps/mobile/dist
 ```
 
-Metro 使用 [Expo 默认的 monorepo 支持](https://docs.expo.dev/guides/monorepos/)，不需要自定义解析器或 workspace 全局 hoisting。`pnpm typecheck` 包含移动端，CI 在现有格式与类型检查任务里另跑一次 iOS bundle 检查。导出 bundle 不需要原生 SDK，也不证明已在设备上运行。
+Metro 使用 [Expo 默认的 monorepo 支持](https://docs.expo.dev/guides/monorepos/)，不需要自定义解析器或全局 hoisting。`pnpm typecheck` 包含移动端，CI 的格式与类型检查任务另跑一次 `bundle:check`。导出 bundle 不需要原生 SDK，所以它不能说明 app 能在设备上运行。
 
 安装了原生开发工具时，可以构建并启动开发版：
 
@@ -406,13 +415,11 @@ Metro 使用 [Expo 默认的 monorepo 支持](https://docs.expo.dev/guides/monor
 pnpm --filter @palace/mobile ios --device --port 8087
 ```
 
-iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模拟器或设备，工具安装见 [Expo 环境设置](https://docs.expo.dev/get-started/set-up-your-environment/)。共享机器先确认设备未被其他 session 占用，再选择设备。生成的 `ios/` 和 `.expo/` 只留在本地，由 app config 和依赖重新生成。合入原生插件或修改 app config 后，先运行 `pnpm --filter @palace/mobile exec expo prebuild --platform ios --no-install` 再构建；已有 `ios/` 目录不能保证新插件配置已应用。通知构建应确认生成的 `Palace.entitlements` 含所选环境的 `aps-environment`。
+iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模拟器或设备，工具安装见 [Expo 环境设置](https://docs.expo.dev/get-started/set-up-your-environment/)。共享机器先确认设备没有被其他 session 占用。生成的 `ios/` 和 `.expo/` 只留在本地，由 app config 和依赖重新生成。合入原生插件或修改 app config 后，先运行 `pnpm --filter @palace/mobile exec expo prebuild --platform ios --no-install` 再构建，已有的 `ios/` 目录不会自动应用新配置。构建通知相关改动时，确认生成的 `Palace.entitlements` 含所选环境的 `aps-environment`。
 
-最低版本通过 Expo 内置的 [`ios.deploymentTarget`](https://docs.expo.dev/versions/v58.0.0/config/app/#deploymenttarget) 配置为 `27.0`，不需要额外的构建属性插件。`pnpm --filter @palace/mobile exec expo prebuild --platform ios --no-install` 生成的 `ios/Podfile.properties.json` 含 `ios.deploymentTarget: "27.0"`；Xcode 工程的应用 target 在 Debug 和 Release 配置中均为 `IPHONEOS_DEPLOYMENT_TARGET = 27.0`。原生编译和运行验证使用自己的开发版；Expo Go 的宿主部署目标不能证明 Palace 自身的最低版本。
+最低版本由 app config 的 [`ios.deploymentTarget`](https://docs.expo.dev/versions/v58.0.0/config/app/#deploymenttarget) 设为 `27.0`，prebuild 把它写进 Podfile 配置和 Xcode 工程。Expo Go 不带 app 用到的 cookie 管理原生模块，验证要用上面的命令构建开发版。登录、恢复和退出的行为见 ARCHITECTURE 的移动端部分。
 
-认证沿用控制面的 Secure HttpOnly cookie，无需 bearer API 或 CORS 配置。启动和从后台回到前台重新验证登录，权限弹窗的 inactive → active 不触发重验；连接失败可重试，401 需要重新登录。退出与换服务器会先尝试撤销旧服务器上的会话，再清理 app 的原生 cookie；离线退出仅保证关闭本机访问，并提示远端撤销未确认。地址与恢复标记存在 Expo SQLite 键值设置中，不保存密码。正常使用后的重启恢复依赖原生 cookie 存储，不保证登录后立即强杀的持久化。`expo-sqlite` 和 `@preeternal/react-native-cookie-manager` 需要用上述 `ios` 命令构建开发版或 Release 包，Expo Go 不能验证这个 app 的 cookie 清理集成。
-
-`dev.yyang.palace` 是当前 iOS bundle identifier。签名使用对应的 App ID 和 provisioning profile，控制面的 `PALACE_APNS_TOPIC` 也必须与它一致。自用分发使用本地 Xcode Archive 和 TestFlight，已上传的构建由 `ios-testflight-*` 标签记录。根 `pnpm build` 构建已有网页和服务端包。移动端按下面的独立流程归档。
+iOS bundle identifier 是 `dev.yyang.palace`，签名用对应的 App ID 和 provisioning profile，控制面的 `PALACE_APNS_TOPIC` 也必须与它一致。根 `pnpm build` 不构建移动端，发布走下面的 TestFlight 流程。
 
 #### 发布 TestFlight（asc）
 
@@ -470,11 +477,9 @@ workflow 最后读回测试组关系，确认构建已在组内，这就是发�
 
 ### 6.2 原生 iOS 通知
 
-原生登记的随机 binding 使用 SDK 58 的 [expo-crypto.randomUUID](https://docs.expo.dev/versions/v58.0.0/sdk/crypto/)，不依赖浏览器的 Web Crypto 全局对象。
+app 用 `expo-notifications` 取得原生 APNs token，控制面用 `@parse/node-apn` 直接连 APNs，不使用 Expo 推送服务，所以不需要 Expo 账号和 Expo token。
 
-移动端使用 [expo-notifications SDK 58](https://docs.expo.dev/versions/v58.0.0/sdk/notifications/) 的原生 APNs token。SDK 58 的[官方依赖表](https://github.com/expo/expo/blob/sdk-58/packages/expo/bundledNativeModules.json) 推荐 `~58.1.6`。服务端使用维护中的 [@parse/node-apn 8.1.0](https://github.com/parse-community/node-apn)，其 Node 范围包含 24。选择直接 APNs，是因为已有后端可以持有 provider，避免另加 Expo 托管推送服务与账号。[Expo 官方说明](https://docs.expo.dev/push-notifications/sending-notifications-custom/)允许直接 APNs；Expo 推送服务还需要 Expo token、服务与凭据管理，本项目不使用它。库负责 HTTP/2 与 JWT，Palace 只适配现有队列。
-
-未配置时 Web Push 照常运行，`GET /api/chat/push/native` 返回 `{ enabled: false }`，原生订阅回 503 `native-push-disabled`。系统权限允许也不会显示已登记。配置 APNs 时，控制面需要选择一个私钥输入，并提供 Key ID、Team ID、topic 和环境；只提供一部分或 key 无法加载时拒绝启动。
+控制面不配置 APNs 时 Web Push 照常运行，`GET /api/chat/push/native` 返回 `{ enabled: false }`，原生订阅回 503 `native-push-disabled`，app 不会显示已登记。配置 APNs 时要提供一种私钥输入，以及 Key ID、Team ID、topic 和环境。只提供一部分，或 key 无法加载，控制面拒绝启动。
 
 | 变量 | 内容 |
 | --- | --- |
@@ -485,10 +490,6 @@ workflow 最后读回测试组关系，确认构建已在组内，这就是发�
 | `PALACE_APNS_TOPIC` | 签名 app 的 bundle identifier，当前为 `dev.yyang.palace` |
 | `PALACE_APNS_ENVIRONMENT` | `sandbox` 或 `production`，不从 `NODE_ENV` 猜测 |
 
-app config 的输入 `PALACE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`。它同时设置 Expo 通知插件的 entitlement mode 和 app 订阅的环境。正式签名包使用 `production`；Xcode 按 App Store Connect 导出分发签名时会把 entitlement 改为 production，构建输入必须与之匹配。本地 Archive 可以使用 development entitlement。改变输入后重新 prebuild 并正常构建，不修改生成的二进制。服务器拒绝环境不匹配的登记；app 拒绝服务器公布的环境与自己不一致。
+app config 的输入 `PALACE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`，它同时决定通知 entitlement 和 app 订阅的环境。TestFlight 包按 App Store Connect 分发重新签名后是 `production`，所以 `archive-ios.sh` 固定用 `production` 构建，控制面的 `PALACE_APNS_ENVIRONMENT` 也要设为 `production`。开发版用 `sandbox`。改变这个输入后要重新 prebuild 再构建。服务器拒绝环境不匹配的登记，app 也拒绝环境与自己不一致的服务器。
 
-`apns.ts` 的 provider 连接由进程持有，关闭时释放。单次投递总期限 10 秒，库内重试关闭。暂时失败仍按聊天队列的退避计划重试，过期 provider token 也重试。只有 token 失效相关的拒绝才删除设备订阅，provider 配置错误不清理 token。APNs 的 expiry 固定为消息时间加一天；队列重试不延长它。已过期的消息不再交给 APNs。collapse ID 沿用消息 tag，通知数据不含消息正文。系统提示使用通用文案，点击数据带随机登记 binding，app 只在这次登记所属的服务器和账号下打开它，避免在错误身份下打开旧通知。
-
-关闭通知、退出、换服务器和登录失效会尝试取消服务器登记，再清 cookie，并向 iOS 取消本机注册、清除已展示通知。离线时无法保证旧服务器立即停止或撤回已交给 APNs 的通知；界面说明取消未确认。退出之后才到达的登记请求回 401；重新开启和 token 轮换使用新 binding。未确认的旧 token 取消记录独立于当前登记保存，token 轮换和新登记不会覆盖它们；下次同一服务器和账号恢复验证、刷新或退出时重试，只有服务端确认后才删除。重新允许注册之后仍可能收到旧服务器的通用提示；旧数据不会打开当前其他账号或服务器的会话。
-
-Palace 的 Apple Developer App ID、Push Notifications capability、签名和 App Store Connect 记录已配置，本地 Release 归档已上传 TestFlight。控制面按上表配置 APNs 凭据，TestFlight 使用 `production` 环境。在真机登录并开启通知后，通过实际私信或提及验证远程送达。普通 iOS 27 模拟器的构建、系统权限界面和 `simctl push` 注入只覆盖本机行为，真实 APNs 送达需单独验证。
+发送、重试和过期见 ARCHITECTURE 的“原生推送发送器”，app 侧的登记与取消见 `MobileNotifications` 一段。模拟器和 `simctl push` 只能验证本机的权限和展示，真实 APNs 送达要在真机上登录、开启通知，再用私信或提及验证。
