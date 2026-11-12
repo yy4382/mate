@@ -1,0 +1,31 @@
+{
+  "env": {
+    "APP_ID": "6830581872",
+    "PALACE_APPLE_TEAM_ID": "24WWX7XC7L"
+  },
+  "workflows": {
+    "ios-archive": {
+      "description": "Archive committed HEAD locally with production configuration and matching dSYMs",
+      "steps": ["./scripts/archive-ios.sh"]
+    },
+    "ios-export": {
+      "description": "Export a signed IPA locally; RELEASE_DIR is the archive's release directory",
+      "steps": [
+        "PATH=\"/usr/bin:/bin:/usr/sbin:/sbin:$PATH\" asc xcode export --archive-path \"${RELEASE_DIR:?Set RELEASE_DIR}/Palace.xcarchive\" --export-options scripts/ios-export-options.plist --ipa-path \"$RELEASE_DIR/Palace.ipa\" --xcodebuild-flag=-allowProvisioningUpdates --output json > \"$RELEASE_DIR/export.json\""
+      ]
+    },
+    "ios-upload": {
+      "description": "Upload the exported IPA and wait for Apple processing; does not distribute",
+      "steps": [
+        "asc publish testflight --app \"$APP_ID\" --ipa \"${RELEASE_DIR:?Set RELEASE_DIR}/Palace.ipa\" --upload-only --wait --timeout 30m --output json > \"$RELEASE_DIR/upload.json\""
+      ]
+    },
+    "ios-distribute": {
+      "description": "Assign an exact processed build to an explicitly selected TestFlight group",
+      "steps": [
+        "asc publish testflight --app \"$APP_ID\" --build-id \"${BUILD_ID:?Set BUILD_ID from the uploaded build}\" --group \"${GROUP_ID:?Set GROUP_ID from testflight groups list}\" --wait --timeout 30m --output json",
+        "asc testflight groups list --build-id \"$BUILD_ID\" --output json"
+      ]
+    }
+  }
+}

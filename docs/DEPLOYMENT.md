@@ -414,15 +414,66 @@ iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模�
 
 `dev.yyang.palace` 是当前 iOS bundle identifier。签名使用对应的 App ID 和 provisioning profile，控制面的 `PALACE_APNS_TOPIC` 也必须与它一致。自用分发使用本地 Xcode Archive 和 TestFlight，首个 `0.1.0 (1)` 已上传。根 `pnpm build` 构建已有网页和服务端包。移动端按下面的独立流程归档。
 
-#### 归档并上传 TestFlight
+#### 命令行 iOS 分发（asc）
 
-Mac 需要项目指定的 pnpm、完整 Xcode 和 CocoaPods。先在 Xcode 的 Settings → Accounts 登录有权管理 Palace 签名的 Apple Developer 账号。确认待发布代码已提交，包括 `apps/mobile/app.config.ts` 的 `version` 和 `ios.buildNumber`。每次上传使用新的 build number，当前配置为 `0.1.0 (2)`。
+参考：[asc CLI](https://github.com/rorkai/App-Store-Connect-CLI)、[Apple API key 配置](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api)。
 
-从仓库根目录运行，将 Team ID 换成签名团队的实际值。
+常规发布不需要操作 App Store Connect 网页或 Xcode Organizer：本地归档 → 导出 IPA → 上传并等待处理 → 指定 TestFlight 测试组。`.asc/workflow.json` 提供四个独立入口；失败时从对应阶段继续，不重复编译或盲目重传。以下命令以本仓库根目录为工作目录，按 `asc 6.6.1` 的 `--help` 核对。升级 CLI 后先检查所用命令的帮助。原生编译仍需要完整 Xcode、CocoaPods 和项目指定的 pnpm。
+
+**首次配置，或换机器。** `asc` API 登录、Apple 网页会话、Xcode 签名账号是三件事。已有 API 登录先直接验证，不要求重新提供密钥：
 
 ```sh
-PALACE_APPLE_TEAM_ID=YOUR_TEAM_ID ./scripts/archive-ios.sh
+asc auth status
+asc apps view --id 6830581872 --output json
+asc testflight groups list --app 6830581872 --paginate --output table
 ```
+
+多个登录配置用 `asc auth switch --name "配置名"` 选择。若缺少登录，操作者需要下面这些信息；已有值不必重新询问，密钥内容、密码和验证码不要发到聊天或提交到 Git。
+
+| 信息 | Palace 的值 / 如何获取 |
+| --- | --- |
+| App ID / Bundle ID | `6830581872` / `dev.yyang.palace`；用 `asc apps view` 核对名称 Palace Space。新项目用 `asc apps list --paginate` 查找，不能因没权限就新建一个 app。 |
+| Apple Team ID（签名） | `24WWX7XC7L`；Apple Developer 账号 Membership details。不是下面的 Issuer ID。 |
+| API Key ID、Issuer ID、私钥 `.p8` | App Store Connect → Users and Access → Integrations → App Store Connect API → Team Keys。为完整分发选择 App Manager 角色；团队 key 的访问范围是整个团队的 app。由有权限的 Account Holder/Admin 创建，私钥只可下载一次，保存到 1Password。**不是服务器 APNs 的 `.p8`**。 |
+| TestFlight Group ID | 上面的 groups list 输出，初次内部测试选择已有 `Palace Internal`，确认 `isInternalGroup=true`。不猜 ID、不自动添加其他测试者。 |
+| Xcode 签名访问 | 本机 Xcode Settings → Accounts 中有对应团队的账号，或单独提供可用的签名证书、私钥和 profile。仅登录 asc 不等于 Xcode 能签名。 |
+
+在用户自己的终端导入 API key（文件放在仓库之外、权限 0600）：
+
+```sh
+asc auth login --name Palace --key-id KEY_ID --issuer-id ISSUER_ID \
+  --private-key /absolute/private/path/AuthKey_KEY_ID.p8
+asc auth switch --name Palace
+asc apps view --id 6830581872 --output json
+```
+
+默认存入 macOS 钥匙串，后续命令复用登录；确认 1Password 备份可恢复后可删除下载副本。不要为排查钥匙串失败直接改成明文仓库配置。`asc auth doctor` 可诊断本机问题；受限执行环境无法访问钥匙串时，在正常终端重试再判定未登录。CI 可由秘密管理器注入 `ASC_KEY_ID`、`ASC_ISSUER_ID` 和 `ASC_PRIVATE_KEY`，不将秘密放进 workflow 参数、输出或日志；本流程不要求 CI 或服务器保存凭据。
+
+没有 API key 但希望全程终端配置时，用户可交互登录 Apple 网页会话并创建 key：
+
+```sh
+asc web auth login --apple-id YOUR_APPLE_ACCOUNT_EMAIL
+mkdir -p "$HOME/.asc/keys"
+chmod 700 "$HOME/.asc/keys"
+asc web api-keys create --name "Palace releases" --role APP_MANAGER \
+  --output-dir "$HOME/.asc/keys" --output json
+```
+
+这是创建新凭据，先确认团队和权限再执行；输出的 Key ID / Issuer ID 用于上面的 `asc auth login`。密码和 2FA 在用户终端提示中输入，agent 只需要用户告知登录完成。Apple 首次 API 访问申请、协议接受或账号验证可能仍需账号持有人手动处理；这类法律/账户步骤不通过 computer use 自动代办。若命令返回 401，检查 key 是否被撤销、选错配置或本机时钟；403 则核对角色、团队、app 访问和待接受协议，提供具体错误及所缺信息后再继续。
+
+**1. 选择版本并归档。** 查询远端已处理和正在上传的构建，避免重复占用 build number：
+
+```sh
+asc builds next-build-number --app 6830581872 --platform IOS --output json
+```
+
+把选定的 `version` 和 `ios.buildNumber` 写入 `apps/mobile/app.config.ts` 并提交，再运行：
+
+```sh
+asc workflow run ios-archive
+```
+
+不要用 `asc xcode version edit` 修改生成工程来代替 app config；下次 Expo prebuild 会覆盖它。查询不会预留构建号，同一 app 的发布由一个操作者串行进行。已有归档可直接从导出继续。其他团队可传 `PALACE_APPLE_TEAM_ID:实际团队ID`。
 
 脚本只构建运行时的 Git `HEAD`，未提交或未跟踪的改动不会进入发布包。每次运行都在 `artifacts/ios/release.XXXXXX/` 导出独立源码，使用锁定的 JS 依赖生成 iOS 工程，再执行 Release 设备归档。`PALACE_IOS_APNS_ENVIRONMENT=production` 同时用于 prebuild 和 Xcode 内嵌配置。Pods 和 Xcode 使用 pnpm 配置指定的 Node。自动签名允许 Xcode 获取或更新 provisioning profile，钥匙串可能要求本机确认。
 
@@ -434,11 +485,73 @@ PALACE_APPLE_TEAM_ID=YOUR_TEAM_ID ./scripts/archive-ios.sh
 - `source/` 包含源码快照、安装的依赖和生成工程，`DerivedData/` 包含编译中间产物。
 - `symbols/` 保留官方 React Native 和 Hermes dSYM 下载包及解包结果。脚本根据安装的 React Native 版本和 Hermes 的 `HERMES_VERSION_NAME` 下载设备符号，逐个核对 `React`、`ReactNativeDependencies`、`hermesvm` 的 UUID 与归档二进制一致，再复制到 archive 的 `dSYMs/`。
 
-看到 `Archive ready` 后，用 Xcode Organizer 打开打印出的 `Palace.xcarchive`，选择 Distribute App → App Store Connect 并确认上传。上传后在 App Store Connect 等待处理完成，再把 build 加入 TestFlight 测试组。app config 的 `ITSAppUsesNonExemptEncryption=false` 记录已确认的加密声明，当前 app 使用系统提供的 HTTPS 和 CryptoKit。以后增加加密实现时重新核对声明。
+**2. 导出分发签名 IPA。** 将脚本打印的目录原样填入（不要自动取最新目录，以免选错构建）：
+
+```sh
+RELEASE_DIR="/absolute/path/to/artifacts/ios/release.XXXXXX"
+asc workflow validate
+asc workflow run --dry-run ios-export RELEASE_DIR:"$RELEASE_DIR"
+asc workflow run ios-export RELEASE_DIR:"$RELEASE_DIR"
+```
+
+`ios-export-options.plist` 固定为本地 App Store Connect 导出、自动签名、不让 Xcode 修改构建号。归档可以带 development entitlement；导出时重新签为分发包。导出只产生 `$RELEASE_DIR/Palace.ipa` 和 `export.json`，不会上传。签名缺失时由 Xcode 的 `-allowProvisioningUpdates` 获取 profile；若缺少账号/证书，先解决具体签名错误。asc 登录不能替代这一步。导出阶段将 macOS 系统工具放在 PATH 前面，避免 Homebrew rsync 与 Xcode 自带 rsync 的参数不兼容（`Copy failed` / `--extended-attributes: unknown option`）。
+
+**3. 上传，等待 Apple 处理。** 上传会占用 build number；执行前核对本次 commit、版本和构建号。需要用户确认时，把这些具体值交给用户，不让其批准一个未知的“最新版”。
+
+```sh
+asc workflow run --dry-run ios-upload RELEASE_DIR:"$RELEASE_DIR"
+asc workflow run ios-upload RELEASE_DIR:"$RELEASE_DIR"
+```
+
+结果保存在 `upload.json`。它不分发、不通知测试者、不提交审核。读取返回的 build ID，或通过**明确的版本和构建号**查找：
+
+```sh
+asc builds info --app 6830581872 --version VERSION --build-number NUMBER \
+  --platform IOS --include buildBetaDetail --output json
+```
+
+必须等 `processingState=VALID` 才分发。超时/连接中断不代表上传失败：先运行上述查询；如果已存在，继续处理或分发，不再次上传。若尚未出现，用 `asc builds uploads --help` 检查上传记录，确认失败后才重试；被 Apple 判为 INVALID/FAILED 时查看错误、修复后递增构建号重新归档。不要把重新执行整个 workflow 当作上传重试策略。
+
+app config 的 `ITSAppUsesNonExemptEncryption=false` 记录已确认的加密声明，当前 app 使用系统提供的 HTTPS 和 CryptoKit。以后增加加密实现时重新核对声明，遇到合规问题提供实际加密用途，不盲目沿用答案。
+
+**4. 内部 TestFlight 分发。** 从 groups list 选择 Palace Internal 的 ID，使用上一步精确 build ID：
+
+```sh
+asc workflow run --dry-run ios-distribute BUILD_ID:BUILD_ID GROUP_ID:GROUP_ID
+asc workflow run ios-distribute BUILD_ID:BUILD_ID GROUP_ID:GROUP_ID
+```
+
+该入口只关联指定测试组并读取组关系验证结果。内部测试不需要 Beta App Review。测试者需已有 App Store Connect 用户权限和测试组成员资格；让用户在 TestFlight 安装并确认版本、登录、通知送达及点击路由。`VALID` 和组关系不等于真机通过。workflow 执行记录在 `.asc/runs/`（Git 忽略）；如最后的只读验证失败，按 CLI 返回的 run ID 用 `asc workflow run ios-distribute --resume RUN_ID` 继续，或单独运行 `asc testflight groups list --build-id BUILD_ID`。不要把密钥传入持久化的 workflow 参数。
+
+**外部测试（需要时）。** 先用 `asc testflight groups list --app 6830581872 --external --paginate` 选择外部组；用 `asc testflight review view --app 6830581872` 读取审核资料。向用户索取审核联系人姓名/电话/邮箱、可用的测试登录账号、服务器地址、操作说明和本次 What to Test。通过 `asc testflight review edit --help` 填写资料，密码使用 `--demo-account-password @env:REVIEW_PASSWORD`，不写在 shell 历史或仓库。需要新组/邀请测试者时先确认名单，再用 `asc testflight groups create --help` 和 `asc testflight testers add --help`；本流程不会默认发邀请。
+
+```sh
+asc builds test-notes create --build-id BUILD_ID --locale en-US --whats-new "本次测试内容"
+asc workflow run ios-distribute BUILD_ID:BUILD_ID GROUP_ID:EXTERNAL_GROUP_ID
+asc testflight review submit --build-id BUILD_ID --confirm
+asc builds info --build-id BUILD_ID --include buildBetaDetail,betaAppReviewSubmission --output json
+```
+
+已有 test notes 用 `asc builds test-notes update`，不要重复创建。外部测试需要 Apple 的 Beta App Review；提交前确认所选 build、审核账号和范围。审批通过后查看测试组及 build 状态，再按用户要求邀请/通知测试者。它与公开上架审核不同。
+
+**公开 App Store（独立于 TestFlight）。** 首次上架还需用户确定商店版本、文案、截图、隐私政策和支持 URL、隐私收集声明、年龄分级、分类、版权、价格/区域及审核账号；不能从内部测试通过推断这些资料齐全。用 `asc versions list --app 6830581872` 查看已有草稿，避免把初次生成的 `1.0` 草稿误当成 TestFlight 的 `0.1.0`。用 `asc metadata pull --help` 拉取目标版本的规范文件，填写后以对应的 `metadata/version/VERSION` 目录暂存：
+
+```sh
+asc release stage --app 6830581872 --version VERSION --build-id BUILD_ID \
+  --metadata-dir ./metadata/version/VERSION --dry-run
+asc release stage --app 6830581872 --version VERSION --build-id BUILD_ID \
+  --metadata-dir ./metadata/version/VERSION --confirm
+asc validate --app 6830581872 --version VERSION --platform IOS --output table
+asc review submit --app 6830581872 --version VERSION --build-id BUILD_ID --dry-run
+# 用户确认提交审核后：
+asc review submit --app 6830581872 --version VERSION --build-id BUILD_ID --confirm
+```
+
+stage 只处理版本/文案/构建关联，不代填截图、隐私和定价。根据 validate 的实际缺项，用 `asc search "相关事项"` / 对应 `--help` 获取当前命令，明确要求用户提供什么和在哪里获得。CLI 的 `asc capabilities --area release --output table` 区分公开 API、网页会话和不支持的事项；必须人工确认的政策声明交还用户，不假装全自动。提交前确定版本的发布方式；如选择手动发布，审核通过且状态为 Pending Developer Release 后，另行确认 `asc versions release --version-id VERSION_ID --confirm`。公开发布不会由上述四个 workflow 隐式触发。
 
 上传记录可用 `ios-testflight-*` 标签指向 `commit.txt` 中的提交。这类标签只用于追溯。§5.5 的服务端发布由 `v*` 标签触发，iOS 记录标签不会触发服务端部署。
 
-确认上传和排查完成后，可清理该发布目录内的 `source/`、`DerivedData/` 和 `symbols/`。保留实际上传的 `Palace.xcarchive` 及其中的完整 `dSYMs/`，同时保留 commit、配置、工具版本、Pod 锁文件和归档日志。Pods 在生成工程时解析，日后重建可能得到不同原生依赖，实际上传的 archive 是对应 build 的二进制记录。
+确认上传和排查完成后，可清理该发布目录内的 `source/`、`DerivedData/` 和 `symbols/`。保留实际上传的 `Palace.xcarchive` 及其中的完整 `dSYMs/`，同时保留 IPA、export/upload JSON、build/group ID、测试结果，以及 commit、配置、工具版本、Pod 锁文件和归档日志。Pods 在生成工程时解析，日后重建可能得到不同原生依赖，实际上传的 archive 是对应 build 的二进制记录。
 
 ### 6.2 原生 iOS 通知
 
@@ -457,7 +570,7 @@ PALACE_APPLE_TEAM_ID=YOUR_TEAM_ID ./scripts/archive-ios.sh
 | `PALACE_APNS_TOPIC` | 签名 app 的 bundle identifier，当前为 `dev.yyang.palace` |
 | `PALACE_APNS_ENVIRONMENT` | `sandbox` 或 `production`，不从 `NODE_ENV` 猜测 |
 
-app config 的输入 `PALACE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`。它同时设置 Expo 通知插件的 entitlement mode 和 app 订阅的环境。正式签名包使用 `production`；Organizer 按 App Store Connect 分发签名时会把 entitlement 改为 production，构建输入必须与之匹配。本地 Archive 可以使用 development entitlement。改变输入后重新 prebuild 并正常构建，不修改生成的二进制。服务器拒绝环境不匹配的登记；app 拒绝服务器公布的环境与自己不一致。
+app config 的输入 `PALACE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`。它同时设置 Expo 通知插件的 entitlement mode 和 app 订阅的环境。正式签名包使用 `production`；Xcode 按 App Store Connect 导出分发签名时会把 entitlement 改为 production，构建输入必须与之匹配。本地 Archive 可以使用 development entitlement。改变输入后重新 prebuild 并正常构建，不修改生成的二进制。服务器拒绝环境不匹配的登记；app 拒绝服务器公布的环境与自己不一致。
 
 `apns.ts` 的 provider 连接由进程持有，关闭时释放。单次投递总期限 10 秒，库内重试关闭。暂时失败仍按聊天队列的退避计划重试，过期 provider token 也重试。只有 token 失效相关的拒绝才删除设备订阅，provider 配置错误不清理 token。APNs 的 expiry 固定为消息时间加一天；队列重试不延长它。已过期的消息不再交给 APNs。collapse ID 沿用消息 tag，通知数据不含消息正文。系统提示使用通用文案，点击数据带随机登记 binding，app 只在这次登记所属的服务器和账号下打开它，避免在错误身份下打开旧通知。
 

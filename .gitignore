@@ -21,3 +21,7 @@ decisions.tsv
 apps/mobile/.expo/
 apps/mobile/expo-env.d.ts
 apps/mobile/ios/
+
+# asc credentials and local execution records; workflow.json is tracked.
+.asc/*
+!.asc/workflow.json
