@@ -83,4 +83,4 @@ hermesvm ./iphoneos/hermesvm.framework.dSYM $hermes_url-hermes-framework-dSYM-re
 EOF
 
 printf '\nArchive ready: %s\n' "$archive_path"
-printf 'Open this archive in Xcode Organizer and confirm the upload.\n'
+printf 'Next: asc workflow run ios-export RELEASE_DIR:"%s"\n' "$release_dir"
