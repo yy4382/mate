@@ -32,7 +32,7 @@
 
 工作区、历史、助手、提醒和后台命令留在 runtime 里，仍是 Durable 扩展。它们要后台任务、Harness 句柄、时钟和中止，把这些放进契约就等于重新暴露 Durable 的整个 `Extension`，契约不再简单。判据是谁拥有它：不属于 runtime 的能力是插件，runtime 自己的能力是内置。两者共用的只有 `scope`，runtime 内部用一张 `{ extension, scope }` 的表装它们，主对话专属集合由 `scope` 推出来。
 
-runtime 内置输入的 requestId 前缀（`reminder`、`assistant`、`assistant-report`、`command`）在 runtime 里集中列出，插件的输入种类不能和它们同名。
+runtime 自己提交的 requestId 前缀（`reminder`、`assistant`、`assistant-report`、`command`、`idle-summary`、`idle-compaction`）在 runtime 里集中列出，插件的输入种类不能和它们同名。
 
 ## 不做的事
 

@@ -6,10 +6,17 @@ import { readTopics, type Topic } from "./docs.ts";
 export type Capability = { readonly extension: Extension; readonly scope: PluginScope };
 
 /**
- * The inputs the runtime submits itself, by requestId prefix. Built-in producers build their requestIds with
+ * The submissions the runtime makes itself, by requestId prefix. Built-in producers build their requestIds with
  * `builtinRequestId`, so a plugin's input kind cannot share a namespace with one.
  */
-export const BUILTIN_INPUTS = ["reminder", "assistant", "assistant-report", "command"] as const;
+export const BUILTIN_INPUTS = [
+  "reminder",
+  "assistant",
+  "assistant-report",
+  "command",
+  "idle-summary",
+  "idle-compaction",
+] as const;
 export type BuiltinInput = (typeof BUILTIN_INPUTS)[number];
 
 export const builtinRequestId = (kind: BuiltinInput, key: string | number) => `${kind}:${key}`;
