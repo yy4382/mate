@@ -314,6 +314,12 @@ importers:
         specifier: workspace:*
         version: link:../testkit
 
+  packages/agent-plugin:
+    dependencies:
+      '@earendil-works/pi-durable':
+        specifier: 1.1.0
+        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
+
   packages/chat:
     dependencies:
       '@palace/clock':
