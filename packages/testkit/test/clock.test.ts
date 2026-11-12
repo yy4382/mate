@@ -55,3 +55,16 @@ describe.each(clocks)("%s", (_name, make) => {
     expect(getEventListeners(signal, "abort"), "the abort listener is removed").toEqual([]);
   });
 });
+
+describe("the fake clock", () => {
+  it("tells when a number of sleeps are pending, counting only those not yet woken", async () => {
+    const clock = new FakeClock();
+    const resting = clock.sleeping(2);
+    void clock.sleep(undefined, new AbortController().signal);
+    void clock.sleep(1_000, new AbortController().signal);
+    expect(await settledSoon(resting), "two sleeps pending").toBe(true);
+    clock.advance(1_000);
+    expect(await settledSoon(clock.sleeping(2)), "one was woken").toBe(false);
+    expect(await settledSoon(clock.sleeping(1)), "one still sleeps").toBe(true);
+  });
+});
