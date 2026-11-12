@@ -13,7 +13,7 @@ import {
 } from "./support.ts";
 import type { AgentRuntime, AgentSettings } from "../src/index.ts";
 
-/** In pi-ai's catalog, on the Responses API the scripted provider speaks. Its idle delay is 25 minutes. */
+/** In pi-ai's catalog, on the Responses API the scripted provider speaks. Compacted from 150k tokens. */
 const sol: AgentSettings = { model: { provider: "openai", modelId: "gpt-6.1-sol" } };
 const MINUTE = 60_000;
 /** Past a delay counted from the first answer, and so from a later answer of the same test too. */
@@ -25,7 +25,7 @@ const CHECKPOINT =
  * An Agent on gpt-6.1-sol that checked the build, its answer read `tokens` of input and ended in `padding`. Durable's
  * summarizer requests go to `summaries`, which has no steps: any request there fails `assertComplete()`.
  */
-async function idleAgent(tokens = 200_000, settings: AgentSettings = sol, padding = "") {
+async function idleAgent(tokens = 150_000, settings: AgentSettings = sol, padding = "") {
   const clock = new FakeClock(Date.now());
   const agent = await testAgent(settings, { clock });
   agent.workspace.answerAll(() => text("hi"));
@@ -108,7 +108,7 @@ const HistoryPage = z.object({
 });
 
 describe("idle compaction", () => {
-  it("asks an idle Agent over 200k tokens for a checkpoint that continues its cached request, then works on from that checkpoint", async () => {
+  it("asks an idle Agent at its model's 150k tokens for a checkpoint that continues its cached request, then works on from that checkpoint", async () => {
     const { agent, first, idleFor } = await idleAgent();
     agent.provider.step("checkpoint", (request) => {
       const answered = requestOf(agent, "answers").body;
@@ -161,9 +161,17 @@ describe("idle compaction", () => {
   });
 
   const quiet: [string, () => ReturnType<typeof idleAgent>, number][] = [
-    ["its last request read less than 200k tokens", () => idleAgent(199_999), 25 * MINUTE + PAST],
+    [
+      "its last request read less than its model's 150k tokens",
+      () => idleAgent(149_999),
+      25 * MINUTE + PAST,
+    ],
     ["the delay has not passed", () => idleAgent(), 24 * MINUTE],
-    ["its model has no idle delay", () => idleAgent(200_000, defaultSettings), 25 * MINUTE + PAST],
+    [
+      "a model without its own entry read less than the default 200k tokens",
+      () => idleAgent(199_999, defaultSettings),
+      25 * MINUTE + PAST,
+    ],
     [
       // gpt-6.1-sol's 272k window, less Durable's reserve and background tokens, leaves 222,848. The answer's 222,810
       // tokens and a short input stay under it, the checkpoint prompt passes it; the long answer leaves Durable the
@@ -178,6 +186,18 @@ describe("idle compaction", () => {
     idleFor(idle);
     await resting();
     await expectContextKept(agent, first.runtime);
+  });
+
+  it("asks an Agent on a model without its own entry for a checkpoint after the default 25 minutes", async () => {
+    const { agent, first, idleFor } = await idleAgent(200_000, defaultSettings);
+    agent.provider.step("checkpoint", (request) => request.text(CHECKPOINT));
+    const compacted = compaction(first.runtime);
+
+    idleFor(25 * MINUTE + PAST);
+
+    await compacted;
+    expect(agent.provider.requests.map(({ step }) => step)).toEqual(["answers", "checkpoint"]);
+    agent.provider.assertComplete();
   });
 
   it("asks nothing when the Agent's model changed since its last request", async () => {

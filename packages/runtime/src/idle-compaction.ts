@@ -27,20 +27,32 @@ import { builtinRequestId } from "./plugins.ts";
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
+type IdlePolicy = {
+  /** How long after the last request started an idle conversation is compacted. */
+  readonly compactAt: number;
+  /** The provider's prompt-cache lifetime, after which the checkpoint request would be read uncached and save nothing. */
+  readonly cacheGone: number;
+  /** Input tokens of the last request (uncached, cache read and cache write) below which compaction is not worth it. */
+  readonly minInputTokens: number;
+};
+
 /**
- * Per model, keyed `provider/modelId`: `compactAt` is how long after the last request started an idle conversation is
- * compacted, `cacheGone` the provider's guaranteed prompt-cache lifetime, after which the checkpoint request would be
- * read uncached and save nothing. A model without an entry is never idle-compacted.
+ * Every model a new release brings gets this without a code change. Most providers keep a prefix for minutes to an
+ * hour; on one that has already dropped it, the checkpoint request pays the reread now instead of when the Agent wakes.
  */
-const IDLE_COMPACTION: Readonly<Record<string, { compactAt: number; cacheGone: number }>> = {
-  // OpenAI keeps a prefix at least 30 minutes; 6.1 sol is slow, so leave margin.
-  "openai/gpt-6.1-sol": { compactAt: 25 * MINUTE, cacheGone: 30 * MINUTE },
+const DEFAULT_POLICY: IdlePolicy = {
+  compactAt: 25 * MINUTE,
+  cacheGone: 30 * MINUTE,
+  minInputTokens: 200_000,
+};
+
+/** Overrides of `DEFAULT_POLICY`, keyed `provider/modelId`. */
+const IDLE_COMPACTION: Readonly<Record<string, Partial<IdlePolicy>>> = {
+  // Durable's background compaction starts near 223k of its 272k window, which leaves 200k too narrow a band.
+  "openai/gpt-6.1-sol": { minInputTokens: 150_000 },
   // DeepSeek's V4.1 Flash paper: global KV stays in the persistent cache at least 72 hours.
   "deepseek/deepseek-flash": { compactAt: 70 * HOUR, cacheGone: 72 * HOUR },
 };
-
-/** Input tokens of the last request (uncached, cache read and cache write) below which compaction is not worth it. */
-const MIN_INPUT_TOKENS = 200_000;
 
 const CHECKPOINT_PROMPT =
   "[Palace] You have been idle for a while. Write a checkpoint summary of this conversation that you can continue " +
@@ -86,10 +98,10 @@ function decide(observed: Observation, now: number): Plan {
   // Asked once already: its input was withdrawn or ended without an answer. Asking again would dedup to nothing.
   if (observed.asked) return { kind: "off" };
   const { provider, model, usage, timestamp } = last.message;
-  const policy = IDLE_COMPACTION[`${provider}/${model}`];
-  if (policy === undefined || next?.provider !== provider || next.modelId !== model)
+  if (next?.provider !== provider || next.modelId !== model) return { kind: "off" };
+  const policy = { ...DEFAULT_POLICY, ...IDLE_COMPACTION[`${provider}/${model}`] };
+  if (usage.input + usage.cacheRead + usage.cacheWrite < policy.minInputTokens)
     return { kind: "off" };
-  if (usage.input + usage.cacheRead + usage.cacheWrite < MIN_INPUT_TOKENS) return { kind: "off" };
   // Durable would summarize uncached alongside the checkpoint request, paying the reread this is meant to save.
   if (
     observed.summarizesAbove !== undefined &&
