@@ -5,7 +5,6 @@ export {
   type AgentRuntimeOptions,
   type EventWatch,
   type SubmittedInput,
-  type WhenBusy,
   type WithdrawResult,
 } from "./runtime.ts";
 export type { AgentSettings } from "./settings.ts";
@@ -17,13 +16,6 @@ export {
   type AgentState,
   type AgentUsage,
 } from "./agent-state.ts";
-export {
-  CHAT_READ_UNREAD,
-  type ChatPort,
-  type ChatTaskChange,
-  type ChatTimeline,
-} from "./chat-tools.ts";
-export { renderWebhookContent } from "./webhook-content.ts";
 export type { Clock } from "@palace/clock";
 export type { AgentEvent, SnapshotEvent } from "@earendil-works/pi-durable";
 export type { ModelThinkingLevel } from "@earendil-works/pi-ai";

@@ -7,9 +7,7 @@
       "palace-source": "./src/index.ts",
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
-    },
-    "./package.json": "./package.json",
-    "./docs/*.md": "./docs/*.md"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -19,12 +17,12 @@
     "@earendil-works/chord": "1.1.0",
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-durable": "1.1.0",
+    "@palace/agent-plugin": "workspace:*",
     "@palace/clock": "workspace:*",
     "@palace/node-protocol": "workspace:*",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@palace/chat": "workspace:*",
     "@palace/testkit": "workspace:*"
   }
 }

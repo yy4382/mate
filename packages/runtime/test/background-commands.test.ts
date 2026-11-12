@@ -1,6 +1,6 @@
 import type { ScriptedRequest } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
-import { testAgent, text } from "./support.ts";
+import { testAgent, text, said } from "./support.ts";
 
 const bash = (
   command: string,
@@ -46,7 +46,7 @@ describe("background commands", () => {
       .step("answers", (request) => request.text("started the build and looked around"));
     const { runtime } = await agent.open();
 
-    const input = await runtime.submit("build it", { requestId: "m1" });
+    const input = await runtime.submit(said.input("m1", "build it"));
     const build = await agent.workspace.nextCall();
     const ls = await agent.workspace.nextCall();
     expect(ls.request.arguments["command"], "a second command ran beside the first").toBe("ls");
@@ -83,7 +83,7 @@ describe("background commands", () => {
       });
     const { runtime } = await agent.open();
 
-    await (await runtime.submit("build it", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "build it"))).settled();
     const build = await agent.workspace.nextCall();
     build.resolve(text("built 3 targets"));
     await finished.promise;
@@ -114,7 +114,7 @@ describe("background commands", () => {
         first.database().freeze();
         void request.hang();
       });
-    await (await first.runtime.submit("build it", { requestId: "m1" })).settled();
+    await (await first.runtime.submit(said.input("m1", "build it"))).settled();
     (await agent.workspace.nextCall()).resolve(text("built"));
     await agent.provider.received(3);
     // A dead process drops its open requests.
@@ -147,7 +147,7 @@ describe("background commands", () => {
         request.text("deploying");
       });
     const first = await agent.open();
-    await (await first.runtime.submit("deploy it", { requestId: "m1" })).settled();
+    await (await first.runtime.submit(said.input("m1", "deploy it"))).settled();
     const deploy = await agent.workspace.nextCall();
 
     first.database().freeze();
@@ -192,7 +192,7 @@ describe("background commands", () => {
         request.text("serving");
       });
     const first = await agent.open();
-    await (await first.runtime.submit("serve it", { requestId: "m1" })).settled();
+    await (await first.runtime.submit(said.input("m1", "serve it"))).settled();
     const serve = await agent.workspace.nextCall();
     expect(serve.request.node).toBe("laptop");
 
@@ -243,7 +243,7 @@ describe("background commands", () => {
       });
     const { runtime } = await agent.open();
 
-    await (await runtime.submit("start and stop a server", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "start and stop a server"))).settled();
     expect(serve?.signal.aborted, "the node call was stopped").toBe(true);
     serve?.resolve(text("late output"));
     await runtime.idle();
@@ -283,7 +283,7 @@ describe("background commands", () => {
       });
     const { runtime } = await agent.open();
 
-    await (await runtime.submit("build it", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "build it"))).settled();
     const calls = [await agent.workspace.nextCall(), await agent.workspace.nextCall()];
     const build = calls.find(({ request }) => request.arguments["command"] === "make");
     const serve = calls.find(({ request }) => request.arguments["command"] === "serve");
@@ -344,7 +344,7 @@ describe("background commands", () => {
       });
     const { runtime } = await agent.open();
 
-    await runtime.submit("get it built", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "get it built"));
     const build = await agent.workspace.nextCall();
     await primaryRead.promise;
     expect(build.signal.aborted, "the assistant's command still runs").toBe(false);
@@ -407,7 +407,7 @@ describe("background commands", () => {
       });
     const { runtime } = await agent.open();
 
-    await runtime.submit("get it built", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "get it built"));
     const build = await agent.workspace.nextCall();
     await agent.provider.received(5);
     build.resolve(text("built 3 targets"));
@@ -449,7 +449,7 @@ describe("background commands", () => {
         first.database().freeze();
         void request.hang();
       });
-    await first.runtime.submit("get it built", { requestId: "m1" });
+    await first.runtime.submit(said.input("m1", "get it built"));
     const build = await agent.workspace.nextCall();
     await primaryWaits.promise;
     await first.runtime.idle();
@@ -490,7 +490,7 @@ describe("bash timeouts", () => {
       .step("answers", (request) => request.text("ran them"));
     const { runtime } = await agent.open();
 
-    const input = await runtime.submit("run them", { requestId: "m1" });
+    const input = await runtime.submit(said.input("m1", "run them"));
     (await agent.workspace.nextCall()).resolve(text("built"));
     (await agent.workspace.nextCall()).resolve(text("built"));
     await agent.workspace.nextCall();
@@ -523,7 +523,7 @@ describe("bash timeouts", () => {
       });
     const { runtime } = await agent.open();
 
-    await (await runtime.submit("run them", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "run them"))).settled();
 
     expect(agent.workspace.calls, "the node received nothing").toEqual([]);
     agent.provider.assertComplete();

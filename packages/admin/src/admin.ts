@@ -13,7 +13,6 @@ import {
 import {
   AgentStoreMissing,
   catalogModels,
-  renderWebhookContent,
   type AgentEvent,
   type AgentRuntime,
   type AgentSettings,
@@ -24,6 +23,7 @@ import { WorkspacePathSchema, type WorkspaceListing } from "@palace/node-protoco
 import { z } from "zod";
 import { AdminError, parseInput } from "./admin-error.ts";
 import { AdminStore } from "./store.ts";
+import { webhookContent, webhookPlugin } from "./webhook-plugin.ts";
 import { gatewayWorkspaces } from "./workspaces.ts";
 
 /** The providers Palace offers. Their models come from pi-ai's catalog. */
@@ -131,6 +131,7 @@ export async function openAdmin(options: AdminOptions): Promise<Admin> {
       chat: options.chat,
       workspaces: gatewayWorkspaces(options.gateway, store),
       credentials: (provider) => store.credentials(provider),
+      plugins: [webhookPlugin],
       ...(options.clock === undefined ? {} : { clock: options.clock }),
       ...(options.report === undefined ? {} : { report: options.report }),
     });
@@ -372,21 +373,23 @@ export class Admin {
     const matches = secretIs(secret, webhook?.secretHash ?? NO_WEBHOOK_HASH);
     if (webhook === undefined || !matches) throw invalidWebhook();
     const { text, key } = parseInput(DeliveryInput, input);
-    const requestId = `webhook:${webhook.id}:${key ?? randomUUID()}`;
     const at = new Date(this.#clock.now())
       .toISOString()
       .replace("T", " ")
       .replace(/\.\d+Z$/, " UTC");
-    const content = renderWebhookContent({ name: webhook.name, id: webhook.id, at, text });
+    const delivery = webhookContent.input(`${webhook.id}:${key ?? randomUUID()}`, {
+      name: webhook.name,
+      id: webhook.id,
+      at,
+      text,
+    });
     try {
-      await this.#whileOpen(webhook.agentId, (runtime) =>
-        runtime.submit(content, { requestId, whenBusy: "steer" }),
-      );
+      await this.#whileOpen(webhook.agentId, (runtime) => runtime.submit(delivery));
     } catch (error) {
       if (error instanceof AdminError && error.reason === "unknown-agent") throw invalidWebhook();
       throw error;
     }
-    return { requestId };
+    return { requestId: delivery.requestId };
   }
 
   // ── Providers and models ────────────────────────────────────────────────────

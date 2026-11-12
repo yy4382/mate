@@ -27,7 +27,8 @@
 
 入站 webhook（经 `Admin` 接口，HTTP 在 [apps/control-plane/TESTS.md](../../apps/control-plane/TESTS.md)）：
 
-- 投递唤醒打开的 Agent：观察的事件里看到包在 `external_webhook_content` 标签里、带 webhook 名字、ID、时间的输入和正文，模型的请求里也是这一段，系统提示有说明标签含义的那一段（runtime 不接聊天 app 时也有；这段的原文只在 runtime 的测试里断言一次）；同一个 `Idempotency-Key` 只生效一次，重试不改任何东西；没有 key 时每次都是新的输入。
+- 投递唤醒打开的 Agent：观察的事件里看到包在 `external_webhook_content` 标签里、带 webhook 名字、ID、时间的输入和正文，模型的请求里也是这一段，系统提示有说明标签含义的那一段（这段的原文只在这里断言一次）；同一个 `Idempotency-Key` 只生效一次，重试不改任何东西；没有 key 时每次都是新的输入。
+- 按需文档：Agent 每次请求都有 `palace_docs`，索引里有 `webhooks` 主题，读到的是 `packages/admin/docs/webhooks.md` 的原文。
 - 未知 webhook 和错误密钥以相同的 `invalid-webhook`（相同消息）拒绝；暂停的 Agent 以 `agent-closed` 拒绝，恢复后也没有排队的输入：恢复后的下一次运行，模型的请求里没有被拒绝的那条内容。
 - 轮换后旧密钥立即失效、新密钥可用；删除 webhook 后不再投递，重复删除或轮换为 `unknown-webhook`；删除 Agent 同时删掉它的 webhook；列出不含密钥；重启后 webhook 仍在。
 - 空正文、超过 32 KiB（按字节）的正文、不合法的 key 和不合法的名字以 `invalid-input` 拒绝；名字和正文里的 `<`、`>`、`&`、引号和换行关不掉标签、加不进属性，也伪造不出另一个标签（只断言模型读到的是一个标签、三个属性，不断言具体转义写法）。

@@ -1,18 +1,17 @@
-import { CHAT_READ_UNREAD, createAgentStore, openAgentRuntime } from "@palace/runtime";
-import { FaultyDatabase } from "@palace/testkit";
-import { join } from "node:path";
+import type { PluginInput } from "@palace/agent-plugin";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { connectInbox, type NoticeTarget } from "../src/index.ts";
 import {
+  agentAccount,
   environment,
-  FakeWorkspace,
   notices,
-  settings,
+  realRuntime,
+  said,
   text,
   type Environment,
 } from "./support.ts";
 
-type Submitted = { content: string; requestId: string; whenBusy?: string; replaces?: string };
+type Submitted = { content: string; requestId: string; whenBusy: string; replacesQueued: boolean };
 
 /** Stands in for the runtime: keeps the cursor in memory and records every submission. */
 class RecordingRuntime implements NoticeTarget {
@@ -34,30 +33,17 @@ class RecordingRuntime implements NoticeTarget {
     this.position = Math.max(this.position, value);
   }
 
-  async submit(
-    content: string,
-    options: { requestId: string; whenBusy?: "steer" | "followUp"; replaces?: string },
-  ) {
+  async submit(input: PluginInput) {
     await this.gate;
-    this.submitted.push({ content, ...options });
+    const { content, requestId, kind } = input;
+    this.submitted.push({
+      content,
+      requestId,
+      whenBusy: kind.whenBusy,
+      replacesQueued: kind.replacesQueued,
+    });
     return { settled: async () => "done" as const };
   }
-}
-
-/** An Agent account in #general, as the manager would have made it. */
-function agentAccount(env: Environment) {
-  const account = env.chat.ensureAccount({
-    externalId: "agent",
-    displayName: "Richard",
-    handle: "richard",
-    kind: "agent",
-  });
-  env.chat.invite(env.owner, {
-    requestId: "invite",
-    conversationId: env.general,
-    invitee: account,
-  });
-  return account;
 }
 
 async function connect(env: Environment, account: number, runtime: NoticeTarget) {
@@ -71,31 +57,6 @@ async function connect(env: Environment, account: number, runtime: NoticeTarget)
   });
   onTestFinished(() => connector.stop());
   return { connector, errors };
-}
-
-/** A real runtime on its own store, outside any manager, with a store the test can freeze. */
-async function realRuntime(env: Environment) {
-  const file = join(env.data, "agent.sqlite");
-  await createAgentStore(file, { nodeId: "node-a", settings });
-  const workspace = new FakeWorkspace();
-  return {
-    workspace,
-    async open() {
-      let database: FaultyDatabase | undefined;
-      const runtime = await openAgentRuntime({
-        file,
-        credentials: () => ({ apiKey: "test-key", baseUrl: env.provider.baseUrl }),
-        workspace,
-        clock: env.clock,
-        wrapDatabase: (inner) => (database = new FaultyDatabase(inner)),
-      });
-      onTestFinished(() => (database?.frozen ? undefined : runtime.close()));
-      return {
-        runtime,
-        freeze: () => database?.freeze(),
-      };
-    },
-  };
 }
 
 const recall = { name: "read", arguments: { path: "MEMORY.md" } };
@@ -112,12 +73,12 @@ describe("connector", () => {
 
     const [event] = env.chat.inboxEvents(account);
     expect(
-      runtime.submitted.map(({ requestId, whenBusy, replaces }) => ({
+      runtime.submitted.map(({ requestId, whenBusy, replacesQueued }) => ({
         requestId,
         whenBusy,
-        replaces,
+        replacesQueued,
       })),
-    ).toEqual([{ requestId: `notice:${event?.eventId}`, whenBusy: "steer", replaces: "notice:" }]);
+    ).toEqual([{ requestId: `notice:${event?.eventId}`, whenBusy: "steer", replacesQueued: true }]);
     expect(runtime.position, "the position moves to the event").toBe(event?.eventId);
   });
 
@@ -141,7 +102,7 @@ describe("connector", () => {
         `#general {"conversation":${env.general}} 至少 1 条 · 最新发送者 @owner · @了你`,
         `#general/讨论串 {"thread":${root.messageId}} 至少 2 条 · 最新发送者 @owner · @了你`,
         `私信 @owner {"conversation":${dm}} 至少 1 条 · 最新发送者 @owner`,
-        `每行花括号里就是 ${CHAT_READ_UNREAD} 要的 timeline。`,
+        "每行花括号里就是 chat_read_unread 要的 timeline。",
       ].join("\n"),
     );
   });
@@ -251,7 +212,7 @@ describe("connector with a real runtime", () => {
   it("replaces a notice the model has not been handed yet, so the model sees only the newest", async () => {
     const env = await environment();
     const account = agentAccount(env);
-    const agent = await realRuntime(env);
+    const agent = await realRuntime(env, account);
     const { runtime } = await agent.open();
     env.provider
       .step("busy", (request) => void request.call([recall]))
@@ -261,7 +222,7 @@ describe("connector with a real runtime", () => {
         expect(seen[0], "the newest").toMatch(/至少有 2 条未读/);
         request.text("noted");
       });
-    await runtime.submit("recall", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "recall"));
     const call = await agent.workspace.nextCall();
     const { connector } = await connect(env, account, runtime);
 
@@ -278,7 +239,7 @@ describe("connector with a real runtime", () => {
   it("submits the new notice anyway when the old one was handed to the model meanwhile, so the model sees both", async () => {
     const env = await environment();
     const account = agentAccount(env);
-    const agent = await realRuntime(env);
+    const agent = await realRuntime(env, account);
     const { runtime } = await agent.open();
     env.provider
       .step("busy", (request) => void request.call([recall]))
@@ -292,7 +253,7 @@ describe("connector with a real runtime", () => {
         expect(seen[1]).toMatch(/至少有 2 条未读/);
         request.text("noted");
       });
-    await runtime.submit("recall", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "recall"));
     const first = await agent.workspace.nextCall();
     const { connector } = await connect(env, account, runtime);
     env.post("One.");
@@ -311,7 +272,7 @@ describe("connector with a real runtime", () => {
   it("submits the same notice again after a crash before its position was stored, and the model sees it once", async () => {
     const env = await environment();
     const account = agentAccount(env);
-    const agent = await realRuntime(env);
+    const agent = await realRuntime(env, account);
     const first = await agent.open();
     env.provider
       .step("notice", (request) => {
@@ -327,7 +288,7 @@ describe("connector with a real runtime", () => {
     const dies = Promise.withResolvers<void>();
     const dying: NoticeTarget = {
       cursor: (name) => first.runtime.cursor(name),
-      submit: (content, options) => first.runtime.submit(content, options),
+      submit: (input) => first.runtime.submit(input),
       advanceCursor: async () => {
         await agent.workspace.nextCall();
         first.freeze();

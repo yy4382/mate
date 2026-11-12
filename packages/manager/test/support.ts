@@ -1,9 +1,22 @@
-import { ChatApp, type TimelineRef } from "@palace/chat";
-import type { AgentSettings, WorkspacePort } from "@palace/runtime";
-import { FakeClock, FakeWorkspace, ScriptedProvider, temporaryDirectory } from "@palace/testkit";
+import { defineInput, definePlugin } from "@palace/agent-plugin";
+import { ChatApp, type AccountChat, type TimelineRef } from "@palace/chat";
+import {
+  createAgentStore,
+  openAgentRuntime,
+  type AgentSettings,
+  type WorkspacePort,
+} from "@palace/runtime";
+import {
+  FakeClock,
+  FakeWorkspace,
+  FaultyDatabase,
+  ScriptedProvider,
+  temporaryDirectory,
+} from "@palace/testkit";
 import { join } from "node:path";
 import { onTestFinished } from "vitest";
 import {
+  chatPlugin,
   openAgentManager,
   type AgentManager,
   type AgentSpec,
@@ -175,4 +188,58 @@ export function notices(texts: readonly string[]): string[] {
 /** Let every callback already due run: timers, I/O and the promises they settle. */
 export function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 50));
+}
+
+/** The input a test sends an Agent whose runtime it opens itself, outside any manager. */
+export const said = defineInput<string>({
+  name: "user",
+  explain: "Inputs from the test user.",
+  whenBusy: "followUp",
+  render: (text) => text,
+});
+const testPlugin = definePlugin({ name: "test", scope: "primary", inputs: [said] });
+
+/** An Agent account in #general, as the manager would have made it. */
+export function agentAccount(env: Environment) {
+  const account = env.chat.ensureAccount({
+    externalId: "agent",
+    displayName: "Richard",
+    handle: "richard",
+    kind: "agent",
+  });
+  env.chat.invite(env.owner, {
+    requestId: "invite",
+    conversationId: env.general,
+    invitee: account,
+  });
+  return account;
+}
+
+/**
+ * A real runtime on its own store, outside any manager, with the chat plugin for `account` and a store the test can
+ * freeze. `chat` replaces the account's chat operations, so a test can watch them or kill the process in them.
+ */
+export async function realRuntime(env: Environment, account: number) {
+  const file = join(env.data, "agent.sqlite");
+  await createAgentStore(file, { nodeId, settings });
+  const workspace = new FakeWorkspace();
+  return {
+    workspace,
+    async open(options: { chat?: AccountChat } = {}) {
+      let database: FaultyDatabase | undefined;
+      const runtime = await openAgentRuntime({
+        file,
+        credentials: () => ({ apiKey: "test-key", baseUrl: env.provider.baseUrl }),
+        workspace,
+        clock: env.clock,
+        plugins: [testPlugin, chatPlugin(options.chat ?? env.chat.forAccount(account))],
+        wrapDatabase: (inner) => (database = new FaultyDatabase(inner)),
+      });
+      onTestFinished(() => (database?.frozen ? undefined : runtime.close()));
+      return {
+        runtime,
+        freeze: () => database?.freeze(),
+      };
+    },
+  };
 }

@@ -1,7 +1,6 @@
 import type { ScriptedRequest } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
-import { testChat } from "./test-chat.ts";
-import { testAgent } from "./support.ts";
+import { testAgent, said } from "./support.ts";
 
 const spawn = (name: string, message: string) => ({
   name: "assistant",
@@ -49,7 +48,7 @@ describe("work assistants", () => {
     });
     const { runtime } = await agent.open();
 
-    await runtime.submit("count the files for me", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "count the files for me"));
     await finished.promise;
     await runtime.idle();
 
@@ -58,9 +57,8 @@ describe("work assistants", () => {
     agent.provider.assertComplete();
   });
 
-  it("gives an assistant the workspace and history tools but not the assistant, reminder, or chat tools", async () => {
+  it("gives an assistant the workspace and history tools but not the assistant or reminder tools", async () => {
     const agent = await testAgent();
-    const { port } = testChat();
     const finished = Promise.withResolvers<void>();
     let primaryTools: string[] = [];
     let assistantTools: string[] = [];
@@ -78,9 +76,9 @@ describe("work assistants", () => {
       assistantTools = request.toolNames();
       request.text("done");
     });
-    const { runtime } = await agent.open({ chat: port });
+    const { runtime } = await agent.open();
 
-    await runtime.submit("delegate it", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "delegate it"));
     await finished.promise;
     await runtime.idle();
 
@@ -96,11 +94,6 @@ describe("work assistants", () => {
       );
     expect(assistantTools, "the assistant cannot delegate").not.toContain("assistant");
     expect(assistantTools, "the assistant cannot set reminders").not.toContain("reminder");
-    expect(primaryTools, "the primary conversation can chat").toContain("chat_send");
-    expect(
-      assistantTools.filter((name) => name.startsWith("chat_")),
-      "the assistant has no chat tools",
-    ).toEqual([]);
     agent.provider.assertComplete();
   });
 
@@ -117,7 +110,7 @@ describe("work assistants", () => {
         void request.hang();
       });
     helper.step("assistant is working as the process dies", (request) => void request.hang());
-    await first.runtime.submit("delegate it", { requestId: "m1" });
+    await first.runtime.submit(said.input("m1", "delegate it"));
     await agent.provider.received(3);
     // A dead process drops its open requests.
     await first.runtime.close().catch(() => undefined);
@@ -155,7 +148,7 @@ describe("work assistants", () => {
     agent.provider
       .lane("once", openedWith("work it out"))
       .step("assistant answers", (request) => request.text("done"));
-    await first.runtime.submit("delegate it", { requestId: "m1" });
+    await first.runtime.submit(said.input("m1", "delegate it"));
     await agent.provider.received(4);
     // A dead process drops its open requests.
     await first.runtime.close().catch(() => undefined);
@@ -185,7 +178,7 @@ describe("work assistants", () => {
         void request.hang();
       });
     helper.step("assistant is working as the process dies", (request) => void request.hang());
-    await first.runtime.submit("count the files for me", { requestId: "m1" });
+    await first.runtime.submit(said.input("m1", "count the files for me"));
     await agent.provider.received(3);
     // A dead process drops its open requests.
     await first.runtime.close().catch(() => undefined);
@@ -260,7 +253,7 @@ describe("work assistants", () => {
     });
     const { runtime } = await agent.open();
 
-    await runtime.submit("start both", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "start both"));
     await slowCancelled.promise;
     await finished.promise;
     await runtime.idle();
@@ -277,7 +270,7 @@ describe("work assistants", () => {
       .step("primary is thinking at close", (request) => void cancelled.push(request.hang()));
     helper.step("assistant is working at close", (request) => void cancelled.push(request.hang()));
     const first = await agent.open();
-    await first.runtime.submit("count the files for me", { requestId: "m1" });
+    await first.runtime.submit(said.input("m1", "count the files for me"));
     await agent.provider.received(3);
 
     await first.runtime.close();

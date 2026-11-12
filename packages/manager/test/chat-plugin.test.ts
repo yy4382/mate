@@ -1,7 +1,6 @@
+import type { AccountChat } from "@palace/chat";
 import { describe, expect, it } from "vitest";
-import type { ChatPort } from "../src/index.ts";
-import { testChat } from "./test-chat.ts";
-import { testAgent } from "./support.ts";
+import { agentAccount, environment, realRuntime, said } from "./support.ts";
 
 const send = (conversation: number, body: string) => ({
   name: "chat_send",
@@ -12,10 +11,38 @@ const readUnread = (conversation: number) => ({
   arguments: { timeline: { conversation } },
 });
 
+/** An Agent in #general whose runtime is opened here, outside any manager, so a test can kill its process. */
+async function chatAgent() {
+  const env = await environment();
+  const account = agentAccount(env);
+  return {
+    env,
+    agent: Object.assign(await realRuntime(env, account), { provider: env.provider }),
+    port: env.chat.forAccount(account),
+    general: env.general,
+    post: (body: string) => env.post(body),
+    messages: () => env.messages().map(({ body }) => body),
+  };
+}
+
 describe("chat tools", () => {
+  it("post the model's final plain text to no conversation and notify nobody", async () => {
+    const { env, agent } = await chatAgent();
+    agent.provider.step("answer", (request) => request.text("hi owner"));
+    const { runtime } = await agent.open();
+
+    expect(await (await runtime.submit(said.input("m1", "hello there"))).settled()).toBe("done");
+
+    expect(
+      env.chat.search(env.owner, "hi owner"),
+      "the final text is in no conversation the owner can read, which is every one",
+    ).toEqual([]);
+    expect(env.chat.unreadSummary(env.owner).total, "and notified nobody").toBe(0);
+    agent.provider.assertComplete();
+  });
+
   it("tells the primary conversation that plain output goes nowhere and speaking takes chat_send", async () => {
-    const agent = await testAgent();
-    const { port } = testChat();
+    const { agent, port } = await chatAgent();
     agent.provider.step("answer", (request) => {
       const system = request.systemTexts().join("\n");
       expect(system, "plain output is not delivered").toMatch(/plain text output goes nowhere/i);
@@ -25,14 +52,13 @@ describe("chat tools", () => {
     });
     const { runtime } = await agent.open({ chat: port });
 
-    await (await runtime.submit("hello", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "hello"))).settled();
 
     agent.provider.assertComplete();
   });
 
   it("holds a send when someone wrote after the Agent's last read, shows the new entries, and lets the resend through", async () => {
-    const agent = await testAgent();
-    const { port, general, post, messages } = testChat();
+    const { agent, port, general, post, messages } = await chatAgent();
     post("Please deploy.");
     let held: string[] = [];
     let resent: string[] = [];
@@ -58,7 +84,7 @@ describe("chat tools", () => {
       });
     const { runtime } = await agent.open({ chat: port });
 
-    await (await runtime.submit("deploy request", { requestId: "m1" })).settled();
+    await (await runtime.submit(said.input("m1", "deploy request"))).settled();
 
     expect(messages(), "only the resend reached the channel").toEqual([
       "Please deploy.",
@@ -69,22 +95,21 @@ describe("chat tools", () => {
   });
 
   it("reruns a send interrupted by a crash, and the channel holds the message once", async () => {
-    const agent = await testAgent();
-    const { port, general, messages } = testChat();
+    const { agent, port, general, messages } = await chatAgent();
     let first: Awaited<ReturnType<typeof agent.open>> | undefined;
     const sent = Promise.withResolvers<void>();
     // The process dies after the chat app took the message and before the tool result was stored.
-    const dying: ChatPort = {
+    const dying: AccountChat = {
       ...port,
       send: (timeline, request) => {
         const result = port.send(timeline, request);
-        first?.database().freeze();
+        first?.freeze();
         sent.resolve();
         return result;
       },
     };
     let rerun = 0;
-    const counting: ChatPort = {
+    const counting: AccountChat = {
       ...port,
       send: (timeline, request) => {
         rerun += 1;
@@ -93,7 +118,7 @@ describe("chat tools", () => {
     };
     agent.provider.step("send", (request) => void request.call([send(general, "Deployed.")]));
     first = await agent.open({ chat: dying });
-    await first.runtime.submit("tell them", { requestId: "m1" });
+    await first.runtime.submit(said.input("m1", "tell them"));
     await sent.promise;
 
     agent.provider.step("after restart", (request) => {
@@ -111,23 +136,22 @@ describe("chat tools", () => {
   });
 
   it("gives the model the very page it first read when a read is interrupted by a crash", async () => {
-    const agent = await testAgent();
-    const { port, general, post } = testChat();
+    const { agent, port, general, post } = await chatAgent();
     post("First news.");
     let first: Awaited<ReturnType<typeof agent.open>> | undefined;
     const read = Promise.withResolvers<void>();
-    const dying: ChatPort = {
+    const dying: AccountChat = {
       ...port,
       readUnread: (timeline, request) => {
         const result = port.readUnread(timeline, request);
-        first?.database().freeze();
+        first?.freeze();
         read.resolve();
         return result;
       },
     };
     agent.provider.step("read", (request) => void request.call([readUnread(general)]));
     first = await agent.open({ chat: dying });
-    await first.runtime.submit("catch up", { requestId: "m1" });
+    await first.runtime.submit(said.input("m1", "catch up"));
     await read.promise;
     post("Later news.");
 
@@ -144,8 +168,7 @@ describe("chat tools", () => {
   });
 
   it("executes two independent tool calls even when the provider gave them the same call ID", async () => {
-    const agent = await testAgent();
-    const { port, general, messages } = testChat();
+    const { agent, port, general, messages } = await chatAgent();
     // Steps with the same name answer with the same provider call ID.
     agent.provider
       .step("send", (request) => void request.call([send(general, "One.")]))
@@ -154,16 +177,15 @@ describe("chat tools", () => {
       .step("ack", (request) => request.text("sent two"));
     const { runtime } = await agent.open({ chat: port });
 
-    await (await runtime.submit("say one", { requestId: "m1" })).settled();
-    await (await runtime.submit("say two", { requestId: "m2" })).settled();
+    await (await runtime.submit(said.input("m1", "say one"))).settled();
+    await (await runtime.submit(said.input("m2", "say two"))).settled();
 
     expect(messages(), "each call reached the chat app").toEqual(["One.", "Two."]);
     agent.provider.assertComplete();
   });
 
   it("returns a chat refusal to the model as an error result with its reason", async () => {
-    const agent = await testAgent();
-    const { port } = testChat();
+    const { agent, port } = await chatAgent();
     let calls: string[] = [];
     agent.provider
       .step("send to nowhere", (request) => {
@@ -175,14 +197,13 @@ describe("chat tools", () => {
       });
     const { runtime } = await agent.open({ chat: port });
 
-    expect(await (await runtime.submit("post", { requestId: "m1" })).settled()).toBe("done");
+    expect(await (await runtime.submit(said.input("m1", "post"))).settled()).toBe("done");
 
     agent.provider.assertComplete();
   });
 
   it("refuses a chat tool an assistant calls anyway, and the chat app receives nothing", async () => {
-    const agent = await testAgent();
-    const { port, general, messages } = testChat();
+    const { agent, port, general, messages } = await chatAgent();
     const finished = Promise.withResolvers<void>();
     agent.provider
       .step(
@@ -209,7 +230,7 @@ describe("chat tools", () => {
       });
     const { runtime } = await agent.open({ chat: port });
 
-    await runtime.submit("have someone post", { requestId: "m1" });
+    await runtime.submit(said.input("m1", "have someone post"));
     await finished.promise;
     await runtime.idle();
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import type { Plugin } from "@palace/agent-plugin";
 import type { ChatApp } from "@palace/chat";
 import { systemClock, type Clock } from "@palace/clock";
 import {
@@ -16,6 +17,7 @@ import {
   type WorkspacePort,
 } from "@palace/runtime";
 import { AgentFiles } from "./agent-files.ts";
+import { chatPlugin } from "./chat-plugin.ts";
 import { connectInbox, type InboxConnector } from "./connector.ts";
 
 /**
@@ -35,6 +37,8 @@ export type AgentManagerOptions = {
   /** Each provider's credentials, read at every model request of every Agent. */
   readonly credentials: CredentialsLookup;
   readonly clock?: Clock;
+  /** Installed in every Agent's runtime, before the chat plugin the manager adds itself. */
+  readonly plugins?: readonly Plugin[];
   /** Told about an Agent that failed to open, a failed connector pass, or a runtime whose storage failed. */
   readonly report?: (error: unknown, agentId: string) => void;
 };
@@ -296,7 +300,7 @@ export class AgentManager {
       file,
       credentials,
       workspace: workspaces.port(nodeId, agentId),
-      chat: chat.forAccount(account),
+      plugins: [...(this.#options.plugins ?? []), chatPlugin(chat.forAccount(account))],
       clock: this.#clock,
       onFatal: (error) => {
         report(error);

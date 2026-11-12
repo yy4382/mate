@@ -9,6 +9,7 @@ export {
   type AgentSummary,
   type WorkspaceHost,
 } from "./manager.ts";
+export { chatPlugin } from "./chat-plugin.ts";
 export {
   connectInbox,
   type InboxConnector,

@@ -19,10 +19,9 @@
 |---|---|---|---|
 | **脚本化提供商** | 模型提供商 | 本地 HTTP 服务，按真实提供商协议（先做 OpenAI Responses）返回 SSE。脚本由命名步骤组成，每步收到真实请求体和请求带的 API key，可以回答文本（也可以是在输出上限处被截断的文本）、发起工具调用、只发一半、卡住不回、返回 4xx/5xx（和 OpenAI 一样，5xx 是会被重试的服务端错误，4xx 不是）。按会话 ID 区分不同 Agent 的请求；不带会话 ID 的请求（压缩的摘要请求）不属于任何会话，按请求体逐个认领。`assertComplete()` 检查：没有用完的步骤、没有多余的请求、没有未声明的取消，任何一项不满足都报错，并写明是哪个 Agent 的哪一步 | runtime、Manager、管理模块、系统场景 |
 | **可控时钟** | 系统时间 | 测试推进时间，触发定时器 | runtime（提醒）、聊天 app（推送退避）、网关（心跳） |
-| **故障存储适配器** | Durable 的 SQLite 适配器 | 包装真实的 SQLite 适配器，可以在第 N 次提交之前或之后让提交失败或挂起，用来模拟"写到一半崩溃" | runtime、连接器 |
+| **故障存储适配器** | Durable 的 SQLite 适配器 | 包装真实的 SQLite 适配器，可以在第 N 次提交之前或之后让提交失败或挂起，用来模拟"写到一半崩溃" | runtime、连接器、聊天插件 |
 | **假 node** | node 进程 | 实现 node 的 WebSocket 协议，测试控制工具调用：返回结果、流式输出、挂起、断开连接 | 网关、runtime、Manager |
 | **假网关** | 控制面的 node 网关 | 实现网关一侧的协议：配对、认证、发送工具调用、断开连接 | node |
-| **假聊天 app** | 聊天 app | 只在 runtime 的测试里使用，实现 `ChatApp` 接口里聊天工具用到的那部分，并记录收到的调用 | runtime（只测工具转发时） |
 | **网络代理** | node 与控制面之间的 TCP 连接 | 三种模式：转发、黑洞（吞掉数据但不关闭连接）、断开 | 网关与 node 的心跳和重连 |
 | **假服务管理器** | systemd、launchd、Task Scheduler 的外部命令 | 按测试设定的状态与服务定义回答，并记录操作；由公开 CLI 驱动 | node CLI |
 | **进程夹具** | 无 | 以真实子进程启动控制面或 node，能 SIGKILL 后在同一个数据目录上重启 | 系统场景 |
@@ -34,8 +33,9 @@
 | 模块 | 测试说明 |
 | --- | --- |
 | 聊天 app | [packages/chat/TESTS.md](../packages/chat/TESTS.md) |
+| Agent 插件契约 | 没有自己的测试，由 runtime 经 `openAgentRuntime` 和 `submit` 覆盖（[packages/agent-plugin](../packages/agent-plugin/ARCHITECTURE.md)） |
 | Agent runtime | [packages/runtime/TESTS.md](../packages/runtime/TESTS.md) |
-| 连接器与 Agent Manager | [packages/manager/TESTS.md](../packages/manager/TESTS.md) |
+| 聊天插件、连接器与 Agent Manager | [packages/manager/TESTS.md](../packages/manager/TESTS.md) |
 | Node 网关 | [packages/gateway/TESTS.md](../packages/gateway/TESTS.md) |
 | Node 与 `palace node` CLI | [apps/node/TESTS.md](../apps/node/TESTS.md) |
 | 管理模块 | [packages/admin/TESTS.md](../packages/admin/TESTS.md) |

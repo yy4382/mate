@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { BashArguments } from "@palace/node-protocol";
 import { deliverInput } from "./assistants.ts";
+import { builtinRequestId } from "./plugins.ts";
 import type { WorkspacePort, WorkspaceToolResult } from "./workspace-tools.ts";
 
 type CommandState =
@@ -151,7 +152,7 @@ function report(
       conversationId: runtime.conversationId,
       content,
       whenBusy: "steer",
-      requestId: `command:${id}`,
+      requestId: builtinRequestId("command", id),
     });
     return { status: "terminal", outcome: { status: "completed", result: null } };
   }, context);
