@@ -9,7 +9,7 @@ import { connectedNode, temporaryDirectory, windows, type NodeProcess } from "./
 const browse = (node: NodeProcess, agentId: string, path: string) =>
   node.gateway.browse(randomUUID(), agentId, path);
 
-describe("node workspace browsing (MODULE_TESTS 8.4)", () => {
+describe("node workspace browsing (TESTS 1.4)", () => {
   it("lists a directory's entries by name, with sizes of files, and reads a text file", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();

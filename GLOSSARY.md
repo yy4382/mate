@@ -297,10 +297,10 @@ Agent 把一次工具调用送到已授权的非主 node，在该 node 上自己
 避免：把它叫"机器人账号"或"聊天集成"。
 
 **node 名字**（node name）
-网关保存的、管理员可改且唯一的机器名字；UUID 仍用于身份和调用（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
+网关保存的、管理员可改且唯一的机器名字；UUID 仍用于身份和调用（[packages/gateway/ARCHITECTURE.md](packages/gateway/ARCHITECTURE.md)）。
 
 **系统信息**（NodeSystem）
-node 在握手时报告的宿主平台、架构、hostname、系统版本和程序版本，由网关保存最近一份（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
+node 在握手时报告的宿主平台、架构、hostname、系统版本和程序版本，由网关保存最近一份（[packages/gateway/ARCHITECTURE.md](packages/gateway/ARCHITECTURE.md)）。
 
 **链路**（link）
 `node run` 与网关之间的连接是否已经握手成功。node 在数据目录的 `link.json` 里记下 `{ pid, connected, since }`（握手成功或连接结束时原子替换；启动时先写 `connected: false`）。`palace node status` 的 `Link:` 行只在服务正在运行、且能确认文件属于它的执行进程时读它，否则是 `Link: none`。Linux 核对 systemd 的 MainPID，macOS 核对 launchctl 的 PID，Windows 核对任务实例与进程路径、创建时间，所以崩溃进程留下的文件不会被当成已连接。自动部署用 `Link: connected` 判断新 node 起好了。
@@ -327,19 +327,19 @@ Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
 
 **网关操作拒绝**（NodeGatewayError）
-`@palace/gateway` 对 node 操作的拒绝异常，带 `reason`，与线路上的 `gateway.error` 消息不同（[ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)）。
+`@palace/gateway` 对 node 操作的拒绝异常，带 `reason`，与线路上的 `gateway.error` 消息不同（[packages/gateway/ARCHITECTURE.md](packages/gateway/ARCHITECTURE.md)）。
 
 **工作区**（workspace）
 Agent 在某个 node 上的工作目录，路径为该 node 的 `<工作区根>/<agentId>`。每个已授权 node 上各有独立工作区，文件不跨 node 同步。主工作区在创建 Agent 时初始化目录与 MEMORY.md，执行时缺少目录就报错；访问工作区在授权或首次在线调用时准备，不初始化 MEMORY.md，已有文件保持原样。
 
 **启动快照**（startup snapshot）
-Linux/macOS node 每个进程捕获一次的账号 Bash/zsh 交互启动结果（选项、变量、函数、别名），存在数据目录，每条命令先 `source` 它。见 [ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)。
+Linux/macOS node 每个进程捕获一次的账号 Bash/zsh 交互启动结果（选项、变量、函数、别名），存在数据目录，每条命令先 `source` 它。见 [apps/node/ARCHITECTURE.md](apps/node/ARCHITECTURE.md)。
 
 **命令目录**（command directory）
 node 在内存里按 Agent 和对话记住的目录：该对话下一条命令从这里开始，前台命令结束时更新，后台命令不更新。初始为工作区，node 重启清空。文件工具不受它影响。
 
 **命令进程组**（command process group）
-node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Windows 活 shell 的进程树，追踪与停止的范围见 [ARCHITECTURE §4.5](docs/ARCHITECTURE.md#45-node-网关与-node)。
+node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Windows 活 shell 的进程树，追踪与停止的范围见 [apps/node/ARCHITECTURE.md](apps/node/ARCHITECTURE.md)。
 
 **身份拒绝**（gateway.refused）
 网关对 node 说"你是谁"不被接受：身份不认识（`unknown_identity`）、签名或公钥无效、配对令牌被拒。除了"不认识"而 node 手里有配对令牌的情况，node 收到后退出，不重试。

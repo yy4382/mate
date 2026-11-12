@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { FakeNode } from "@palace/testkit";
 import { deferred, eventually, never, startGateway, text, toolResult, within } from "./support.ts";
 
-describe("node gateway connections (MODULE_TESTS 7)", () => {
+describe("node gateway connections (TESTS)", () => {
   it("lets a paired node back in by its signature alone, without a pairing token", async () => {
     const under = await startGateway();
     const paired = await under.pairedNode();

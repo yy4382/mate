@@ -28,7 +28,7 @@ function refusal(open: () => unknown): ControlStoreIncompatible {
   throw new Error("expected the store to be refused");
 }
 
-describe("node gateway registry in control.sqlite (MODULE_TESTS 7)", () => {
+describe("node gateway registry in control.sqlite (TESTS)", () => {
   it("keeps its node registry in control.sqlite beside another module's tables, and both reopen at their own versions", async () => {
     const under = await startGateway();
     const paired = await under.pairedNode();

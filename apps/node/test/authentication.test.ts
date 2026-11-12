@@ -35,7 +35,7 @@ async function startNodeAgainstProxy(
   return stop;
 }
 
-describe("node authentication against the real gateway (MODULE_TESTS 7)", () => {
+describe("node authentication against the real gateway (packages/gateway/TESTS.md)", () => {
   it("uses its pairing token only after the gateway says it does not know the node, never after a network failure or timeout", async () => {
     const home = temporaryDirectory();
     // The gateway's clock never moves, so only the node's own timeouts end connections.

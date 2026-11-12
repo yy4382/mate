@@ -6,7 +6,7 @@ import { FakeClock, storeFixture, temporaryDirectory } from "@palace/testkit";
 import { ChatApp, ChatStoreIncompatible } from "../src/index.ts";
 import { FakePushService, openAppAt, rid } from "./support.ts";
 
-describe("the chat store opened by newer code (MODULE_TESTS 3.10)", () => {
+describe("the chat store opened by newer code (TESTS 10)", () => {
   it("delivers the Web Push notices already queued by the released store without writing new messages", async () => {
     const { dataDirectory, facts } = storeFixture("v0.1.0-alpha.2");
     const clock = new FakeClock(Date.UTC(2100, 0, 1));

@@ -21,7 +21,7 @@ const canChoosePids =
 /** Set by `pnpm test:linux`, whose container is meant to allow it: there a missing capability fails, not skips. */
 const required = process.env["PALACE_REQUIRE_PID_NAMESPACE"] === "1";
 
-describe("node process groups and PID reuse (MODULE_TESTS 8.1)", () => {
+describe("node process groups and PID reuse (TESTS 1.1)", () => {
   it.runIf(canChoosePids || required)(
     "never kills an unrelated process that was given the ID of a group the node recorded",
     async () => {

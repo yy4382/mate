@@ -38,7 +38,7 @@ function authenticateOfSize(bytes: number, pad: string): string {
   return message;
 }
 
-describe("node gateway limits (MODULE_TESTS 7)", () => {
+describe("node gateway limits (TESTS)", () => {
   it("refuses unauthenticated connections beyond the limit, and takes new ones once a slot frees up", async () => {
     const under = await startGateway({ maxUnauthenticated: 2 });
     const first = await rawConnection(under.url);

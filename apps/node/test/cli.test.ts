@@ -75,7 +75,7 @@ const agentData = (h: Host) => [
   ...snapshot(join(h.home, "palace")),
 ];
 
-describe("palace node CLI (MODULE_TESTS 9)", () => {
+describe("palace node CLI (TESTS 2)", () => {
   it("install puts the program, the palace command and the unit in place without starting anything, and start then enables and starts the service", () => {
     const h = host();
     const out = ok(h, "node", "install", writeBundle(h.inputs, { version: "1.0.0" }));

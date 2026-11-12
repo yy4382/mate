@@ -14,7 +14,7 @@ import {
   windows,
 } from "./support.ts";
 
-describe("node visits (MODULE_TESTS 8)", () => {
+describe("node visits (TESTS 1)", () => {
   it("prepares an Agent workspace and uses its actual directory and platform HOME for visits", async () => {
     const node = await connectedNode();
     const agentId = `visitor-${randomUUID()}`;

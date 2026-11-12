@@ -25,7 +25,7 @@ import {
   windows,
 } from "./support.ts";
 
-describe("node commands (MODULE_TESTS 8.1)", () => {
+describe("node commands (TESTS 1.1)", () => {
   it("uses the account shell with the workspace as initial directory and platform HOME", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();

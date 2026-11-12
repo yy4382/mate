@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { host, snapshot, writeBundle, type TarEntry } from "./cli-support.ts";
 
-describe("palace node install and update check the bundle (MODULE_TESTS 9)", () => {
+describe("palace node install and update check the bundle (TESTS 2)", () => {
   const file = (path: string): TarEntry => ({ path, type: "file", content: "x" });
   const regularFiles =
     process.platform === "win32"

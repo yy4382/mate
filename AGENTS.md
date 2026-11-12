@@ -1,7 +1,7 @@
 # Palace
 
 - CODE AS SOURCE OF TRUTH. If documentation or this memory file conflict with code behaviour, obey the code. If you find a disagreement between code and documentation, search along git history/ GitHub issues and PR for context, and let the user decide.
-- Read `docs/ARCHITECTURE.md` before any design or code change, and `docs/MODULE_TESTS.md` before writing tests, and `docs/DESIGN.md` before changing the web UI.
+- Read `docs/ARCHITECTURE.md` before any design or code change, plus the `ARCHITECTURE.md` of each package or app you touch. Read `docs/MODULE_TESTS.md` and the package's `TESTS.md` before writing tests, and `docs/DESIGN.md` before changing the web UI.
 - Name things with the terms in `GLOSSARY.md`; add a term there when you introduce a new concept.
 - Fix a recurring class of bug by changing the structure until it cannot occur, not by adding a guard for one case.
 - When a decision changes, update the docs in the same commit and delete the code it supersedes.

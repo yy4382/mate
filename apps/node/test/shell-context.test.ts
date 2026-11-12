@@ -17,7 +17,7 @@ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const shell = basename(userInfo().shell ?? "");
 const rc = shell === "bash" ? ".bashrc" : ".zshrc";
 
-describe.skipIf(windows)("node shell context (MODULE_TESTS 8.1)", () => {
+describe.skipIf(windows)("node shell context (TESTS 1.1)", () => {
   it("restores startup functions and their scalar, array, readonly, export, alias and option dependencies once per node", async () => {
     const node = await connectedNode({
       env: { REMOVED: "inherited", PRIVATE: "inherited", SHELL: "/not/the/account/shell" },

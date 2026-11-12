@@ -37,7 +37,7 @@ async function startedGateway(): Promise<FakeGateway> {
   return gateway;
 }
 
-describe("node link status (MODULE_TESTS 8.3, 9)", () => {
+describe("node link status (TESTS 1.3, 2)", () => {
   it("status reports the link connected after the handshake, and disconnected when the gateway goes away", async () => {
     const gateway = await startedGateway();
     const { h } = await runningNode(gateway.url);

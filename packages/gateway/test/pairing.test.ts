@@ -5,7 +5,7 @@ import { FakeNode } from "@palace/testkit";
 import { WebSocket } from "ws";
 import { newIdentity, startGateway, within } from "./support.ts";
 
-describe("node gateway pairing (MODULE_TESTS 7)", () => {
+describe("node gateway pairing (TESTS)", () => {
   it("accepts a pairing token once and refuses it the second time", async () => {
     const { gateway, url } = await startGateway();
     const { pairingToken } = gateway.createPairingToken();

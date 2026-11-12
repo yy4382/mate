@@ -12,7 +12,7 @@ const listing: NodeBrowseOutcome = {
   },
 };
 
-describe("node gateway workspace browsing (MODULE_TESTS 7)", () => {
+describe("node gateway workspace browsing (TESTS)", () => {
   it("asks the node for the Agent's path and returns its answer, a refusal as much as a listing", async () => {
     const under = await startGateway();
     const asked: GatewayBrowse[] = [];

@@ -27,7 +27,7 @@ function shortPath(path: string): string {
   return result.stdout.trim();
 }
 
-describe("node file tools (MODULE_TESTS 8.2)", () => {
+describe("node file tools (TESTS 1.2)", () => {
   it("writes, edits, and reads files the way Durable's local tools do", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();

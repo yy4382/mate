@@ -21,7 +21,7 @@ From the repository root, inspect committed and uncommitted changes since that c
 git diff 65bce182684310c49aa4c176e0891b438b6c122d -- packages/runtime/src/background-commands.ts packages/runtime/src/workspace-tools.ts packages/runtime/src/runtime.ts packages/runtime/src/lifetime.ts packages/runtime/src/storage.ts packages/runtime/package.json packages/manager/src/manager.ts pnpm-lock.yaml
 ```
 
-Read `docs/ARCHITECTURE.md` sections 4.2, 4.4, and 4.5. Trace the changed calls against this coverage record:
+Read `packages/runtime/ARCHITECTURE.md`, `packages/manager/ARCHITECTURE.md`, `packages/gateway/ARCHITECTURE.md`, and `apps/node/ARCHITECTURE.md`. Trace the changed calls against this coverage record:
 
 | Code | Model or assumption |
 | --- | --- |
@@ -76,7 +76,7 @@ Use a scratch checkout or preserve and restore the exact original file bytes. Ne
    pnpm exec vitest run packages/runtime/test/background-commands.test.ts
    ```
 
-   Inspect the failed assertions and workspace calls. A timeout alone is insufficient evidence of duplicate dispatch. Add only a temporary public-interface probe if necessary, following `docs/MODULE_TESTS.md`.
+   Inspect the failed assertions and workspace calls. A timeout alone is insufficient evidence of duplicate dispatch. Add only a temporary public-interface probe if necessary, following `docs/MODULE_TESTS.md` and the package's `TESTS.md`.
 5. Restore the product code and model. Rerun both commands. Report the negative control separately from findings in the unmodified code.
 
 If a counterexample cannot occur in the real code, correct the model's atomicity or assumptions and explain why. If it does occur, preserve the property and report the finding. Do not change product code as part of this verification task.

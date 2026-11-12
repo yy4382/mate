@@ -35,7 +35,7 @@ Palace 不创建系统用户，不切换身份，不安装系统软件，不改 
 4. 一个能用 Docker Engine 和 Docker Compose 的管理账号（root 或你自己的账号）。
 5. node 账号有可用的 systemd user manager。如果希望注销后、或开机后 node 也一直运行，需要你自己执行 `sudo loginctl enable-linger <账号>`，Palace 不替你做。
 6. 一个域名和 HTTPS 反向代理。浏览器推送（Web Push）和登录 cookie 都需要 HTTPS。
-7. 至少一个模型提供商的 API key。管理界面提供 OpenAI（Responses API）和 DeepSeek 两家（ARCHITECTURE 4.6）。
+7. 至少一个模型提供商的 API key。管理界面提供 OpenAI（Responses API）和 DeepSeek 两家（[packages/admin/ARCHITECTURE.md](../packages/admin/ARCHITECTURE.md)）。
 
 ## 3. 安装
 
@@ -52,7 +52,7 @@ Palace 不创建系统用户，不切换身份，不安装系统软件，不改 
 3. 把 `compose.yaml`、`compose.initialize.yaml` 和 `.env.example`（改名 `.env`）放在同一个目录，填好 `.env`（变量见下表）。`PALACE_UID`、`PALACE_GID` 用 `id -u palace-control`、`id -g palace-control` 查。这个目录和 `.env` 只给管理账号看（例如放在 root 的 `/srv/palace-control-plane`，权限 0700；容器的绑定挂载不受上级目录权限影响）。
 4. 写初始密码文件，至少 12 字节（末尾换行不算），属于控制面系统账号，权限 0600，路径写进 `.env` 的 `PALACE_INITIAL_PASSWORD`。第一个管理员的 handle 写进 `PALACE_INITIAL_HANDLE`，缺省 `admin`，可用字母、数字、`_`、`.`、`-`，不分大小写。
 
-   控制面只在库里还没有任何人类时读这两项，用它们建第一个管理员（显示名同 handle），密码只存 scrypt 哈希（ARCHITECTURE §4.7）。第一次启动时缺密码文件或 handle 不合法，控制面拒绝启动。之后由管理员在网页添加其他人，角色是管理员或普通人类，普通人类只能聊天。
+   控制面只在库里还没有任何人类时读这两项，用它们建第一个管理员（显示名同 handle），密码只存 scrypt 哈希（[apps/control-plane/ARCHITECTURE.md](../apps/control-plane/ARCHITECTURE.md)）。第一次启动时缺密码文件或 handle 不合法，控制面拒绝启动。之后由管理员在网页添加其他人，角色是管理员或普通人类，普通人类只能聊天。
 5. 第一次启动叠加两个文件：
 
    ```sh
@@ -61,7 +61,7 @@ Palace 不创建系统用户，不切换身份，不安装系统软件，不改 
 
    用初始 handle 和初始密码登录网页，确认能登录后，删掉初始密码文件，之后只用 `compose.yaml`：`docker compose up -d`。
 6. 让 HTTPS 反向代理把你的域名转发到控制面端口（宿主 `127.0.0.1:8787`），配置时注意三点：
-   - 保留浏览器请求原来的 `Host`。控制面拒绝 `Origin` 和 `Host` 不一致的写请求（ARCHITECTURE §4.7）。nginx 的 `proxy_pass` 缺省会改写 `Host`，登录会回 403 `cross-origin`，需要加 `proxy_set_header Host $host;`。Caddy 缺省保留 `Host`。
+   - 保留浏览器请求原来的 `Host`。控制面拒绝 `Origin` 和 `Host` 不一致的写请求（[apps/control-plane/ARCHITECTURE.md](../apps/control-plane/ARCHITECTURE.md)）。nginx 的 `proxy_pass` 缺省会改写 `Host`，登录会回 403 `cross-origin`，需要加 `proxy_set_header Host $host;`。Caddy 缺省保留 `Host`。
    - 只经 HTTPS 访问。登录 cookie 带 `Secure`，浏览器只在 HTTPS 或 `localhost` 上保存它，Web Push 也需要 HTTPS。
    - 不缓冲 `text/event-stream` 响应。nginx 认控制面发的 `X-Accel-Buffering: no`，其他代理要自己关闭缓冲。控制面每 25 秒发一次心跳，读超时要比这长。
 
@@ -77,7 +77,7 @@ Palace 不创建系统用户，不切换身份，不安装系统软件，不改 
 | `PALACE_LISTEN` | 宿主上监听的地址和端口 | `127.0.0.1:8787` |
 | `PALACE_VAPID_SUBJECT` | 见下表 | `mailto:owner@palace.invalid` |
 
-控制面进程读这些环境变量（ARCHITECTURE §4.7）。Compose 已经替你设好，只有 `PALACE_VAPID_SUBJECT` 和（第一次启动时的）`PALACE_INITIAL_HANDLE` 通过 `.env` 改：
+控制面进程读这些环境变量（[apps/control-plane/ARCHITECTURE.md](../apps/control-plane/ARCHITECTURE.md)）。Compose 已经替你设好，只有 `PALACE_VAPID_SUBJECT` 和（第一次启动时的）`PALACE_INITIAL_HANDLE` 通过 `.env` 改：
 
 | 变量 | 含义 | 缺省 |
 |---|---|---|
@@ -156,7 +156,7 @@ palace node start
 
 `install`、`update`、`uninstall` 只管理程序、命令和服务定义。配置、身份、日志和工作区保留。
 
-**每个命令从现有状态决定动作**（ARCHITECTURE §11 第 1 条），不记录“做到哪一步”。这张表在三个平台都成立：
+**每个命令从现有状态决定动作**（[apps/node/ARCHITECTURE.md](../apps/node/ARCHITECTURE.md)），不记录“做到哪一步”。这张表在三个平台都成立：
 
 | 命令 | 看到的状态 | 做什么 |
 |---|---|---|
@@ -206,7 +206,7 @@ POSIX 管理命令拒绝 root。Palace 不创建账号、不配置 linger、不�
 ### 3.3 第一个 Agent
 
 1. 网页"管理"里填入模型提供商的 API key。
-2. 创建 Agent：填显示名、handle、模型。Manager 会依次开聊天账号、让 node 建工作区、建 Agent 文件（ARCHITECTURE §4.4）。
+2. 创建 Agent：填显示名、handle、模型。Manager 会依次开聊天账号、让 node 建工作区、建 Agent 文件（[packages/manager/ARCHITECTURE.md](../packages/manager/ARCHITECTURE.md)）。
 3. 在频道里 @ 它。它会收到一条通知，自己决定读取并回复。
 
 ## 4. 日常运维
@@ -216,7 +216,7 @@ POSIX 管理命令拒绝 root。Palace 不创建账号、不配置 linger、不�
 | 看 node 状态、日志 | `palace node status`（版本、服务状态、链路、配置，不打印令牌）、`palace node logs [--lines <n>] [--follow]` |
 | 启停 node | `palace node stop`（停止并停用）、`palace node start`（启用并启动）。stop 之后保持停止，重复 `install` 也不会启动它 |
 | 看控制面日志、启停 | 在放 `compose.yaml` 的目录里 `docker compose logs -f`、`docker compose stop`、`docker compose start`。日常命令只用 `compose.yaml`，不叠加 `compose.initialize.yaml` |
-| 暂停或恢复某个 Agent | 网页"管理"。暂停立刻关闭它的 runtime，停掉进行中的模型请求和 node 上能追踪到的命令（例外见 ARCHITECTURE 4.5）。恢复后从停下的地方继续 |
+| 暂停或恢复某个 Agent | 网页"管理"。暂停立刻关闭它的 runtime，停掉进行中的模型请求和 node 上能追踪到的命令（例外见 [apps/node/ARCHITECTURE.md](../apps/node/ARCHITECTURE.md)）。恢复后从停下的地方继续 |
 | 看 Agent 在想什么、做了什么 | 网页"管理"里的实时对话记录 |
 | 看用量 | 网页"管理"。只用于观察，没有任何配额 |
 
@@ -260,7 +260,7 @@ palace node start
 
 **Linux/macOS 的命令 shell。** node 账号的默认 shell 必须是 Bash 或 zsh。命令使用账号的主目录作 HOME，并带上它的交互启动配置；node 进程只读一次启动文件，修改后（或启动配置出错后）重启 node 生效。控制面先升级时，旧 node 仍按原方式（`/bin/sh`、工作区作 HOME）执行，直到它也升级。
 
-**数据原地迁移**（ARCHITECTURE §6、§11 第 8 条）。新版本启动时把数据库升到自己的结构版本，迁移在一个事务里，失败就回滚、拒绝启动并报出文件名，数据库留在旧版本。数据库比程序新、或停在新版本不认识的版本时同样拒绝启动，不改动它。升级到会迁移数据的版本之前，先备份数据目录：迁移成功后旧版本拒绝启动（数据库比程序新），所以回退就是换回旧镜像并恢复这份备份，没有别的办法；备份之后写入的数据随之丢失。
+**数据原地迁移**（ARCHITECTURE §6）。新版本启动时把数据库升到自己的结构版本，迁移在一个事务里，失败就回滚、拒绝启动并报出文件名，数据库留在旧版本。数据库比程序新、或停在新版本不认识的版本时同样拒绝启动，不改动它。升级到会迁移数据的版本之前，先备份数据目录：迁移成功后旧版本拒绝启动（数据库比程序新），所以回退就是换回旧镜像并恢复这份备份，没有别的办法；备份之后写入的数据随之丢失。
 
 1. `docker compose down`，复制一份数据目录作备份（回退要用它）。
 2. `.env` 里改 `PALACE_IMAGE`，其余不动。
@@ -364,7 +364,7 @@ PALACE_DATA_DIRECTORY=~/palace-dev/data PALACE_INITIAL_PASSWORD_FILE=~/palace-de
 curl -i -X POST localhost:8787/api/login -H 'content-type: application/json' -d '{"handle":"admin","password":"一个至少十二字节的密码"}'
 ```
 
-登录返回的 `Set-Cookie` 要原样带在之后的请求里。路由见 ARCHITECTURE §4.7。各模块的边界测试是验证系统的主要手段，`apps/control-plane/test/composition.test.ts` 以真实 HTTP 跑通"经 HTTP 配对 node、创建 Agent、管理员私信它、它回复并推送"。
+登录返回的 `Set-Cookie` 要原样带在之后的请求里。路由见 [apps/control-plane/ARCHITECTURE.md](../apps/control-plane/ARCHITECTURE.md)。各模块的边界测试是验证系统的主要手段，`apps/control-plane/test/composition.test.ts` 以真实 HTTP 跑通"经 HTTP 配对 node、创建 Agent、管理员私信它、它回复并推送"。
 
 ### 6.1 原生移动客户端
 
@@ -390,7 +390,7 @@ pnpm --filter @palace/mobile ios --device --port 8087
 
 iOS 需要 macOS、包含 iOS 27 SDK 的 Xcode 和 iOS 27 或更新版本的模拟器或设备，工具安装见 [Expo 环境设置](https://docs.expo.dev/get-started/set-up-your-environment/)。共享机器先确认设备没有被其他 session 占用。生成的 `ios/` 和 `.expo/` 只留在本地，由 app config 和依赖重新生成。合入原生插件或修改 app config 后，先运行 `pnpm --filter @palace/mobile exec expo prebuild --platform ios --no-install` 再构建，已有的 `ios/` 目录不会自动应用新配置。构建通知相关改动时，确认生成的 `Palace.entitlements` 含所选环境的 `aps-environment`。
 
-最低版本由 app config 的 [`ios.deploymentTarget`](https://docs.expo.dev/versions/v58.0.0/config/app/#deploymenttarget) 设为 `27.0`，prebuild 把它写进 Podfile 配置和 Xcode 工程。Expo Go 不带 app 用到的 cookie 管理原生模块，验证要用上面的命令构建开发版。登录、恢复和退出的行为见 ARCHITECTURE 的移动端部分。
+最低版本由 app config 的 [`ios.deploymentTarget`](https://docs.expo.dev/versions/v58.0.0/config/app/#deploymenttarget) 设为 `27.0`，prebuild 把它写进 Podfile 配置和 Xcode 工程。Expo Go 不带 app 用到的 cookie 管理原生模块，验证要用上面的命令构建开发版。登录、恢复和退出的行为见 [apps/mobile/ARCHITECTURE.md](../apps/mobile/ARCHITECTURE.md)。
 
 iOS bundle identifier 是 `dev.yyang.palace`，签名用对应的 App ID 和 provisioning profile，控制面的 `PALACE_APNS_TOPIC` 也必须与它一致。根 `pnpm build` 不构建移动端，发布走下面的 TestFlight 流程。
 
@@ -465,4 +465,4 @@ app 用 `expo-notifications` 取得原生 APNs token，控制面用 `@parse/node
 
 app config 的输入 `PALACE_IOS_APNS_ENVIRONMENT` 缺省为 `sandbox`，它同时决定通知 entitlement 和 app 订阅的环境。TestFlight 包按 App Store Connect 分发重新签名后是 `production`，所以 `archive-ios.sh` 固定用 `production` 构建，控制面的 `PALACE_APNS_ENVIRONMENT` 也要设为 `production`。开发版用 `sandbox`。改变这个输入后要重新 prebuild 再构建。服务器拒绝环境不匹配的登记，app 也拒绝环境与自己不一致的服务器。
 
-发送、重试和过期见 ARCHITECTURE 的“原生推送发送器”，app 侧的登记与取消见 `MobileNotifications` 一段。模拟器和 `simctl push` 只能验证本机的权限和展示，真实 APNs 送达要在真机上登录、开启通知，再用私信或提及验证。
+发送、重试和过期见 [apps/control-plane/ARCHITECTURE.md](../apps/control-plane/ARCHITECTURE.md) 的推送发送器，app 侧的登记与取消见 [apps/mobile/ARCHITECTURE.md](../apps/mobile/ARCHITECTURE.md) 的原生通知。模拟器和 `simctl push` 只能验证本机的权限和展示，真实 APNs 送达要在真机上登录、开启通知，再用私信或提及验证。

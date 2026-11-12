@@ -16,7 +16,7 @@ import {
   windows,
 } from "./support.ts";
 
-describe("node connection and stopping (MODULE_TESTS 8.3)", () => {
+describe("node connection and stopping (TESTS 1.3)", () => {
   it("stops the process groups of running tool calls when the connection drops", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();

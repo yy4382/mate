@@ -4,7 +4,7 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import { FakeNode } from "@palace/testkit";
 import { deferred, eventually, never, startGateway, text, toolResult, within } from "./support.ts";
 
-describe("node gateway tool calls (MODULE_TESTS 7)", () => {
+describe("node gateway tool calls (TESTS)", () => {
   it.each(["home", "visit"] as const)(
     "sends %s access and the calling conversation unchanged over the WebSocket",
     async (access) => {

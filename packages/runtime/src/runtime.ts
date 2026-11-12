@@ -313,7 +313,7 @@ export class AgentRuntime {
 }
 
 /**
- * Durable's own defaults today, stated here so that the thresholds ARCHITECTURE 4.2 documents cannot move with a
+ * Durable's own defaults today, stated here so that the thresholds packages/runtime/ARCHITECTURE.md documents cannot move with a
  * Durable release.
  */
 const compaction: CompactionPolicy = {
