@@ -35,17 +35,18 @@ const everyKeeper = definePlugin({
 
 type Seen = { tools: (string | undefined)[]; system: string };
 
+const look = (request: {
+  body: { tools?: { name?: string | undefined }[] | undefined };
+  systemTexts(): string[];
+}): Seen => ({
+  tools: (request.body.tools ?? []).map(({ name }) => name),
+  system: request.systemTexts().join("\n"),
+});
+
 /** What the primary conversation and one assistant are offered, in the first request of each. */
 async function offered(agent: TestAgent, plugins: readonly Plugin[]) {
   const seen: { primary?: Seen; assistant?: Seen } = {};
   const finished = Promise.withResolvers<void>();
-  const look = (request: {
-    body: { tools?: { name?: string | undefined }[] | undefined };
-    systemTexts(): string[];
-  }): Seen => ({
-    tools: (request.body.tools ?? []).map(({ name }) => name),
-    system: request.systemTexts().join("\n"),
-  });
   agent.provider
     .step("primary spawns", (request) => {
       seen.primary = look(request);
@@ -137,5 +138,48 @@ describe("plugins", () => {
     ).rejects.toThrow(/beacon/);
     await expect(agent.open({ plugins: [named("reminders")] })).rejects.toThrow(/reminders/);
     await expect(agent.open({ plugins: [named("one", reminderKind)] })).rejects.toThrow(/reminder/);
+  });
+
+  it("of primary scope never reach an assistant spawned before they were installed", async () => {
+    const agent = await testAgent();
+    const finished = Promise.withResolvers<void>();
+    let afterReopen: Seen | undefined;
+    agent.provider
+      .step("primary spawns", (request) => {
+        request.call([
+          { name: "assistant", arguments: { action: "spawn", name: "helper", message: "look" } },
+        ]);
+      })
+      .step("primary acknowledges", (request) => request.text("ok"))
+      .step("primary reads the report", (request) => request.text("noted"))
+      .step("primary asks again", (request) => {
+        request.call([
+          { name: "assistant", arguments: { action: "send", name: "helper", message: "again" } },
+        ]);
+      })
+      .step("primary acknowledges again", (request) => request.text("ok"))
+      .step("primary reads the second report", (request) => {
+        request.text("noted");
+        finished.resolve();
+      });
+    const helper = agent.provider.lane("helper", (request) => request.userTexts()[0] === "look");
+    helper.step("assistant works", (request) => request.text("done"));
+    helper.step("assistant works again", (request) => {
+      afterReopen = look(request);
+      request.text("done again");
+    });
+    const first = await agent.open();
+    await (await first.runtime.submit(said.input("m1", "delegate it"))).settled();
+    await first.runtime.idle();
+    await first.runtime.close();
+
+    const second = await agent.open({ plugins: [primaryKeeper] });
+    await second.runtime.submit(said.input("m2", "ask it again"));
+    await finished.promise;
+    await second.runtime.idle();
+
+    expect(afterReopen?.tools).not.toContain("lantern");
+    expect(afterReopen?.system).not.toContain("You keep the lantern.");
+    agent.provider.assertComplete();
   });
 });

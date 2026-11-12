@@ -1,5 +1,7 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import {
+  AgentDoc,
   AssistantEntry,
   LiveDoc,
   configure,
@@ -8,9 +10,11 @@ import {
   defineTask,
   defineTool,
   section,
+  type Conversation,
   type ConversationId,
   type EntryId,
   type Extension,
+  type Harness,
   type Tx,
 } from "@earendil-works/pi-durable";
 import { builtinRequestId } from "./plugins.ts";
@@ -189,6 +193,34 @@ function textOf(message: unknown): string {
         : [],
     )
     .join("");
+}
+
+/**
+ * Durable stores the extensions an assistant lacks by name when the assistant is spawned, so a primary-only extension
+ * installed later would reach every assistant spawned before it. Opening an Agent, before any run resumes, sets each
+ * assistant's stored exclusion to the current primary-only set; an assistant that already has it is left alone, so
+ * reopening with the same plugins changes no prompt.
+ */
+export async function reconcileAssistants(
+  harness: Harness,
+  root: Conversation,
+  primaryOnly: readonly Extension[],
+): Promise<void> {
+  const wanted = new Set(primaryOnly.map(({ name }) => name));
+  const stale: ConversationId[] = [];
+  const state = await harness.snapshot(AssistantsDoc, root.id, BACKGROUND_CONTEXT);
+  for (const { conversationId } of Object.values(state?.assistants ?? {})) {
+    const stored = (await harness.snapshot(AgentDoc, conversationId, BACKGROUND_CONTEXT))
+      ?.extensions;
+    const removed = stored !== undefined && !Array.isArray(stored) ? stored.remove : undefined;
+    if (removed?.length !== wanted.size || !removed.every((name) => wanted.has(name)))
+      stale.push(conversationId);
+  }
+  if (stale.length === 0) return;
+  await harness.commit(async (tx) => {
+    for (const conversationId of stale)
+      await configure(tx, conversationId, { extensions: { remove: [...primaryOnly] } });
+  }, BACKGROUND_CONTEXT);
 }
 
 const reply = (text: string) => ({ content: [{ type: "text" as const, text }] });

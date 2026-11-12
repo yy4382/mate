@@ -12,7 +12,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { AgentStateDoc, type AgentUsage } from "./agent-state.ts";
-import { AssistantsDoc, assistants } from "./assistants.ts";
+import { AssistantsDoc, assistants, reconcileAssistants } from "./assistants.ts";
 import type { InputKind, Plugin, PluginInput } from "@palace/agent-plugin";
 import { systemClock, type Clock } from "@palace/clock";
 import { DOCS_EXTENSION, docsExtension } from "./docs.ts";
@@ -99,9 +99,9 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
   const lifetime = new Lifetime();
   const clock = options.clock ?? systemClock;
   const registry = createRegistry();
-  const { primary: assistantsPrimary, identity: assistantsIdentity } = assistants(() =>
-    capabilities.filter(({ scope }) => scope === "primary").map(({ extension }) => extension),
-  );
+  const primaryOnly = () =>
+    capabilities.filter(({ scope }) => scope === "primary").map(({ extension }) => extension);
+  const { primary: assistantsPrimary, identity: assistantsIdentity } = assistants(primaryOnly);
   const { extension: remindersExtension, run: runReminders } = reminders(clock, lifetime.signal);
   // `harness` exists by the time a tool runs: no task is scheduled before `resume()`.
   const workspace = workspaceExtension(options.workspace, lifetime.signal, (id, context) =>
@@ -145,6 +145,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
   );
   const root = await harness.root(BACKGROUND_CONTEXT);
   const runtime = new AgentRuntime(harness, storage, root, lifetime, installed.kinds);
+  await reconcileAssistants(harness, root, primaryOnly());
   harness.resume();
   // Run the reminder loop in the background; it exits when the lifetime ends.
   void runReminders(harness, root);
