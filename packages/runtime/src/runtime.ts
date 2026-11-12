@@ -17,6 +17,7 @@ import type { InputKind, Plugin, PluginInput } from "@palace/agent-plugin";
 import { systemClock, type Clock } from "@palace/clock";
 import { DOCS_EXTENSION, docsExtension } from "./docs.ts";
 import { historyExtension } from "./history.ts";
+import { idleCompaction } from "./idle-compaction.ts";
 import { Lifetime, guardDatabase } from "./lifetime.ts";
 import { agentModels, type CredentialsLookup, type ModelResolver } from "./models.ts";
 import { installPlugins, type Capability } from "./plugins.ts";
@@ -103,13 +104,24 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     capabilities.filter(({ scope }) => scope === "primary").map(({ extension }) => extension);
   const { primary: assistantsPrimary, identity: assistantsIdentity } = assistants(primaryOnly);
   const { extension: remindersExtension, run: runReminders } = reminders(clock, lifetime.signal);
+  const { extension: idleExtension, run: runIdleCompaction } = idleCompaction(
+    clock,
+    lifetime.signal,
+  );
   // `harness` exists by the time a tool runs: no task is scheduled before `resume()`.
   const workspace = workspaceExtension(options.workspace, lifetime.signal, (id, context) =>
     harness.abortTask(id, context),
   );
   const installed = installPlugins(
     options.plugins ?? [],
-    [workspace, historyExtension, assistantsPrimary, remindersExtension, assistantsIdentity]
+    [
+      workspace,
+      historyExtension,
+      assistantsPrimary,
+      remindersExtension,
+      idleExtension,
+      assistantsIdentity,
+    ]
       .map(({ name }) => name)
       // A plugin's name is also its section key, so it must not take the identity section's either.
       .concat(DOCS_EXTENSION, IDENTITY_SECTION),
@@ -122,6 +134,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     ...(docs === undefined ? [] : [{ extension: docs, scope: "every" } as const]),
     { extension: assistantsPrimary, scope: "primary" },
     { extension: remindersExtension, scope: "primary" },
+    { extension: idleExtension, scope: "primary" },
     ...installed.capabilities,
     { extension: assistantsIdentity, scope: "every" },
   ];
@@ -155,8 +168,11 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
   }
   const runtime = new AgentRuntime(harness, storage, root, lifetime, installed.kinds);
   harness.resume();
-  // Run the reminder loop in the background; it exits when the lifetime ends.
+  // Run the reminder and idle compaction loops in the background; they exit when the lifetime ends.
   void runReminders(harness, root);
+  void runIdleCompaction(root, (requestId) =>
+    storage.submissionByRequest(root.id, requestId, BACKGROUND_CONTEXT),
+  );
   return runtime;
 }
 
