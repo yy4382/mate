@@ -1,6 +1,6 @@
 import type { AccountChat } from "@palace/chat";
 import { describe, expect, it } from "vitest";
-import { agentAccount, environment, realRuntime, said } from "./support.ts";
+import { agentAccount, environment, realRuntime } from "./support.ts";
 
 const send = (conversation: number, body: string) => ({
   name: "chat_send",
@@ -31,7 +31,7 @@ describe("chat tools", () => {
     agent.provider.step("answer", (request) => request.text("hi owner"));
     const { runtime } = await agent.open();
 
-    expect(await (await runtime.submit(said.input("m1", "hello there"))).settled()).toBe("done");
+    expect(await (await runtime.submit("hello there", { requestId: "m1" })).settled()).toBe("done");
 
     expect(
       env.chat.search(env.owner, "hi owner"),
@@ -52,7 +52,7 @@ describe("chat tools", () => {
     });
     const { runtime } = await agent.open({ chat: port });
 
-    await (await runtime.submit(said.input("m1", "hello"))).settled();
+    await (await runtime.submit("hello", { requestId: "m1" })).settled();
 
     agent.provider.assertComplete();
   });
@@ -84,7 +84,7 @@ describe("chat tools", () => {
       });
     const { runtime } = await agent.open({ chat: port });
 
-    await (await runtime.submit(said.input("m1", "deploy request"))).settled();
+    await (await runtime.submit("deploy request", { requestId: "m1" })).settled();
 
     expect(messages(), "only the resend reached the channel").toEqual([
       "Please deploy.",
@@ -118,7 +118,7 @@ describe("chat tools", () => {
     };
     agent.provider.step("send", (request) => void request.call([send(general, "Deployed.")]));
     first = await agent.open({ chat: dying });
-    await first.runtime.submit(said.input("m1", "tell them"));
+    await first.runtime.submit("tell them", { requestId: "m1" });
     await sent.promise;
 
     agent.provider.step("after restart", (request) => {
@@ -151,7 +151,7 @@ describe("chat tools", () => {
     };
     agent.provider.step("read", (request) => void request.call([readUnread(general)]));
     first = await agent.open({ chat: dying });
-    await first.runtime.submit(said.input("m1", "catch up"));
+    await first.runtime.submit("catch up", { requestId: "m1" });
     await read.promise;
     post("Later news.");
 
@@ -177,8 +177,8 @@ describe("chat tools", () => {
       .step("ack", (request) => request.text("sent two"));
     const { runtime } = await agent.open({ chat: port });
 
-    await (await runtime.submit(said.input("m1", "say one"))).settled();
-    await (await runtime.submit(said.input("m2", "say two"))).settled();
+    await (await runtime.submit("say one", { requestId: "m1" })).settled();
+    await (await runtime.submit("say two", { requestId: "m2" })).settled();
 
     expect(messages(), "each call reached the chat app").toEqual(["One.", "Two."]);
     agent.provider.assertComplete();
@@ -197,7 +197,7 @@ describe("chat tools", () => {
       });
     const { runtime } = await agent.open({ chat: port });
 
-    expect(await (await runtime.submit(said.input("m1", "post"))).settled()).toBe("done");
+    expect(await (await runtime.submit("post", { requestId: "m1" })).settled()).toBe("done");
 
     agent.provider.assertComplete();
   });
@@ -230,7 +230,7 @@ describe("chat tools", () => {
       });
     const { runtime } = await agent.open({ chat: port });
 
-    await runtime.submit(said.input("m1", "have someone post"));
+    await runtime.submit("have someone post", { requestId: "m1" });
     await finished.promise;
     await runtime.idle();
 

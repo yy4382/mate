@@ -5,6 +5,7 @@ export {
   type AgentRuntimeOptions,
   type EventWatch,
   type SubmittedInput,
+  type WhenBusy,
   type WithdrawResult,
 } from "./runtime.ts";
 export type { AgentSettings } from "./settings.ts";

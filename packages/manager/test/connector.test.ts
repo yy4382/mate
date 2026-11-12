@@ -1,4 +1,3 @@
-import type { PluginInput } from "@palace/agent-plugin";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { connectInbox, type NoticeTarget } from "../src/index.ts";
 import {
@@ -6,12 +5,11 @@ import {
   environment,
   notices,
   realRuntime,
-  said,
   text,
   type Environment,
 } from "./support.ts";
 
-type Submitted = { content: string; requestId: string; whenBusy: string; replacesQueued: boolean };
+type Submitted = { content: string; requestId: string; whenBusy?: string; replaces?: string };
 
 /** Stands in for the runtime: keeps the cursor in memory and records every submission. */
 class RecordingRuntime implements NoticeTarget {
@@ -33,15 +31,12 @@ class RecordingRuntime implements NoticeTarget {
     this.position = Math.max(this.position, value);
   }
 
-  async submit(input: PluginInput) {
+  async submit(
+    content: string,
+    options: { requestId: string; whenBusy?: "steer" | "followUp"; replaces?: string },
+  ) {
     await this.gate;
-    const { content, requestId, kind } = input;
-    this.submitted.push({
-      content,
-      requestId,
-      whenBusy: kind.whenBusy,
-      replacesQueued: kind.replacesQueued,
-    });
+    this.submitted.push({ content, ...options });
     return { settled: async () => "done" as const };
   }
 }
@@ -73,12 +68,12 @@ describe("connector", () => {
 
     const [event] = env.chat.inboxEvents(account);
     expect(
-      runtime.submitted.map(({ requestId, whenBusy, replacesQueued }) => ({
+      runtime.submitted.map(({ requestId, whenBusy, replaces }) => ({
         requestId,
         whenBusy,
-        replacesQueued,
+        replaces,
       })),
-    ).toEqual([{ requestId: `notice:${event?.eventId}`, whenBusy: "steer", replacesQueued: true }]);
+    ).toEqual([{ requestId: `notice:${event?.eventId}`, whenBusy: "steer", replaces: "notice:" }]);
     expect(runtime.position, "the position moves to the event").toBe(event?.eventId);
   });
 
@@ -222,7 +217,7 @@ describe("connector with a real runtime", () => {
         expect(seen[0], "the newest").toMatch(/至少有 2 条未读/);
         request.text("noted");
       });
-    await runtime.submit(said.input("m1", "recall"));
+    await runtime.submit("recall", { requestId: "m1" });
     const call = await agent.workspace.nextCall();
     const { connector } = await connect(env, account, runtime);
 
@@ -253,7 +248,7 @@ describe("connector with a real runtime", () => {
         expect(seen[1]).toMatch(/至少有 2 条未读/);
         request.text("noted");
       });
-    await runtime.submit(said.input("m1", "recall"));
+    await runtime.submit("recall", { requestId: "m1" });
     const first = await agent.workspace.nextCall();
     const { connector } = await connect(env, account, runtime);
     env.post("One.");
@@ -288,7 +283,7 @@ describe("connector with a real runtime", () => {
     const dies = Promise.withResolvers<void>();
     const dying: NoticeTarget = {
       cursor: (name) => first.runtime.cursor(name),
-      submit: (input) => first.runtime.submit(input),
+      submit: (content, options) => first.runtime.submit(content, options),
       advanceCursor: async () => {
         await agent.workspace.nextCall();
         first.freeze();

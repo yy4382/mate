@@ -4,7 +4,7 @@ import {
   type ToolExecutionResult,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
-import { defineInput, definePlugin, type Plugin } from "@palace/agent-plugin";
+import { definePlugin, type Plugin } from "@palace/agent-plugin";
 import type { AccountChat, UnreadSummary } from "@palace/chat";
 
 const Id = (description: string) => Type.Integer({ minimum: 1, description });
@@ -174,39 +174,31 @@ function isRefusal(error: unknown): error is Error & { reason: string } {
 }
 
 /**
- * The unread notice: how much is unread at least and where, never what. The counts may be stale by the time the model
- * reads them, and reading is the model's choice, so `explain` says once that a notice is only a hint. Each line
- * carries the timeline exactly as the chat tools take it. requestId `notice:<event ID>`; a newer notice withdraws one
- * still queued, so there is at most one undelivered.
+ * The unread notice as the model reads it: how much is unread at least and where, never what. The counts may be stale
+ * by the time the model reads them, which the chat section says once. Each line carries the timeline exactly as the
+ * chat tools take it. The connector submits it as requestId `notice:<event ID>`; a newer notice withdraws one still
+ * queued, so there is at most one undelivered.
  */
-export const chatNotice = defineInput<{ summary: UnreadSummary; at: number }>({
-  name: "notice",
-  explain:
-    "Inputs that report unread chat are only hints and may be out of date; " +
-    `read with ${CHAT_READ_UNREAD} when you decide to.`,
-  whenBusy: "steer",
-  replacesQueued: true,
-  render: ({ summary, at }) => {
-    const time = new Date(at)
-      .toISOString()
-      .replace("T", " ")
-      .replace(/\.\d+Z$/, " UTC");
-    const lines = summary.timelines.map((timeline) => {
-      const place = timeline.kind === "dm" ? `私信 @${timeline.label}` : `#${timeline.label}`;
-      // Typed as the chat tools' argument, so the line stays something the model can pass to the read tool as is.
-      const argument: Static<typeof Timeline> = timeline.timeline;
-      const where = `${place}${timeline.inThread ? "/讨论串" : ""} ${JSON.stringify(argument)}`;
-      const mention = timeline.mentioned ? " · @了你" : "";
-      return `${where} 至少 ${timeline.unread} 条 · 最新发送者 @${timeline.latestSender}${mention}`;
-    });
-    return [
-      `截至 ${time}，至少有 ${summary.total} 条未读（其中 ${summary.mentions} 条 @ 了你），` +
-        `分布在 ${summary.timelines.length} 处，之后可能还有更多：`,
-      ...lines,
-      `每行花括号里就是 ${CHAT_READ_UNREAD} 要的 timeline。`,
-    ].join("\n");
-  },
-});
+export function renderNotice(summary: UnreadSummary, at: number): string {
+  const time = new Date(at)
+    .toISOString()
+    .replace("T", " ")
+    .replace(/\.\d+Z$/, " UTC");
+  const lines = summary.timelines.map((timeline) => {
+    const place = timeline.kind === "dm" ? `私信 @${timeline.label}` : `#${timeline.label}`;
+    // Typed as the chat tools' argument, so the line stays something the model can pass to the read tool as is.
+    const argument: Static<typeof Timeline> = timeline.timeline;
+    const where = `${place}${timeline.inThread ? "/讨论串" : ""} ${JSON.stringify(argument)}`;
+    const mention = timeline.mentioned ? " · @了你" : "";
+    return `${where} 至少 ${timeline.unread} 条 · 最新发送者 @${timeline.latestSender}${mention}`;
+  });
+  return [
+    `截至 ${time}，至少有 ${summary.total} 条未读（其中 ${summary.mentions} 条 @ 了你），` +
+      `分布在 ${summary.timelines.length} 处，之后可能还有更多：`,
+    ...lines,
+    `每行花括号里就是 ${CHAT_READ_UNREAD} 要的 timeline。`,
+  ].join("\n");
+}
 
 /**
  * The chat tools and the prompt section that says how the Agent speaks. Primary conversation only: an assistant has no
@@ -219,8 +211,9 @@ export function chatPlugin(account: AccountChat): Plugin {
     scope: "primary",
     prompt:
       "You talk with people only through the chat tools. Your plain text output goes nowhere: nobody reads it. " +
-      "To say anything to anyone, call chat_send.",
+      "To say anything to anyone, call chat_send. " +
+      "Inputs that report unread chat are only hints and may be out of date; " +
+      `read with ${CHAT_READ_UNREAD} when you decide to.`,
     tools: tools.map((tool) => tool(account)),
-    inputs: [chatNotice],
   });
 }

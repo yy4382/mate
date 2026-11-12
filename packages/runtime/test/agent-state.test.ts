@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { configureAgentFile, readAgentState, setAgentPaused } from "../src/index.ts";
-import { defaultSettings, testAgent, said } from "./support.ts";
+import { defaultSettings, testAgent } from "./support.ts";
 
 describe("cursors", () => {
   it("keeps a cursor across a reopen and never moves it back", async () => {
@@ -46,7 +46,7 @@ describe("a closed Agent's file", () => {
     const agent = await testAgent({ ...defaultSettings, instructions: "Be brief." });
     agent.provider.step("answer", (request) => request.text("hi", { inputTokens: 120 }));
     const { runtime } = await agent.open();
-    await (await runtime.submit(said.input("m1", "hello"))).settled();
+    await (await runtime.submit("hello", { requestId: "m1" })).settled();
     const settings = await runtime.settings();
     const usage = await runtime.usage();
     await runtime.close();
@@ -80,7 +80,7 @@ describe("a closed Agent's file", () => {
     expect((await readAgentState(agent.file)).settings).toEqual(changed);
     const { runtime } = await agent.open();
     expect(await runtime.settings()).toEqual(changed);
-    await (await runtime.submit(said.input("m2", "two"))).settled();
+    await (await runtime.submit("two", { requestId: "m2" })).settled();
     expect(
       agent.provider.requests.map(({ body }) => [body.model, body.reasoning]),
       "the request carries the settings written while closed",

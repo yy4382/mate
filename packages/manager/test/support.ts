@@ -1,4 +1,3 @@
-import { defineInput, definePlugin } from "@palace/agent-plugin";
 import { ChatApp, type AccountChat, type TimelineRef } from "@palace/chat";
 import {
   createAgentStore,
@@ -190,15 +189,6 @@ export function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 50));
 }
 
-/** The input a test sends an Agent whose runtime it opens itself, outside any manager. */
-export const said = defineInput<string>({
-  name: "user",
-  explain: "Inputs from the test user.",
-  whenBusy: "followUp",
-  render: (text) => text,
-});
-const testPlugin = definePlugin({ name: "test", scope: "primary", inputs: [said] });
-
 /** An Agent account in #general, as the manager would have made it. */
 export function agentAccount(env: Environment) {
   const account = env.chat.ensureAccount({
@@ -232,7 +222,7 @@ export async function realRuntime(env: Environment, account: number) {
         credentials: () => ({ apiKey: "test-key", baseUrl: env.provider.baseUrl }),
         workspace,
         clock: env.clock,
-        plugins: [testPlugin, chatPlugin(options.chat ?? env.chat.forAccount(account))],
+        plugins: [chatPlugin(options.chat ?? env.chat.forAccount(account))],
         wrapDatabase: (inner) => (database = new FaultyDatabase(inner)),
       });
       onTestFinished(() => (database?.frozen ? undefined : runtime.close()));

@@ -1,5 +1,5 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { defineInput, definePlugin, type Plugin } from "@palace/agent-plugin";
+import type { Plugin } from "@palace/agent-plugin";
 import {
   FakeWorkspace,
   FaultyDatabase,
@@ -19,32 +19,6 @@ import {
 
 export { FakeClock, FakeWorkspace, toolText as text } from "@palace/testkit";
 
-/** What the tests send an Agent: the input a user's message is, and the kinds that steer or replace a queued one. */
-export const said = defineInput<string>({
-  name: "user",
-  explain: "Inputs from the test user.",
-  whenBusy: "followUp",
-  render: (text) => text,
-});
-export const saidNow = defineInput<string>({
-  name: "urgent",
-  explain: "Urgent inputs from the test user.",
-  whenBusy: "steer",
-  render: (text) => text,
-});
-export const update = defineInput<string>({
-  name: "update",
-  explain: "Updates; a newer one replaces an older one still queued.",
-  whenBusy: "steer",
-  replacesQueued: true,
-  render: (text) => text,
-});
-const testPlugin = definePlugin({
-  name: "test",
-  scope: "primary",
-  inputs: [said, saidNow, update],
-});
-
 export const defaultSettings: AgentSettings = { model: { provider: "openai", modelId: "gpt-4.1" } };
 
 export type TestAgent = {
@@ -53,7 +27,6 @@ export type TestAgent = {
   readonly workspace: FakeWorkspace;
   open(options?: {
     onFatal?: (error: unknown) => void;
-    /** Installed after the plugin that carries the test's input kinds. */
     plugins?: readonly Plugin[];
     /** Read at every model request; defaults to a fixed key for every provider. */
     credentials?: CredentialsLookup;
@@ -99,7 +72,7 @@ export async function testAgent(
         wrapDatabase: (inner) => (database = new FaultyDatabase(inner)),
         ...(clock === undefined ? {} : { clock }),
         ...(options.onFatal === undefined ? {} : { onFatal: options.onFatal }),
-        plugins: [testPlugin, ...(options.plugins ?? [])],
+        plugins: options.plugins ?? [],
       });
       // A frozen store stands for a dead process: there is nothing left to close, and closing would wait forever.
       onTestFinished(() => (database?.frozen ? undefined : runtime.close()));

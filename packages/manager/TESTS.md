@@ -6,9 +6,9 @@
 
 **边界：** 输入是聊天 app 的 `inboxEvents` 和 `unreadSummary`，输出是对 runtime 的 `submit` 和 `withdraw`。
 
-**替身：** 测试连接器时，用真实聊天 app 加上一个记录 `submit` 的假 runtime（记下输入的 requestId、内容和种类的 `whenBusy`、`replacesQueued`）；验证与 Durable 的组合时，用真实 runtime（装入聊天插件）加故障存储适配器。
+**替身：** 测试连接器时，用真实聊天 app 加上一个记录 `submit` 的假 runtime（记下输入的 requestId、内容、`whenBusy` 和 `replaces`）；验证与 Durable 的组合时，用真实 runtime（装入聊天插件）加故障存储适配器。
 
-- 一条新收件事件产生一条通知，`requestId` 是 `notice:<事件 ID>`，`whenBusy` 是 `steer`，种类撤回未交付的旧通知。
+- 一条新收件事件产生一条通知，`requestId` 是 `notice:<事件 ID>`，`whenBusy` 是 `steer`，`replaces` 是 `notice:`（撤回未交付的旧通知）。
 - 通知文字写明时间点、"至少"多少条、各时间线的条数、是否 @ 了你，以及"之后可能还有更多"。
 - 已有一条通知还没交给模型时，又来了新事件：旧通知被撤回，新通知反映最新状态，模型最终只看到新的那条。
 - 撤回时旧通知恰好已经交给了模型：新通知仍然照常提交，模型先后看到两条。

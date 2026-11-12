@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { said, testAgent } from "./support.ts";
+import { testAgent } from "./support.ts";
 
 const shipped = fileURLToPath(new URL("./docs", import.meta.url));
 // Primary scope: the docs reach assistants all the same.
@@ -44,7 +44,7 @@ describe("Palace docs", () => {
       });
     const { runtime } = await agent.open({ plugins: [docsPlugin] });
 
-    await runtime.submit(said.input("m1", "delegate it"));
+    await runtime.submit("delegate it", { requestId: "m1" });
     await finished.promise;
     await runtime.idle();
 
@@ -76,7 +76,7 @@ describe("Palace docs", () => {
     });
     const { runtime } = await agent.open({ plugins: [docsPlugin] });
 
-    await (await runtime.submit(said.input("m1", "hello"))).settled();
+    await (await runtime.submit("hello", { requestId: "m1" })).settled();
 
     agent.provider.assertComplete();
   });
@@ -95,7 +95,7 @@ describe("Palace docs", () => {
       });
     const { runtime } = await agent.open({ plugins: [docsPlugin] });
 
-    await (await runtime.submit(said.input("m1", "how does it work?"))).settled();
+    await (await runtime.submit("how does it work?", { requestId: "m1" })).settled();
 
     expect(outputs).toEqual(
       topics.map((topic) => readFileSync(join(shipped, `${topic}.md`), "utf8")),
@@ -117,7 +117,7 @@ describe("Palace docs", () => {
       });
     const { runtime } = await agent.open({ plugins: [docsPlugin] });
 
-    expect(await (await runtime.submit(said.input("m1", "explain"))).settled()).toBe("done");
+    expect(await (await runtime.submit("explain", { requestId: "m1" })).settled()).toBe("done");
 
     expect(output, "the model got a refusal, not a doc").not.toBe("");
     for (const topic of topics)
@@ -135,7 +135,7 @@ describe("Palace docs", () => {
       started.resolve();
     });
     agent.provider.step("reads", (request) => void request.call([palaceDocs(topics[0] ?? "")]));
-    await first.runtime.submit(said.input("m1", "how does it work?"));
+    await first.runtime.submit("how does it work?", { requestId: "m1" });
     await started.promise;
 
     let output = "";
@@ -160,7 +160,7 @@ describe("Palace docs", () => {
     });
     const { runtime } = await agent.open();
 
-    await (await runtime.submit(said.input("m1", "hello"))).settled();
+    await (await runtime.submit("hello", { requestId: "m1" })).settled();
 
     agent.provider.assertComplete();
   });

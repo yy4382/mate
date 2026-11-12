@@ -23,7 +23,7 @@ import { WorkspacePathSchema, type WorkspaceListing } from "@palace/node-protoco
 import { z } from "zod";
 import { AdminError, parseInput } from "./admin-error.ts";
 import { AdminStore } from "./store.ts";
-import { webhookContent, webhookPlugin } from "./webhook-plugin.ts";
+import { renderWebhookContent, webhookPlugin } from "./webhook-plugin.ts";
 import { gatewayWorkspaces } from "./workspaces.ts";
 
 /** The providers Palace offers. Their models come from pi-ai's catalog. */
@@ -377,19 +377,17 @@ export class Admin {
       .toISOString()
       .replace("T", " ")
       .replace(/\.\d+Z$/, " UTC");
-    const delivery = webhookContent.input(`${webhook.id}:${key ?? randomUUID()}`, {
-      name: webhook.name,
-      id: webhook.id,
-      at,
-      text,
-    });
+    const requestId = `webhook:${webhook.id}:${key ?? randomUUID()}`;
+    const content = renderWebhookContent({ name: webhook.name, id: webhook.id, at, text });
     try {
-      await this.#whileOpen(webhook.agentId, (runtime) => runtime.submit(delivery));
+      await this.#whileOpen(webhook.agentId, (runtime) =>
+        runtime.submit(content, { requestId, whenBusy: "steer" }),
+      );
     } catch (error) {
       if (error instanceof AdminError && error.reason === "unknown-agent") throw invalidWebhook();
       throw error;
     }
-    return { requestId: delivery.requestId };
+    return { requestId };
   }
 
   // ── Providers and models ────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { FakeClock } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
-import { defaultSettings, testAgent, said } from "./support.ts";
+import { defaultSettings, testAgent } from "./support.ts";
 
 describe("reminders", () => {
   it("delivers a reminder that comes due while the Agent is idle", async () => {
@@ -19,7 +19,7 @@ describe("reminders", () => {
         request.text("noted");
       });
     const { runtime } = await agent.open();
-    await (await runtime.submit(said.input("m1", "set a reminder"))).settled();
+    await (await runtime.submit("set a reminder", { requestId: "m1" })).settled();
 
     clock.advance(5 * 60_000 + 1);
     await agent.provider.received(3);
@@ -40,7 +40,7 @@ describe("reminders", () => {
       })
       .step("ack", (request) => request.text("set"));
     const first = await agent.open();
-    await (await first.runtime.submit(said.input("m1", "set it"))).settled();
+    await (await first.runtime.submit("set it", { requestId: "m1" })).settled();
     await first.runtime.close();
 
     clock.advance(2 * 60_000);
@@ -69,7 +69,7 @@ describe("reminders", () => {
       })
       .step("ack", (request) => request.text("set"));
     const first = await agent.open();
-    await (await first.runtime.submit(said.input("m1", "set it"))).settled();
+    await (await first.runtime.submit("set it", { requestId: "m1" })).settled();
 
     // The reminder fires, and the process dies before it can clear the reminder from its own store.
     agent.provider.step("fired", (request) => {
@@ -116,7 +116,7 @@ describe("reminders", () => {
       })
       .step("ack", (request) => request.text("cancelled"));
     const { runtime } = await agent.open();
-    await (await runtime.submit(said.input("m1", "set then cancel"))).settled();
+    await (await runtime.submit("set then cancel", { requestId: "m1" })).settled();
 
     clock.advance(15 * 60_000);
     await runtime.idle();
@@ -143,7 +143,7 @@ describe("reminders", () => {
         request.text("done");
       });
     const { runtime } = await agent.open();
-    const input = await runtime.submit(said.input("m1", "set the reminder while I work"));
+    const input = await runtime.submit("set the reminder while I work", { requestId: "m1" });
 
     // The reminder is set in process; the command is the only call that reaches the workspace.
     const command = await agent.workspace.nextCall();
