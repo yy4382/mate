@@ -38,7 +38,7 @@
 
 ## 入站 webhook
 
-外部系统（CI、监控、别的 bot）把一条消息直接交给某个 Agent 并唤醒它。它不是聊天消息，不经过聊天 app，人类看不到也不推送，管理员在观察界面看到。`deliverWebhook` 用 webhook 输入种类生成输入，对打开的 Agent 调 `runtime.submit(input)`，和连接器、提醒是同一个入口。
+外部系统（CI、监控、别的 bot）把一条消息直接交给某个 Agent 并唤醒它。它不是聊天消息，不经过聊天 app，人类看不到也不推送，管理员在观察界面看到。`deliverWebhook` 渲染内容，对打开的 Agent 调 `runtime.submit(content, { requestId, whenBusy: "steer" })`，和连接器、提醒是同一个入口。
 
 Durable 的输入不带元数据，所以发送者写进内容：
 
@@ -48,11 +48,11 @@ Durable 的输入不带元数据，所以发送者写进内容：
 </external_webhook_content>
 ```
 
-这些都在 `src/webhook-plugin.ts` 一处：webhook 输入种类（`webhook`，`steer`，渲染和转义）、说明标签含义的那一句（种类的 `explain`），以及插件本身（名字 `webhook-content`，只有主对话）。名字存在助手对话的配置里，不能改。管理模块打开 Agent Manager 时把这个插件交给它，装进每个 Agent。按需文档 `docs/webhooks.md` 也在本包，随插件交给 runtime，`package.json` 导出 `./package.json` 以便找到它；部署时它随包一起进镜像。
+这些都在 `src/webhook-plugin.ts` 一处：渲染和转义（`renderWebhookContent`）、说明标签含义的那一句（插件的 `prompt`），以及插件本身（名字 `webhook-content`，只有主对话）。名字存在助手对话的配置里，不能改。管理模块打开 Agent Manager 时把这个插件交给它，装进每个 Agent。按需文档 `docs/webhooks.md` 也在本包，随插件交给 runtime，`package.json` 导出 `./package.json` 以便找到它；部署时它随包一起进镜像。
 
-标签和转义只由这个输入种类写。名字和正文里的 `&`、`<`、`>` 都转义（属性里再转义引号和控制字符），所以外部内容关不掉标签，也加不进属性。名字由管理员设定，可信；正文的权威不超过管理员给这个 webhook 的。系统提示只有一段说明标签的含义，接口细节在按需文档里。
+标签和转义只由 `renderWebhookContent` 写。名字和正文里的 `&`、`<`、`>` 都转义（属性里再转义引号和控制字符），所以外部内容关不掉标签，也加不进属性。名字由管理员设定，可信；正文的权威不超过管理员给这个 webhook 的。系统提示只有一段说明标签的含义，接口细节在按需文档里。
 
-- **幂等。** `requestId` 是 `webhook:<webhookId>:<Idempotency-Key>`（种类名 `webhook` 加 key），没有 key 时用随机 UUID。同一个 key 只有第一次生效，key 不过期。
+- **幂等。** `requestId` 是 `webhook:<webhookId>:<Idempotency-Key>`，没有 key 时用随机 UUID。同一个 key 只有第一次生效，key 不过期。
 - **密钥。** 32 字节随机数的 base64url，只在创建和轮换时返回一次，库里只存 SHA-256，用 `timingSafeEqual` 比较。未知 webhook、错误密钥和 Agent 已删除的 webhook 都回 `invalid-webhook`；未知 ID 也对占位哈希做同样的比较，所以响应时间不泄露 ID 是否存在。
 - **大小。** `text` 1 字节到 32 KiB。路由的请求体上限是 32 KiB 的 6 倍加 1 KiB，因为 JSON 最多把一个字节写成 6 字节，合法的文字一定放得下。请求体形状在密钥通过之后才检查。
 - **Agent 关闭时**回 `agent-closed`，不排队。和删除 Agent 并发时，结果取决于谁先，每种结果都不留下任何东西。删除 Agent 后一并删除它的 webhook。

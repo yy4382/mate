@@ -28,7 +28,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palac
 1. **每个事实只有一个主人。** runtime 的状态只存在该 Agent 的 Durable 存储里，聊天的状态只存在聊天 app 的数据库里，两边不互相镜像，也就不需要跨库对账。
 2. **跨边界只靠幂等 ID。** 一次跨模块调用如果可能被重复，就带一个稳定的 ID（事件 ID、工具调用 ID、客户端生成的请求 ID）。接收方按这个 ID 去重：同一个 ID 只生效一次，重复调用返回第一次的结果。
 3. **状态用结构表示，不用标记表示。** "这个 Agent 存在"等于"它的文件存在"。一个 Agent 要么打开（有 runtime），要么关闭，没有第三种状态。"已暂停"只是关闭的 Agent 在自己文件里留的一条记录，让它重启后仍然关闭；这条记录只在 Agent 关闭时读写，所以不存在一个和已打开的 runtime 并存、需要保持一致的标记。
-4. **每类事情只有一个入口。** runtime 接收外界输入只有一种方式：由某个输入种类生成输入，提交到 Durable 收件箱。通知、webhook、提醒、助手汇报都走这一条路，没有不经过输入种类的字符串入口。
+4. **每类事情只有一个入口。** runtime 接收外界输入只有一种方式：提交到 Durable 收件箱。通知、webhook、提醒、助手汇报都走这一条路。
 
 第 9 节逐条列出旧问题，以及新结构为什么让它们不可能出现。
 
@@ -73,7 +73,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palac
 | 包 | 内容 |
 |---|---|
 | `packages/chat`（`@palace/chat`） | 聊天 app |
-| `packages/agent-plugin`（`@palace/agent-plugin`） | Agent 插件契约：插件和输入种类。一个能力的工具、提示、输入和文档在拥有它的包里用插件交给 runtime |
+| `packages/agent-plugin`（`@palace/agent-plugin`） | Agent 插件契约。一个能力的工具、系统提示和文档在拥有它的包里用插件交给 runtime |
 | `packages/runtime`（`@palace/runtime`） | Agent runtime：内置扩展，并装入各包交来的插件 |
 | `packages/manager`（`@palace/manager`） | Agent Manager、连接器和聊天插件 |
 | `packages/node-protocol`（`@palace/node-protocol`） | 网关与 node 之间的消息格式，包括工具名和工具结果的形状 |
@@ -96,7 +96,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palac
 | 模块 | 管什么 | 文档 |
 | --- | --- | --- |
 | 聊天 app | 账号、会话、时间线、已读位置、任务、收件事件、实时事件和推送队列。不知道 runtime 存在，Agent 在它眼里只是一种账号 | [packages/chat](../packages/chat/ARCHITECTURE.md) |
-| Agent 插件契约 | 插件和输入种类：一个能力在拥有它的包里增删，不改 runtime | [packages/agent-plugin](../packages/agent-plugin/ARCHITECTURE.md) |
+| Agent 插件契约 | 插件：一个能力在拥有它的包里增删，不改 runtime | [packages/agent-plugin](../packages/agent-plugin/ARCHITECTURE.md) |
 | Agent runtime | 一个 Agent 的 Durable Harness 和内置扩展：工作区、提醒、助手、历史，以及后台命令；装入插件，按插件的文档提供按需文档 | [packages/runtime](../packages/runtime/ARCHITECTURE.md) |
 | Agent Manager 和连接器 | 唯一能打开 runtime 的地方，每个 Agent 一条串行队列；聊天插件（聊天工具、聊天系统提示、未读通知）；连接器把收件事件变成通知交给 runtime | [packages/manager](../packages/manager/ARCHITECTURE.md) |
 | Node 网关 | node 的配对、认证、心跳，把整个工具调用转发给 node | [packages/gateway](../packages/gateway/ARCHITECTURE.md) |

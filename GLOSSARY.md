@@ -157,7 +157,7 @@ Agent 派生出来的另一个 Durable 对话，有自己的上下文。它和�
 把一条输入交给这个 Agent 的某个对话的 Durable 后台任务，跑在主对话里。目标是工作助手时，它等助手回答，再把回答作为助手汇报提交给主对话，恰好一次。进入助手对话的输入只走这一条路：主对话发给助手的消息、助手自己的后台命令汇报都是投递。
 
 **收件箱**（inbox）
-Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入都提交到这里：由插件的输入种类生成的输入（通知、webhook）、提醒、助手汇报。Agent 正在运行时，以 steer 方式提交的输入会插在当前这轮工具调用之后。
+Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入都提交到这里：通知、webhook、提醒、助手汇报。Agent 正在运行时，以 steer 方式提交的输入会插在当前这轮工具调用之后。
 
 **run**
 从一条输入开始，到模型给出最终回答为止的这段工作。run 只是 Durable 内部的概念，Palace 不记录它，也不检查它"是否仍然有效"。
@@ -166,11 +166,8 @@ Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入
 装进 Durable 的一组工具和系统提示片段。runtime 的内置能力（工作区、提醒、助手、历史）是扩展；插件装入时也成为一个同名扩展。
 
 **插件**（plugin）
-一个 Agent 能力的纯数据描述，由拥有这个能力的包用 `definePlugin` 交给 runtime：名字、作用范围（只有主对话，或工作助手也有）、系统提示的一段、工具、输入种类和按需文档。聊天是 manager 的插件，webhook 是 admin 的插件。增删一个能力只改这一处，不改 runtime。插件名存进助手对话的配置里，发布后不能改。runtime 自己的内置能力不是插件。
+一个 Agent 能力的纯数据描述，由拥有这个能力的包用 `definePlugin` 交给 runtime：名字、作用范围（只有主对话，或工作助手也有）、系统提示的一段、工具和按需文档。聊天是 manager 的插件，webhook 是 admin 的插件。增删一个能力只改这一处，不改 runtime。插件名存进助手对话的配置里，发布后不能改。runtime 自己的内置能力不是插件。
 避免：把内置扩展也叫插件。
-
-**输入种类**（input kind）
-插件声明的一种输入，由 `defineInput` 定义：系统提示里关于它的一句说明（`explain`）、把载荷变成文字的渲染、requestId 的命名空间（`<种类名>:<key>`）、Agent 忙时是 `steer` 还是 `followUp`、是否撤回同种类未交付的旧输入。`AgentRuntime.submit` 只收种类生成的输入，所以一种输入不可能没有说明就进到 Agent。
 
 **可重做**（replay-safe）
 声明了 `replay: "safe"` 的工具，崩溃后会被重新执行。只有只读的工具，或者按 requestId 幂等的工具才能这样声明。
@@ -293,7 +290,7 @@ Agent 把一次工具调用送到已授权的非主 node，在该 node 上自己
 管理模块判断的主 node 或访问关系，主 node 为 `home`，获准访问的非主 node 为 `visit`，经网关交给 node。两者使用相同的 Agent 工作区路径，但主工作区只显式初始化，访问工作区的准备不初始化 MEMORY.md。
 
 **Palace 文档**（Palace docs）
-拥有该功能的包里的 `docs/<topic>.md`（如 `packages/admin/docs/webhooks.md`），由它的插件交给 runtime：讲某个 Palace 功能怎么工作的、写给模型的英文文档，每个主题一个文件，front matter 的 `description` 是索引里的一行。Agent 用 `palace_docs({ topic })` 按需阅读，不进系统提示；工具描述就是索引。Agent 为读懂收到的东西而必须知道的（如 webhook 标签的含义）不在这里，留在提示或输入种类的说明里。
+拥有该功能的包里的 `docs/<topic>.md`（如 `packages/admin/docs/webhooks.md`），由它的插件交给 runtime：讲某个 Palace 功能怎么工作的、写给模型的英文文档，每个主题一个文件，front matter 的 `description` 是索引里的一行。Agent 用 `palace_docs({ topic })` 按需阅读，不进系统提示；工具描述就是索引。Agent 为读懂收到的东西而必须知道的（如 webhook 标签的含义）不在这里，留在插件的提示里。
 避免：把它叫"技能"（skill）：Palace 没有技能机制；也不是用户手册。
 
 **node 授权**（node grant）

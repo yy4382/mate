@@ -29,12 +29,11 @@
 
 ## 插件
 
-契约在 [`@palace/agent-plugin`](../agent-plugin/ARCHITECTURE.md)。runtime 把每个插件装成一个同名的 Durable 扩展：它的工具，加一段以插件名为键的系统提示，内容是 `prompt` 接上每个输入种类的 `explain`。
+契约在 [`@palace/agent-plugin`](../agent-plugin/ARCHITECTURE.md)。runtime 把每个插件装成一个同名的 Durable 扩展：它的工具，加一段以插件名为键的系统提示，内容就是 `prompt`。
 
 - **一张表。** 内置扩展和插件按安装顺序放在同一张 `{ extension, scope }` 的表里，安装顺序就是系统提示里各段的顺序。主对话专属的集合从 `scope` 过滤得到，没有另一份手写的列表。顺序是：工作区、历史、文档、助手、提醒、空闲压缩、插件（按传入顺序）、助手身份。
-- **打开时检查，不合格就打不开。** 插件名不能重复，也不能和内置扩展同名（Durable 的安装会悄悄替换同名扩展）；输入种类名不能重复，也不能和 runtime 自己提交的 requestId 前缀（`reminder`、`assistant`、`assistant-report`、`command`、`idle-summary`、`idle-compaction`）同名；两个插件不能提供同名文档主题。这些前缀集中在 `plugins.ts`，runtime 自己的提交都经 `builtinRequestId` 生成 requestId。
+- **打开时检查，不合格就打不开。** 插件名不能重复，也不能和内置扩展同名（Durable 的安装会悄悄替换同名扩展）；两个插件不能提供同名文档主题。
 - **助手看不到主对话专属插件。** 助手的对话在派生时存下"这些扩展它没有"，存的是扩展名，所以插件名不能改。Durable 选扩展是"已装入的减去存下的"，所以派生之后才装入的主对话专属插件，若不处理就会漏到老助手里。因此打开 runtime 时、`resume()` 之前（此时没有任何 run 在跑），把每个助手存下的集合对齐到当前的主对话专属集合，只改不一致的；插件没变时集合一致，不写任何东西，系统提示不变。`palace_docs` 是内置的，不论插件的 `scope`，助手都能读所有装入插件的文档主题。
-- **输入只能走 `submit`。** `submit(input)` 只收输入种类生成的 `PluginInput`，它的种类必须是这个 runtime 装入的插件的种类（按对象，不按名字），否则拒绝，什么都不会提交。requestId、`whenBusy` 和是否撤回同种类的未交付输入都由种类决定。
 
 ## 助手投递
 
@@ -53,7 +52,7 @@
 
 ## 按需文档
 
-功能怎么工作（接口、鉴权、幂等、限制）不进系统提示，因为大多数运行用不到。Agent 为读懂输入而必须知道的内容（例如 `<external_webhook_content>` 标签的含义）留在系统提示或输入里，越短越好，由输入种类的 `explain` 说。其余写进拥有这个功能的包的 `docs/<topic>.md`，插件用 `docs` 交给 runtime，Agent 需要时调用 `palace_docs` 读。
+功能怎么工作（接口、鉴权、幂等、限制）不进系统提示，因为大多数运行用不到。Agent 为读懂输入而必须知道的内容（例如 `<external_webhook_content>` 标签的含义）留在系统提示或输入里，越短越好，由插件的 `prompt` 说。其余写进拥有这个功能的包的 `docs/<topic>.md`，插件用 `docs` 交给 runtime，Agent 需要时调用 `palace_docs` 读。
 
 每个主题一个文件，front matter 的 `description` 是索引里的一行。打开 runtime 时从所有装入插件的 `docs` 目录生成 `topic` 的枚举和工具描述里的索引，没有另一份列表；没有任何主题时不提供 `palace_docs`。枚举之外的主题被 Durable 的参数校验拒绝。文档面向模型，用英文写，不含各部署自己的值（例如服务器地址）。
 
@@ -85,7 +84,7 @@
 
 - `createAgentStore(file, { nodeId, settings })` 新建 Agent 文件，node ID 和设置一次写入，之后 node ID 不变。返回时 Agent 就存在了。
 - `openAgentRuntime({ file, credentials, workspace, plugins?, … })` 打开 Harness 并 `resume()`。`credentials(provider)` 在每次模型请求时现读，改了 key 从下一次请求生效。存储出错时调用一次 `onFatal`，之后这个 runtime 失效，要从文件重新打开。
-- `AgentRuntime` 提供 `submit`（只收输入种类生成的输入）、`withdraw`、`cursor` / `advanceCursor`（只进不退）、`configure`、`settings`、`idle`、`usage`、`assistants`、`watchEvents`（只读观察）和 `close`。
+- `AgentRuntime` 提供 `submit`（可带 `replaces` 撤回同前缀的未交付输入）、`withdraw`、`cursor` / `advanceCursor`（只进不退）、`configure`、`settings`、`idle`、`usage`、`assistants`、`watchEvents`（只读观察）和 `close`。
 - 在没打开 runtime 的文件上：`readAgentState`、`setAgentPaused`、`configureAgentFile`，只给 Manager 处理关闭状态的 Agent 用。
 - `catalogModels(provider)` 读 pi-ai 模型目录。
 
