@@ -4,7 +4,7 @@
 
 ## 职责
 
-让一个 Agent 的能力在一处增删：谁拥有这个能力，谁就在自己的包里用一个插件交出它的工具、系统提示、输入种类和按需文档，runtime 不用改。包里只有契约，没有运行时逻辑；它只依赖 Durable 的 `ToolRegistration` 类型。
+让一个 Agent 的能力在一处增删：谁拥有这个能力，谁就在自己的包里用一个插件交出它的工具、系统提示、输入种类和按需文档，runtime 不用改。包里只有契约，没有运行时逻辑；它只依赖 Durable 的 `ToolRegistration` 类型，`packageDocs` 用 `node:path` 和 `node:url`，所以只在 Node 里用。
 
 ## 插件
 

@@ -137,6 +137,8 @@ describe("plugins", () => {
       agent.open({ plugins: [named("one", beacon), named("two", sameKind)] }),
     ).rejects.toThrow(/beacon/);
     await expect(agent.open({ plugins: [named("reminders")] })).rejects.toThrow(/reminders/);
+    // The identity section's key: an assistant would lose this plugin's section to it.
+    await expect(agent.open({ plugins: [named("assistant")] })).rejects.toThrow(/assistant/);
     await expect(agent.open({ plugins: [named("one", reminderKind)] })).rejects.toThrow(/reminder/);
   });
 

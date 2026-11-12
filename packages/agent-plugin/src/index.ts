@@ -28,19 +28,16 @@ export interface InputKind<Payload> {
   input(key: string, payload: Payload): PluginInput;
 }
 
-const TOKEN = Symbol("PluginInput");
-
 /**
  * An input rendered by an `InputKind`, and only by one: `AgentRuntime.submit` takes nothing else, so no input can
- * reach an Agent without a kind that explains it. `#kind` makes the type nominal.
+ * reach an Agent without a kind that explains it. Only the type is exported, and `#kind` makes it nominal.
  */
-export class PluginInput {
+class PluginInput {
   readonly #kind: InputKind<never>;
   readonly requestId: string;
   readonly content: string;
 
-  constructor(token: symbol, kind: InputKind<never>, requestId: string, content: string) {
-    if (token !== TOKEN) throw new Error("make a PluginInput with InputKind.input");
+  constructor(kind: InputKind<never>, requestId: string, content: string) {
     this.#kind = kind;
     this.requestId = requestId;
     this.content = content;
@@ -50,6 +47,8 @@ export class PluginInput {
     return this.#kind;
   }
 }
+
+export type { PluginInput };
 
 export function defineInput<Payload>(spec: {
   readonly name: string;
@@ -69,7 +68,7 @@ export function defineInput<Payload>(spec: {
     whenBusy: spec.whenBusy,
     replacesQueued: spec.replacesQueued ?? false,
     input: (key, payload) =>
-      new PluginInput(TOKEN, kind as InputKind<never>, `${spec.name}:${key}`, spec.render(payload)),
+      new PluginInput(kind as InputKind<never>, `${spec.name}:${key}`, spec.render(payload)),
   };
   return kind;
 }

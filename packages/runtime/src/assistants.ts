@@ -201,6 +201,9 @@ function textOf(message: unknown): string {
  * assistant's stored exclusion to the current primary-only set; an assistant that already has it is left alone, so
  * reopening with the same plugins changes no prompt.
  */
+/** The key of the section that tells an assistant who it is. Durable keys sections across extensions. */
+export const IDENTITY_SECTION = "assistant";
+
 export async function reconcileAssistants(
   harness: Harness,
   root: Conversation,
@@ -308,7 +311,7 @@ export function assistants(primaryOnly: () => readonly Extension[]) {
     },
   });
 
-  const identity = section("assistant", async (input, context) => {
+  const identity = section(IDENTITY_SECTION, async (input, context) => {
     const name = (await input.read.snapshot(AssistantIdentityDoc, input.conversationId, context))
       ?.assistant?.name;
     return name === undefined

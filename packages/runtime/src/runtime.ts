@@ -12,7 +12,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { AgentStateDoc, type AgentUsage } from "./agent-state.ts";
-import { AssistantsDoc, assistants, reconcileAssistants } from "./assistants.ts";
+import { AssistantsDoc, IDENTITY_SECTION, assistants, reconcileAssistants } from "./assistants.ts";
 import type { InputKind, Plugin, PluginInput } from "@palace/agent-plugin";
 import { systemClock, type Clock } from "@palace/clock";
 import { DOCS_EXTENSION, docsExtension } from "./docs.ts";
@@ -111,7 +111,8 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     options.plugins ?? [],
     [workspace, historyExtension, assistantsPrimary, remindersExtension, assistantsIdentity]
       .map(({ name }) => name)
-      .concat(DOCS_EXTENSION),
+      // A plugin's name is also its section key, so it must not take the identity section's either.
+      .concat(DOCS_EXTENSION, IDENTITY_SECTION),
   );
   const docs = docsExtension(installed.topics);
   // The install order is the order of the prompt's sections.
@@ -143,9 +144,16 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     },
     BACKGROUND_CONTEXT,
   );
-  const root = await harness.root(BACKGROUND_CONTEXT);
+  let root: Conversation;
+  try {
+    root = await harness.root(BACKGROUND_CONTEXT);
+    await reconcileAssistants(harness, root, primaryOnly());
+  } catch (error) {
+    lifetime.end();
+    await harness.close(BACKGROUND_CONTEXT).catch(() => undefined);
+    throw error;
+  }
   const runtime = new AgentRuntime(harness, storage, root, lifetime, installed.kinds);
-  await reconcileAssistants(harness, root, primaryOnly());
   harness.resume();
   // Run the reminder loop in the background; it exits when the lifetime ends.
   void runReminders(harness, root);

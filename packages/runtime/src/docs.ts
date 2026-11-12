@@ -45,8 +45,8 @@ export function docsExtension(topics: readonly Topic[]) {
         parameters: Type.Object({ topic: Type.String({ enum: [...files.keys()] }) }),
         replay: "safe",
         async execute({ topic }) {
-          const file = files.get(topic);
-          if (file === undefined) throw new Error(`no docs topic ${topic}`);
+          // Durable validates `topic` against the enum before execute runs.
+          const file = files.get(topic)!;
           return { content: [{ type: "text", text: await readFile(file, "utf8") }] };
         },
       }),
