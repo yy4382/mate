@@ -104,9 +104,12 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
     capabilities.filter(({ scope }) => scope === "primary").map(({ extension }) => extension);
   const { primary: assistantsPrimary, identity: assistantsIdentity } = assistants(primaryOnly);
   const { extension: remindersExtension, run: runReminders } = reminders(clock, lifetime.signal);
+  const models = agentModels(options.credentials, options.resolveModel, lifetime.signal);
   const { extension: idleExtension, run: runIdleCompaction } = idleCompaction(
     clock,
-    lifetime.signal,
+    lifetime,
+    models,
+    compaction,
   );
   // `harness` exists by the time a tool runs: no task is scheduled before `resume()`.
   const workspace = workspaceExtension(options.workspace, lifetime.signal, (id, context) =>
@@ -151,7 +154,7 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
   const harness = await Harness.open(
     storage,
     {
-      models: agentModels(options.credentials, options.resolveModel, lifetime.signal),
+      models,
       registry,
       settings: { toolExecution: "sequential", compaction },
     },

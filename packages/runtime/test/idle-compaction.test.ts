@@ -16,32 +16,50 @@ import type { AgentRuntime, AgentSettings } from "../src/index.ts";
 /** In pi-ai's catalog, on the Responses API the scripted provider speaks. Its idle delay is 25 minutes. */
 const sol: AgentSettings = { model: { provider: "openai", modelId: "gpt-6.1-sol" } };
 const MINUTE = 60_000;
-/**
- * pi-ai stamps an answer with the wall clock at its request's start, and the fake clock starts at the wall clock, so a
- * few seconds past the delay is past it for any answer of the test.
- */
+/** Past a delay counted from the first answer, and so from a later answer of the same test too. */
 const PAST = 5_000;
 const CHECKPOINT =
   "CHECKPOINT: the build failed on the disk quota of /var/build; next, free space.";
 
 /**
- * An Agent on gpt-6.1-sol that checked the build, its answer read `tokens` of input. Durable's summarizer requests go
- * to `summaries`, which has no steps: any request there fails `assertComplete()`.
+ * An Agent on gpt-6.1-sol that checked the build, its answer read `tokens` of input and ended in `padding`. Durable's
+ * summarizer requests go to `summaries`, which has no steps: any request there fails `assertComplete()`.
  */
-async function idleAgent(tokens = 200_000, settings: AgentSettings = sol) {
+async function idleAgent(tokens = 200_000, settings: AgentSettings = sol, padding = "") {
   const clock = new FakeClock(Date.now());
   const agent = await testAgent(settings, { clock });
   agent.workspace.answerAll(() => text("hi"));
   agent.provider.step("answers", (request) =>
-    request.text("The build failed: disk quota exceeded on /var/build.", { inputTokens: tokens }),
+    request.text(`The build failed: disk quota exceeded on /var/build.${padding}`, {
+      inputTokens: tokens,
+    }),
   );
   agent.provider.lane("summaries", (request) => request.toolNames().length === 0);
   const first = await agent.open();
   await (await first.runtime.submit(said.input("m1", "check the build"))).settled();
-  // The reminder loop and the idle compaction loop both asleep: nothing more happens until time moves or input comes.
-  const resting = () => clock.sleeping(2);
+  // Every timer loop asleep: nothing more happens until time moves or input comes.
+  const resting = () => clock.resting();
   await resting();
-  return { agent, clock, first, resting };
+  const answered = await answeredAt(first.runtime);
+  /** Move the clock to `ms` after the answer's request started. */
+  const idleFor = (ms: number) => clock.advance(answered + ms - clock.now());
+  return { agent, clock, first, resting, idleFor };
+}
+
+/** pi-ai stamps an answer with the wall clock at its request's start, which is when the provider cached it. */
+async function answeredAt(runtime: AgentRuntime): Promise<number> {
+  let stamp: number | undefined;
+  const watch = await runtime.watchEvents((events) => {
+    for (const event of events)
+      if (event.type === "snapshot")
+        for (const entry of event.entries) {
+          const [message] = entry.model ?? [];
+          if (message?.role === "assistant") stamp = message.timestamp;
+        }
+  });
+  await watch.stop();
+  if (stamp === undefined) throw new Error("no answer to count the idle time from");
+  return stamp;
 }
 
 const requestOf = (agent: TestAgent, step: string): ScriptedRequest => {
@@ -91,7 +109,7 @@ const HistoryPage = z.object({
 
 describe("idle compaction", () => {
   it("asks an idle Agent over 200k tokens for a checkpoint that continues its cached request, then works on from that checkpoint", async () => {
-    const { agent, clock, first } = await idleAgent();
+    const { agent, first, idleFor } = await idleAgent();
     agent.provider.step("checkpoint", (request) => {
       const answered = requestOf(agent, "answers").body;
       expect(request.body.instructions, "the same instructions").toEqual(answered.instructions);
@@ -131,7 +149,7 @@ describe("idle compaction", () => {
       });
 
     const compacted = compaction(first.runtime);
-    clock.advance(25 * MINUTE + PAST);
+    idleFor(25 * MINUTE + PAST);
     await compacted;
     await (await first.runtime.submit(said.input("m2", "what next?"))).settled();
 
@@ -146,18 +164,26 @@ describe("idle compaction", () => {
     ["its last request read less than 200k tokens", () => idleAgent(199_999), 25 * MINUTE + PAST],
     ["the delay has not passed", () => idleAgent(), 24 * MINUTE],
     ["its model has no idle delay", () => idleAgent(200_000, defaultSettings), 25 * MINUTE + PAST],
+    [
+      // gpt-6.1-sol's 272k window, less Durable's reserve and background tokens, leaves 222,848. The answer's 222,810
+      // tokens and a short input stay under it, the checkpoint prompt passes it; the long answer leaves Durable the
+      // 20k recent tokens it keeps, so it would start its uncached summarizer alongside the checkpoint request.
+      "its checkpoint request would start Durable's background compaction",
+      () => idleAgent(222_800, sol, " x".repeat(40_000)),
+      25 * MINUTE + PAST,
+    ],
   ];
   it.each(quiet)("asks nothing when %s", async (_when, open, idle) => {
-    const { agent, clock, first, resting } = await open();
-    clock.advance(idle);
+    const { agent, first, resting, idleFor } = await open();
+    idleFor(idle);
     await resting();
     await expectContextKept(agent, first.runtime);
   });
 
   it("asks nothing when the Agent's model changed since its last request", async () => {
-    const { agent, clock, first, resting } = await idleAgent();
+    const { agent, first, resting, idleFor } = await idleAgent();
     await first.runtime.configure(defaultSettings);
-    clock.advance(25 * MINUTE + PAST);
+    idleFor(25 * MINUTE + PAST);
     await resting();
     agent.provider.step("works on", (request) => {
       // gpt-4.1 takes the prompt as a system message where gpt-6.1-sol takes a developer one, so only inputs compare.
@@ -169,23 +195,23 @@ describe("idle compaction", () => {
   });
 
   it("asks nothing when the Agent is reopened after its cache is gone", async () => {
-    const { agent, clock, first } = await idleAgent();
+    const { agent, first, resting, idleFor } = await idleAgent();
     await first.runtime.close();
-    clock.advance(31 * MINUTE);
+    idleFor(31 * MINUTE);
     const second = await agent.open();
-    await clock.sleeping(2);
+    await resting();
     await expectContextKept(agent, second.runtime);
   });
 
   it("keeps counting the delay from the last request across a close and reopen", async () => {
-    const { agent, clock, first } = await idleAgent();
-    clock.advance(20 * MINUTE);
+    const { agent, first, idleFor } = await idleAgent();
+    idleFor(20 * MINUTE);
     await first.runtime.close();
     agent.provider.step("checkpoint", (request) => request.text(CHECKPOINT));
     const second = await agent.open();
     const compacted = compaction(second.runtime);
 
-    clock.advance(5 * MINUTE + PAST);
+    idleFor(25 * MINUTE + PAST);
 
     await compacted;
     expect(agent.provider.requests.map(({ step }) => step)).toEqual(["answers", "checkpoint"]);
@@ -193,7 +219,7 @@ describe("idle compaction", () => {
   });
 
   it("asks only after a run in progress at the delay ends, continuing that run's request", async () => {
-    const { agent, clock, first } = await idleAgent();
+    const { agent, first, idleFor } = await idleAgent();
     const release = Promise.withResolvers<void>();
     agent.provider.step("long run", async (request) => {
       await release.promise;
@@ -209,7 +235,7 @@ describe("idle compaction", () => {
     await within(2000, "the long run's request", agent.provider.received(2));
     const compacted = compaction(first.runtime);
 
-    clock.advance(25 * MINUTE + PAST);
+    idleFor(25 * MINUTE + PAST);
     release.resolve();
 
     await compacted;
@@ -237,9 +263,9 @@ describe("idle compaction", () => {
   it.each(declined)(
     "compacts nothing, and never asks again, when the checkpoint answer %s",
     async (_when, script) => {
-      const { agent, clock, first, resting } = await idleAgent();
+      const { agent, clock, first, resting, idleFor } = await idleAgent();
       script(agent);
-      clock.advance(25 * MINUTE + PAST);
+      idleFor(25 * MINUTE + PAST);
       await within(2000, "the checkpoint request", agent.provider.received(2));
       await first.runtime.idle();
       await resting();
@@ -265,7 +291,7 @@ describe("idle compaction", () => {
   );
 
   it("asks once and still compacts when the process dies between the checkpoint answer and the compaction", async () => {
-    const { agent, clock, first } = await idleAgent();
+    const { agent, first, idleFor } = await idleAgent();
     agent.provider.step("checkpoint", (request) => request.text(CHECKPOINT));
     const died = first
       .database()
@@ -275,7 +301,7 @@ describe("idle compaction", () => {
           params.some((param) => typeof param === "string" && param.includes(CHECKPOINT)),
       );
 
-    clock.advance(25 * MINUTE + PAST);
+    idleFor(25 * MINUTE + PAST);
     await within(2000, "the checkpoint answer's commit", died);
 
     const second = await agent.open();
@@ -295,7 +321,7 @@ describe("idle compaction", () => {
   });
 
   it("answers a real input that arrives during the checkpoint request after it, and compacts with that input kept", async () => {
-    const { agent, clock, first } = await idleAgent();
+    const { agent, first, idleFor } = await idleAgent();
     agent.provider
       .step("checkpoint", async (request) => {
         await first.runtime.submit(said.input("m2", "and the tests?"));
@@ -308,7 +334,7 @@ describe("idle compaction", () => {
       });
     const compacted = compaction(first.runtime);
 
-    clock.advance(25 * MINUTE + PAST);
+    idleFor(25 * MINUTE + PAST);
     await compacted;
     await first.runtime.idle();
     agent.provider.step("works from the checkpoint", (request) => {

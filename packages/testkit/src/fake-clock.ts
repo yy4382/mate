@@ -6,7 +6,9 @@ type Sleeper = { readonly at: number; readonly wake: () => void };
 export class FakeClock implements Clock {
   #now: number;
   #sleepers: Sleeper[] = [];
-  #waiters: { readonly count: number; readonly resolve: () => void }[] = [];
+  /** Sleeps that ended, by deadline or abort, with no new sleep since to show their loop came back to rest. */
+  #awake = 0;
+  #waiters: (() => void)[] = [];
 
   constructor(start = Date.UTC(2026, 0, 1, 9, 0, 0)) {
     this.#now = start;
@@ -17,11 +19,16 @@ export class FakeClock implements Clock {
   }
 
   sleep(ms: number | undefined, signal: AbortSignal): Promise<void> {
+    if (this.#awake > 0) this.#awake--;
     return new Promise((resolve) => {
-      if (signal.aborted) return resolve();
+      if (signal.aborted) {
+        this.#awake++;
+        return resolve();
+      }
       const wake = () => {
         this.#sleepers = this.#sleepers.filter((item) => item !== sleeper);
         signal.removeEventListener("abort", wake);
+        this.#awake++;
         resolve();
       };
       const sleeper = { at: ms === undefined ? Infinity : this.#now + Math.max(0, ms), wake };
@@ -32,20 +39,26 @@ export class FakeClock implements Clock {
   }
 
   /**
-   * Resolve once at least `count` sleeps are pending: every timer loop of the code under test has come to rest. A test
-   * that expects nothing to happen waits for this instead of for wall-clock time.
+   * Resolve once a sleep is pending and every sleep that ended has been followed by a new one: each timer loop of the
+   * code under test that the clock woke has come to rest again, however many loops there are. A test that expects
+   * nothing to happen waits for this instead of for wall-clock time.
    */
-  sleeping(count: number): Promise<void> {
-    if (this.#sleepers.length >= count) return Promise.resolve();
+  resting(): Promise<void> {
+    if (this.#rested()) return Promise.resolve();
     const waiter = Promise.withResolvers<void>();
-    this.#waiters.push({ count, resolve: waiter.resolve });
+    this.#waiters.push(waiter.resolve);
     return waiter.promise;
   }
 
+  #rested(): boolean {
+    return this.#awake === 0 && this.#sleepers.length > 0;
+  }
+
   #notify(): void {
-    const due = this.#waiters.filter((waiter) => waiter.count <= this.#sleepers.length);
-    this.#waiters = this.#waiters.filter((waiter) => !due.includes(waiter));
-    for (const waiter of due) waiter.resolve();
+    if (!this.#rested()) return;
+    const waiters = this.#waiters;
+    this.#waiters = [];
+    for (const resolve of waiters) resolve();
   }
 
   /** Move time forward and wake every sleeper that is now due. */

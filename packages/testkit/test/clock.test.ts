@@ -57,14 +57,18 @@ describe.each(clocks)("%s", (_name, make) => {
 });
 
 describe("the fake clock", () => {
-  it("tells when a number of sleeps are pending, counting only those not yet woken", async () => {
+  it("tells when every sleep it ended has been followed by a new one", async () => {
     const clock = new FakeClock();
-    const resting = clock.sleeping(2);
+    expect(await settledSoon(clock.resting()), "nothing sleeps yet").toBe(false);
     void clock.sleep(undefined, new AbortController().signal);
-    void clock.sleep(1_000, new AbortController().signal);
-    expect(await settledSoon(resting), "two sleeps pending").toBe(true);
+    const woken = new AbortController();
+    void clock.sleep(1_000, woken.signal);
+    expect(await settledSoon(clock.resting()), "two sleeps pending").toBe(true);
     clock.advance(1_000);
-    expect(await settledSoon(clock.sleeping(2)), "one was woken").toBe(false);
-    expect(await settledSoon(clock.sleeping(1)), "one still sleeps").toBe(true);
+    woken.abort();
+    const resting = clock.resting();
+    expect(await settledSoon(resting), "one was woken").toBe(false);
+    void clock.sleep(1_000, new AbortController().signal);
+    expect(await settledSoon(resting), "and slept again").toBe(true);
   });
 });

@@ -1,5 +1,9 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, Models } from "@earendil-works/pi-ai";
+import {
+  calculateContextTokens,
+  estimateMessageTokens,
+} from "@earendil-works/pi-ai/utils/estimate";
 import {
   AssistantEntry,
   CompactionEntry,
@@ -9,6 +13,7 @@ import {
   UserEntry,
   defineExtension,
   hook,
+  type CompactionPolicy,
   type Conversation,
   type EntryId,
   type EntryRecord,
@@ -16,6 +21,7 @@ import {
   type SubmissionRecord,
 } from "@earendil-works/pi-durable";
 import type { Clock } from "@palace/clock";
+import type { Lifetime } from "./lifetime.ts";
 import { builtinRequestId } from "./plugins.ts";
 
 const MINUTE = 60_000;
@@ -57,6 +63,10 @@ type Observation = {
   readonly asked: boolean;
   /** The compaction starting at `last` was already admitted. */
   readonly compacted: boolean;
+  /** Durable's estimate of the checkpoint request: the last request's tokens, what came after it, and the prompt. */
+  readonly checkpointTokens: number;
+  /** Above how many tokens Durable starts its own summarizer before a request to `next`; undefined when it never does. */
+  readonly summarizesAbove: number | undefined;
 };
 
 type Plan =
@@ -80,6 +90,12 @@ function decide(observed: Observation, now: number): Plan {
   if (policy === undefined || next?.provider !== provider || next.modelId !== model)
     return { kind: "off" };
   if (usage.input + usage.cacheRead + usage.cacheWrite < MIN_INPUT_TOKENS) return { kind: "off" };
+  // Durable would summarize uncached alongside the checkpoint request, paying the reread this is meant to save.
+  if (
+    observed.summarizesAbove !== undefined &&
+    observed.checkpointTokens > observed.summarizesAbove
+  )
+    return { kind: "off" };
   // pi-ai stamps an answer with the wall-clock time its request started, which is when the provider cached it.
   if (now < timestamp + policy.compactAt)
     return { kind: "wait", until: timestamp + policy.compactAt };
@@ -91,9 +107,16 @@ function decide(observed: Observation, now: number): Plan {
  * The primary conversation's idle compaction. When it has been idle for its model's delay after a large request, the
  * Agent is asked for a checkpoint summary through an ordinary input, so the request continues the cached prefix; the
  * context then starts at that answer. Install `extension` in the primary conversation only, since an assistant's answer
- * is reported to the primary conversation, and start `run` after `resume()`; it ends when `closing` aborts.
+ * is reported to the primary conversation, and start `run` after `resume()`; it ends with `lifetime`. `models` and
+ * `compaction` are the ones the Harness runs with, so the checkpoint request is measured as Durable measures it.
  */
-export function idleCompaction(clock: Clock, closing: AbortSignal) {
+export function idleCompaction(
+  clock: Clock,
+  lifetime: Lifetime,
+  models: Models,
+  compaction: CompactionPolicy,
+) {
+  const closing = lifetime.signal;
   let wake = new AbortController();
 
   const extension = defineExtension({
@@ -120,8 +143,19 @@ export function idleCompaction(clock: Clock, closing: AbortSignal) {
       const after = view.head?.id ?? Number.NEGATIVE_INFINITY;
       const last = view.entries.findLast((entry) => AssistantEntry.is(entry) && entry.id > after);
       const message = last === undefined ? undefined : answerOf(last);
+      const window = next && models.getModel(next.provider, next.modelId)?.contextWindow;
+      const summarizesAbove =
+        window === undefined ? undefined : summarizerThreshold(window, compaction);
       if (last === undefined || message === undefined)
-        return { next, last: undefined, checkpoint: undefined, asked: false, compacted: false };
+        return {
+          next,
+          last: undefined,
+          checkpoint: undefined,
+          asked: false,
+          compacted: false,
+          checkpointTokens: 0,
+          summarizesAbove,
+        };
       // A checkpoint input is keyed by the answer before it, and its run may hold a tool round before `last`.
       const input = view.entries.findLast((entry) => UserEntry.is(entry) && entry.id < last.id);
       const previous =
@@ -135,12 +169,21 @@ export function idleCompaction(clock: Clock, closing: AbortSignal) {
               (await usable(previous.id, record))
             ? "usable"
             : "declined";
+      const since = view.entries.flatMap((entry, index) =>
+        entry.id > last.id ? (view.contributions[index] ?? []) : [],
+      );
+      const checkpointTokens = [...since, checkpointMessage].reduce(
+        (sum, each) => sum + estimateMessageTokens(each),
+        calculateContextTokens(message.usage),
+      );
       return {
         next,
         last: { id: last.id, message },
         checkpoint,
         asked: (await lookup(builtinRequestId("idle-summary", last.id))) !== undefined,
         compacted: (await lookup(builtinRequestId("idle-compaction", last.id))) !== undefined,
+        checkpointTokens,
+        summarizesAbove,
       };
     }
 
@@ -165,7 +208,7 @@ export function idleCompaction(clock: Clock, closing: AbortSignal) {
         if (error instanceof ConversationBusy) return;
         throw error;
       }
-      const record = await submission.wait(BACKGROUND_CONTEXT);
+      const record = await lifetime.orFailure(submission.wait(BACKGROUND_CONTEXT));
       if (record.type === "input" && record.status === "done" && (await usable(after, record)))
         await compact(record.answer);
     }
@@ -199,7 +242,7 @@ export function idleCompaction(clock: Clock, closing: AbortSignal) {
     while (!closing.aborted) {
       wake = new AbortController();
       try {
-        await root.waitForIdle(BACKGROUND_CONTEXT);
+        await lifetime.orFailure(root.waitForIdle(BACKGROUND_CONTEXT));
         const plan = decide(await observe(), clock.now());
         if (plan.kind === "ask") await ask(plan.after);
         else if (plan.kind === "compact") await compact(plan.answer);
@@ -217,6 +260,21 @@ export function idleCompaction(clock: Clock, closing: AbortSignal) {
   }
 
   return { extension, run };
+}
+
+const checkpointMessage: Message = {
+  role: "user",
+  content: [{ type: "text", text: CHECKPOINT_PROMPT }],
+  timestamp: 0,
+};
+
+/**
+ * Durable's threshold compaction, which summarizes without the cache: blocking above `contextWindow - reserveTokens`,
+ * in the background from `backgroundTokens` below that.
+ */
+function summarizerThreshold(contextWindow: number, policy: CompactionPolicy): number | undefined {
+  if (!policy.enabled || contextWindow <= 0) return undefined;
+  return contextWindow - policy.reserveTokens - policy.backgroundTokens;
 }
 
 function answerOf(entry: EntryRecord): AssistantMessage | undefined {
