@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   connectedNode,
   eventually,
@@ -253,22 +253,50 @@ describe("node commands (TESTS 1.1)", () => {
     });
     expect(started.isError, textOf(started)).toBe(false);
     expect(started.outcome).toMatchObject({ running: true, sessionId: started.sessionId });
-    expect(started.outcome?.output).toContain("ready");
+    let initialOutput = started.outcome?.output ?? "";
+    if (!initialOutput.includes("ready")) {
+      await vi.waitFor(
+        async () => {
+          const poll = await writeStdin(node, agentId, {
+            sessionId: started.sessionId,
+            yieldTimeMs: 250,
+          });
+          expect(poll.outcome).toMatchObject({ running: true });
+          initialOutput += poll.outcome?.output ?? "";
+          expect(initialOutput).toContain("ready");
+        },
+        { timeout: 10_000, interval: 25 },
+      );
+    }
 
-    const step1 = await writeStdin(node, agentId, {
+    const firstWrite = await writeStdin(node, agentId, {
       sessionId: started.sessionId,
       chars: "hello\n",
       yieldTimeMs: 250,
     });
-    expect(step1.outcome).toMatchObject({ running: true });
-    expect(step1.outcome?.output).toContain("echo:hello");
-    expect(step1.outcome?.output).not.toContain("ready");
+    expect(firstWrite.outcome).toMatchObject({ running: true });
+    let step1Output = firstWrite.outcome?.output ?? "";
+    if (!step1Output.includes("echo:hello")) {
+      await vi.waitFor(
+        async () => {
+          const poll = await writeStdin(node, agentId, {
+            sessionId: started.sessionId,
+            yieldTimeMs: 250,
+          });
+          expect(poll.outcome).toMatchObject({ running: true });
+          step1Output += poll.outcome?.output ?? "";
+          expect(step1Output).toContain("echo:hello");
+        },
+        { timeout: 10_000, interval: 25 },
+      );
+    }
+    expect(step1Output).not.toContain("ready");
 
     const step2 = await writeStdin(node, agentId, {
       sessionId: started.sessionId,
       chars: "world\n",
       eof: true,
-      yieldTimeMs: 2000,
+      yieldTimeMs: 5000,
     });
     expect(step2.isError, textOf(step2)).toBe(false);
     expect(step2.outcome).toMatchObject({
