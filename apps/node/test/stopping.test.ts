@@ -254,6 +254,88 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
     },
   );
 
+  it.each(windows ? ["alive"] : ["alive", "exited"])(
+    "retries a failed stop when the shell is %s",
+    async (state) => {
+      const bin = temporaryDirectory();
+      const blocker = join(bin, windows ? "taskkill.exe" : "deny-kill");
+      let env: NodeJS.ProcessEnv;
+      if (windows) {
+        copyFileSync(process.execPath, blocker);
+        const path = Object.entries(process.env).find(([key]) => key.toLowerCase() === "path");
+        env = { PATH: `${bin};${path?.[1] ?? ""}` };
+      } else {
+        writeFileSync(blocker, "");
+        const preload = join(bin, "deny-kill.cjs");
+        writeFileSync(
+          preload,
+          `
+const kill = process.kill;
+process.kill = function(pid, signal) {
+  if (pid < 0 && signal === "SIGKILL" && require("node:fs").existsSync(${JSON.stringify(blocker)})) {
+    throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+  }
+  return kill.call(process, pid, signal);
+};`,
+        );
+        env = { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` };
+      }
+      const node = await connectedNode({ env });
+      const { agentId, workspace } = await node.agent();
+      let command = longCommand("retry-stop");
+      if (state === "exited") {
+        const child = scriptCommand(
+          workspace,
+          [
+            'import { writeFileSync } from "node:fs";',
+            'const writer = setInterval(() => process.stdout.write("."), 20);',
+            'process.stdout.once("error", () => { clearInterval(writer); writeFileSync("pipes-closed", ""); });',
+            "setTimeout(() => process.exit(0), 60_000);",
+          ].join("\n"),
+        );
+        command = `${child} & echo $! > retry-stop.pids; echo $$ > shell.pid`;
+      }
+      const { sessionId } = await execCommand(node, agentId, { command, yieldTimeMs: 0 });
+      const pids = await pidsOf(workspace, "retry-stop");
+      if (state === "exited") {
+        await eventually(
+          () =>
+            existsSync(join(workspace, "shell.pid")) &&
+            !running(readPid(join(workspace, "shell.pid"))),
+          "shell exited",
+        );
+      }
+      let observed = false;
+      const observation = node
+        .run(agentId, "terminal_wait", { sessionId, observeOnly: true })
+        .then((result) => {
+          observed = true;
+          return result;
+        });
+      const stop = () => writeStdin(node, agentId, { sessionId, kill: true });
+      try {
+        const failed = await stop();
+        expect(failed.outcome).toMatchObject({ ending: { kind: "stop-failed" } });
+        if (state === "exited") {
+          await eventually(
+            () => existsSync(join(workspace, "pipes-closed")),
+            "child outlives the shell's exit grace",
+          );
+        }
+        expect(pids.every(running)).toBe(true);
+        await node.run(agentId, "memory_read", {});
+        expect(observed, "an unconfirmed stop keeps the session under observation").toBe(false);
+      } finally {
+        rmSync(blocker);
+      }
+      expect((await stop()).outcome).toMatchObject({
+        ending: { kind: state === "alive" ? "killed" : "exited" },
+      });
+      for (const pid of pids) await eventually(() => !running(pid), `stopped process ${pid}`);
+      expect((await observation).isError).toBe(false);
+    },
+  );
+
   it.skipIf(windows)("stops a POSIX background process after its shell has returned", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();

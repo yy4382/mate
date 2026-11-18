@@ -452,7 +452,75 @@ describe("pausing, resuming and deleting", () => {
     env.provider.assertComplete();
   });
 
-  it("fails pauseAgent with stop-unconfirmed on kill timeout or stop-failed while still pausing the Agent, and confirms cleanup on retry", async () => {
+  it.each(["exec", "write", "wait"] as const)(
+    "stops the process on pause when %s reported a failed stop",
+    async (failureAt) => {
+      const env = await environment();
+      const admin = await env.open();
+      env.useScriptedProvider(admin);
+      const node = await env.pairNode(admin);
+      const exit = Promise.withResolvers<void>();
+      let sessionId = "";
+      node.answer = async (call) => {
+        sessionId = String(call.arguments.sessionId);
+        const outcome = { sessionId, output: "", droppedBytes: 0, wallTimeMs: 10 };
+        const failure = {
+          ...outcome,
+          running: false,
+          ending: { kind: "stop-failed", reason: "still alive" },
+          pipesHeld: false,
+          backgroundRunning: false,
+        } as const;
+        if (call.tool === "terminal_wait") {
+          await exit.promise;
+          return {
+            outputs: [],
+            result: encodeTerminalWaitOutcome({ consumed: false, outcome: failure }),
+          };
+        }
+        return {
+          outputs: [],
+          result: encodeTerminalOutcome(
+            failureAt !== "exec" && call.tool === "terminal_exec"
+              ? { ...outcome, running: true }
+              : failure,
+          ),
+        };
+      };
+      const { agentId, account } = await env.hire(admin, node.nodeId);
+      env.provider.step("start", (request) => {
+        request.call([
+          {
+            name: "exec_command",
+            arguments: { command: "job", timeout_ms: 10, notify_on_exit: failureAt === "wait" },
+          },
+        ]);
+      });
+      if (failureAt === "write") {
+        env.provider.step("poll", (request) => {
+          request.call([{ name: "write_stdin", arguments: { session_id: sessionId } }]);
+        });
+      } else if (failureAt === "wait") {
+        env.provider.step("wait for the job", (request) => request.text("Running."));
+      }
+      env.provider.step("read stop failure", (request) => {
+        if (failureAt !== "wait") expect(request.toolOutputs().at(-1)).toContain(sessionId);
+        expect([...request.toolOutputs(), ...request.userTexts()].join("\n")).toContain(
+          "still alive",
+        );
+        request.text("The process may still be running.");
+      });
+      env.post("Start the job, @richard.", [account]);
+      await env.provider.received(2);
+      exit.resolve();
+      if (failureAt !== "exec") await env.provider.received(3);
+      await admin.pauseAgent(agentId);
+      expect(node.kills.map((call) => call.arguments.sessionId)).toEqual([sessionId]);
+      env.provider.assertComplete();
+    },
+  );
+
+  it("retries an unconfirmed pause after restart until the node confirms the stop", async () => {
     const env = await environment();
     const admin = await env.open();
     env.useScriptedProvider(admin);
@@ -517,20 +585,26 @@ describe("pausing, resuming and deleting", () => {
     await env.provider.received(2);
     await vi.waitFor(() => expect(node.sessionWatches).toHaveLength(1));
 
-    // Attempt 1: kill hangs -> timeout after 5s yields stop-unconfirmed while Agent is paused locally.
     const firstPause = admin.pauseAgent(agentId);
     await killArrived.promise;
     env.clock.advance(5_000);
     await expect(firstPause).rejects.toMatchObject({ reason: "stop-unconfirmed" });
     expect(await admin.agents()).toEqual([expect.objectContaining({ agentId, state: "paused" })]);
 
-    // Attempt 2: retry on already-paused Agent receives node stop-failed -> still stop-unconfirmed.
+    await admin.close();
+    const reopened = await env.open();
+    expect(await reopened.agents()).toMatchObject([
+      { agentId, state: "paused", pendingTerminalStops: true },
+    ]);
     killBehavior = "stop-failed";
-    await expect(admin.pauseAgent(agentId)).rejects.toMatchObject({ reason: "stop-unconfirmed" });
+    await expect(reopened.pauseAgent(agentId)).rejects.toMatchObject({
+      reason: "stop-unconfirmed",
+    });
 
-    // Attempt 3: node confirms kill -> pauseAgent succeeds and clears pending unconfirmed sessions.
     killBehavior = "killed";
-    await admin.pauseAgent(agentId);
+    await reopened.pauseAgent(agentId);
+    expect((await reopened.agents())[0]).not.toHaveProperty("pendingTerminalStops");
+    await reopened.pauseAgent(agentId);
     expect(node.kills).toHaveLength(3);
     env.provider.assertComplete();
   });

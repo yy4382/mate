@@ -211,6 +211,39 @@ describe("node commands (TESTS 1.1)", () => {
     expect(textOf(missing)).toContain("does not exist");
   });
 
+  it("can stop and observe a yielded command after its workspace is removed", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const workdir = temporaryDirectory();
+    const { sessionId } = await execCommand(node, agentId, {
+      command: longCommand("moved-workspace"),
+      workdir,
+      yieldTimeMs: 0,
+    });
+    const pids = await pidsOf(workdir, "moved-workspace");
+    rmSync(workspace, { recursive: true });
+
+    const waiter = node.run(agentId, "terminal_wait", { sessionId }, undefined, undefined, 1);
+    const killed = await node.run(
+      agentId,
+      "terminal_write",
+      { sessionId, kill: true },
+      undefined,
+      undefined,
+      2,
+    );
+    expect(decodeTerminalOutcome(killed)).toMatchObject({
+      ok: true,
+      outcome: { running: false, ending: { kind: "killed" } },
+    });
+    expect(decodeTerminalWaitOutcome(await waiter)).toMatchObject({
+      ok: true,
+      outcome: { consumed: false, outcome: { ending: { kind: "killed" } } },
+    });
+    for (const pid of pids) await eventually(() => !running(pid), `stopped process ${pid}`);
+    expect(existsSync(workspace)).toBe(false);
+  });
+
   it("keeps the tail of output beyond the limit and says it truncated", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
