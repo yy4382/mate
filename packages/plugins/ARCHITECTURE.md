@@ -23,9 +23,9 @@
 
 ### 1. 终端执行与 `notify_on_exit`
 
-- `exec_command` 为每次调用分配 UUID 作为 `session_id`，传入 `yield_time_ms`（默认 10,000 ms，范围 0 到 60,000 ms）和可选 `timeout_ms`、`workdir`、`node`、`notify_on_exit`。
+- `exec_command` 为每次调用分配 UUID 作为 `session_id`，传入 `yield_time_ms`（默认 10,000 ms，范围 0 到 120,000 ms）和可选 `timeout_ms`、`workdir`、`node`、`notify_on_exit`。
 - `exec_command` 和 `write_stdin` 均显式设置 `outputLimits: { retain: "tail" }`，避免输出超过 Durable 默认的 2,000 行 / 50 KB 限制时按头部截断而丢失末尾的 `[Command still running ...; session_id: ...]` 与 `[Exit notification armed: ...]` 行。
-- 若命令在 `yield_time_ms` 内结束，立即返回完整结果；否则返回 `running: true` 和 `session_id`。之后模型可用 `write_stdin({ session_id, chars?, eof?, kill?, yield_time_ms?, notify_on_exit? })` 写入 stdin、关闭输入、强杀或追加读取。
+- 若命令在 `yield_time_ms` 内结束，立即返回完整结果；否则返回 `running: true` 和 `session_id`。之后模型可用 `write_stdin({ session_id, chars?, eof?, kill?, yield_time_ms?, notify_on_exit? })` 写入 stdin、关闭输入、强杀或追加读取。若 node 未能终止进程，错误结果也会给出 `session_id`，模型可用 `write_stdin({ session_id, kill: true })` 重试。
 - 当 `exec_command` 或同一会话上的 `write_stdin` 传了 `notify_on_exit: true` 且命令仍在运行时，扩展在当前对话下创建一条按对话去重的 `palace.terminal.watch` Durable 后台任务，携带 `conversationId` 调用 `port.wait` 挂起等待；不同对话（如父对话与子 Agent）可各自独立监视同一 `session_id`，仅当当前对话尚未通过 `write_stdin` 消费该次退出时才以 `whenBusy: "steer"` 提交 `<command_notification>`。
 
 ### 2. 子 Agent 与后台任务通用等待

@@ -10,6 +10,7 @@
     "contactAnAdministratorToManageAgentsProvidersNodes": "管理 Agent、提供商、node 和其他人类需要管理员。请联系管理员。"
   },
   "AgentActions": {
+    "retryStop": "重试停止命令",
     "pause": "暂停",
     "resume": "恢复",
     "deleteAgent": "删除 Agent",

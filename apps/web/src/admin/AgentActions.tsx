@@ -30,15 +30,16 @@ export function AgentActions({
     }
   };
   const name = agent.displayName ?? agent.agentId;
+  const retryStop = agent.state === "paused" && agent.pendingTerminalStops;
   return (
     <>
       <Menu label={t("common.moreFor", { name: name })}>
-        {agent.state === "open" ? (
+        {agent.state === "open" || retryStop ? (
           <MenuItem
             icon={<Pause aria-hidden />}
             onClick={() => run(() => post(`/api/admin/agents/${agent.agentId}/pause`))}
           >
-            {t("AgentActions.pause")}
+            {retryStop ? t("AgentActions.retryStop") : t("AgentActions.pause")}
           </MenuItem>
         ) : null}
         {agent.state === "paused" ? (

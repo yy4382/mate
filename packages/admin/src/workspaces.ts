@@ -1,10 +1,11 @@
-import { systemClock, type Clock } from "@palace/clock";
+import type { Clock } from "@palace/clock";
 import type { NodeGateway } from "@palace/gateway";
 import {
   decodeMemoryReadOutcome,
   decodeTerminalOutcome,
   decodeTerminalWaitOutcome,
   type NodeAccess,
+  type TerminalOutcome,
   type ToolResult,
 } from "@palace/node-protocol";
 import type { FilesPort, MemoryPort, TerminalPort } from "@palace/plugins";
@@ -30,19 +31,16 @@ export type GatewayAgentPorts = {
   close(): Promise<void>;
 };
 
-export type GatewayAgentPortsOptions = {
-  readonly clock?: Clock;
-  readonly unconfirmedSessions?: Map<string, string>;
-};
-
 export async function killAgentSession(
   gateway: Pick<NodeGateway, "nodes" | "runTool">,
+  store: AdminStore,
   clock: Clock,
   homeNodeId: string,
   agentId: string,
   sessionId: string,
   nodeId: string,
 ): Promise<KillOutcome> {
+  store.recordPendingStop(agentId, sessionId, nodeId);
   const node = gateway.nodes().find((candidate) => candidate.nodeId === nodeId);
   const nodeName = node?.name ?? nodeId;
   if (node === undefined || !node.online) {
@@ -88,6 +86,7 @@ export async function killAgentSession(
     if (decoded.outcome.ending.kind === "stop-failed") {
       return { confirmed: false, nodeId, nodeName, reason: decoded.outcome.ending.reason };
     }
+    store.confirmStop(agentId, sessionId);
     return { confirmed: true };
   } catch (error) {
     return {
@@ -129,10 +128,8 @@ export function gatewayAgentPorts(
   store: AdminStore,
   homeNodeId: string,
   agentId: string,
-  options: GatewayAgentPortsOptions = {},
+  clock: Clock,
 ): GatewayAgentPorts {
-  const clock = options.clock ?? systemClock;
-  const unconfirmedSessions = options.unconfirmedSessions ?? new Map<string, string>();
   let closed = false;
   const activeSessionNodes = new Map<string, string>();
   const settledSessionNodes = new Map<string, string>();
@@ -154,6 +151,7 @@ export function gatewayAgentPorts(
 
   const rememberSettledSession = (sessionId: string, targetNodeId: string): void => {
     stopWatching(sessionId);
+    store.confirmStop(agentId, sessionId);
     activeSessionNodes.delete(sessionId);
     settledSessionNodes.delete(sessionId);
     if (settledSessionNodes.size >= MAX_SETTLED_SESSION_ROUTES) {
@@ -182,14 +180,12 @@ export function gatewayAgentPorts(
         controller.signal,
       )
       .then((waitResult) => {
-        if (
-          !closed &&
-          !controller.signal.aborted &&
-          decodeTerminalWaitOutcome(waitResult).ok &&
-          activeSessionNodes.get(sessionId) === nodeId
-        ) {
-          rememberSettledSession(sessionId, nodeId);
-        }
+        if (closed || controller.signal.aborted || activeSessionNodes.get(sessionId) !== nodeId)
+          return;
+        const decoded = decodeTerminalWaitOutcome(waitResult);
+        if (!decoded.ok) return;
+        if (decoded.outcome.consumed) rememberSettledSession(sessionId, nodeId);
+        else recordOutcome(sessionId, { nodeId, access }, decoded.outcome.outcome, true);
       })
       .catch(() => undefined)
       .finally(() => {
@@ -197,23 +193,41 @@ export function gatewayAgentPorts(
       });
   };
 
+  const recordOutcome = (
+    sessionId: string,
+    target: { readonly nodeId: string; readonly access: NodeAccess },
+    outcome: TerminalOutcome,
+    retainReceipt: boolean,
+  ): void => {
+    if (closed) return;
+    if (outcome.running || outcome.ending.kind === "stop-failed") {
+      if (!outcome.running) store.recordPendingStop(agentId, sessionId, target.nodeId);
+      activeSessionNodes.set(sessionId, target.nodeId);
+      settledSessionNodes.delete(sessionId);
+      watchActiveSession(sessionId, target.nodeId, target.access);
+    } else if (retainReceipt) {
+      rememberSettledSession(sessionId, target.nodeId);
+    } else {
+      activeSessionNodes.delete(sessionId);
+    }
+  };
+
   const killSession = (sessionId: string, nodeId: string): Promise<KillOutcome> => {
     stopWatching(sessionId);
     activeSessionNodes.delete(sessionId);
     const existing = pendingKills.get(sessionId);
     if (existing !== undefined) return existing;
-    const promise = killAgentSession(gateway, clock, homeNodeId, agentId, sessionId, nodeId)
-      .then((outcome) => {
-        if (outcome.confirmed) {
-          unconfirmedSessions.delete(sessionId);
-        } else {
-          unconfirmedSessions.set(sessionId, nodeId);
-        }
-        return outcome;
-      })
-      .finally(() => {
-        if (pendingKills.get(sessionId) === promise) pendingKills.delete(sessionId);
-      });
+    const promise = killAgentSession(
+      gateway,
+      store,
+      clock,
+      homeNodeId,
+      agentId,
+      sessionId,
+      nodeId,
+    ).finally(() => {
+      if (pendingKills.get(sessionId) === promise) pendingKills.delete(sessionId);
+    });
     pendingKills.set(sessionId, promise);
     return promise;
   };
@@ -303,11 +317,8 @@ export function gatewayAgentPorts(
           return result;
         }
         const decoded = decodeTerminalOutcome(result);
-        if (!decoded.ok || !decoded.outcome.running) {
-          activeSessionNodes.delete(execArgs.sessionId);
-        } else {
-          watchActiveSession(execArgs.sessionId, target.nodeId, target.access);
-        }
+        if (decoded.ok) recordOutcome(execArgs.sessionId, target, decoded.outcome, false);
+        else activeSessionNodes.delete(execArgs.sessionId);
         return result;
       } catch (error) {
         if (closed || signal.aborted) {
@@ -343,10 +354,7 @@ export function gatewayAgentPorts(
         signal,
       );
       const decoded = decodeTerminalOutcome(result);
-      if (decoded.ok && !decoded.outcome.running) {
-        // Move to bounded settled routes so concurrent terminal_wait calls still reach the node and get { consumed }.
-        rememberSettledSession(writeArgs.sessionId, target.nodeId);
-      }
+      if (decoded.ok) recordOutcome(writeArgs.sessionId, target, decoded.outcome, true);
       return result;
     },
 
@@ -370,8 +378,9 @@ export function gatewayAgentPorts(
         () => {},
         signal,
       );
-      if (decodeTerminalWaitOutcome(result).ok) {
-        rememberSettledSession(waitArgs.sessionId, target.nodeId);
+      const decoded = decodeTerminalWaitOutcome(result);
+      if (decoded.ok && !decoded.outcome.consumed) {
+        recordOutcome(waitArgs.sessionId, target, decoded.outcome.outcome, true);
       }
       return result;
     },
@@ -444,7 +453,7 @@ export function gatewayAgentPorts(
       for (const controller of sessionWatches.values()) controller.abort();
       sessionWatches.clear();
       const targets = new Map<string, string>([
-        ...unconfirmedSessions.entries(),
+        ...store.pendingStops(agentId),
         ...activeSessionNodes.entries(),
       ]);
       activeSessionNodes.clear();

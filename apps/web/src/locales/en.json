@@ -10,6 +10,7 @@
     "contactAnAdministratorToManageAgentsProvidersNodes": "Contact an administrator to manage Agents, providers, nodes, and other humans."
   },
   "AgentActions": {
+    "retryStop": "Retry stopping commands",
     "pause": "Pause",
     "resume": "Resume",
     "deleteAgent": "Delete Agent",

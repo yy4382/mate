@@ -12,7 +12,14 @@ import {
   type TerminalWriteArgs,
   type ToolResult,
 } from "@palace/node-protocol";
-import { Commands, drainExitGrace, FramedMetadata, OutputBuffer, type Ending } from "./commands.ts";
+import {
+  Commands,
+  drainExitGrace,
+  EXIT_GRACE_MS,
+  FramedMetadata,
+  OutputBuffer,
+  type Ending,
+} from "./commands.ts";
 import { currentPlatform } from "./platforms/index.ts";
 import type { CommandProcess } from "./platforms/types.ts";
 import { commandReplay } from "./shell-snapshot.ts";
@@ -48,8 +55,8 @@ type Session = {
   readonly timeoutAbort: AbortController;
   readonly graceAbort: AbortController;
   readonly exitPromise: Promise<Ending>;
-  readonly termination: PromiseWithResolvers<void>;
-  readonly processDone: Promise<void>;
+  readonly stopFailed: PromiseWithResolvers<TerminalSettledOutcome>;
+  lastStopFailure: SettledEntry | undefined;
   readonly openPipes: () => number;
   rawExit: Ending | undefined;
   forcedEnding: TerminalEnding | undefined;
@@ -180,7 +187,6 @@ export class TerminalSessions {
     const exitPromise = new Promise<Ending>((res) => {
       resolveRawExit = res;
     });
-    const termination = Promise.withResolvers<void>();
     const session: Session = {
       key,
       agentId,
@@ -195,8 +201,8 @@ export class TerminalSessions {
       timeoutAbort: new AbortController(),
       graceAbort: new AbortController(),
       exitPromise,
-      termination,
-      processDone: Promise.race([exitPromise.then(() => undefined), termination.promise]),
+      stopFailed: Promise.withResolvers<TerminalSettledOutcome>(),
+      lastStopFailure: undefined,
       openPipes: () => open,
       rawExit: undefined,
       forcedEnding: undefined,
@@ -248,13 +254,13 @@ export class TerminalSessions {
     if (args.timeoutMs !== undefined) {
       void this.#clock.sleep(args.timeoutMs, session.timeoutAbort.signal).then(() => {
         if (!session.timeoutAbort.signal.aborted) {
-          void this.#terminate(session, { kind: "timed-out", timeoutMs: args.timeoutMs! });
+          this.#terminate(session, { kind: "timed-out", timeoutMs: args.timeoutMs! });
         }
       });
     }
 
     const onExecAbort = () => {
-      void this.#terminate(session, { kind: "stopped" });
+      this.#terminate(session, { kind: "stopped" });
     };
     if (signal.aborted) onExecAbort();
     signal.addEventListener("abort", onExecAbort, { once: true });
@@ -265,7 +271,8 @@ export class TerminalSessions {
     } else if (!signal.aborted && !session.killing) {
       const yieldAbort = new AbortController();
       const outcome = await Promise.race([
-        session.processDone.then(() => "done" as const),
+        session.exitPromise.then(() => "done" as const),
+        session.stopFailed.promise.then(() => "done" as const),
         this.#clock.sleep(args.yieldTimeMs, yieldAbort.signal).then(() => "yield" as const),
       ]);
       yieldAbort.abort();
@@ -294,13 +301,11 @@ export class TerminalSessions {
       });
     }
 
-    // Inline completion or exec abort/timeout: drain while honoring `signal` during the exit grace window.
-    const graceRelay = () => session.graceAbort.abort();
-    signal.removeEventListener("abort", onExecAbort);
-    if (signal.aborted) graceRelay();
-    signal.addEventListener("abort", graceRelay, { once: true });
     try {
-      const outcome = await this.#settleSession(session);
+      const outcome = await Promise.race([
+        this.#settleSession(session),
+        session.stopFailed.promise,
+      ]);
       detachStream();
       const mergedNotes = [...notes, ...(outcome.notes ?? [])];
       return encodeTerminalOutcome({
@@ -308,7 +313,7 @@ export class TerminalSessions {
         ...(mergedNotes.length === 0 ? {} : { notes: mergedNotes }),
       });
     } finally {
-      signal.removeEventListener("abort", graceRelay);
+      signal.removeEventListener("abort", onExecAbort);
     }
   }
 
@@ -356,7 +361,8 @@ export class TerminalSessions {
       try {
         session.updateRememberedDirectory = false;
         const finish = this.#settleSession(session);
-        await this.#terminate(session, { kind: "killed" });
+        const stopFailure = this.#terminate(session, { kind: "killed" });
+        if (stopFailure !== undefined) return encodeTerminalOutcome(stopFailure);
         const outcome = await raceAbort(finish, signal);
         if (outcome === "aborted") {
           return failure("Command write was stopped by its caller");
@@ -481,7 +487,7 @@ export class TerminalSessions {
         : failure("Session observation stopped");
     }
 
-    const alreadySettled = this.#settled.get(key);
+    const alreadySettled = this.#settled.get(key) ?? this.#active.get(key)?.lastStopFailure;
     if (alreadySettled !== undefined) {
       const consumed =
         alreadySettled.consumedConversations.has(call.conversationId) ||
@@ -520,10 +526,10 @@ export class TerminalSessions {
       if (session.waiters.wait.size === 0 && !session.hasActiveWrite) {
         session.discardSettled = true;
         const finish = this.#settleSession(session);
-        await this.#terminate(session, { kind: "stopped" });
-        session.graceAbort.abort();
-        await finish;
-        this.#settled.delete(key);
+        if (this.#terminate(session, { kind: "stopped" }) === undefined) {
+          await finish;
+          this.#settled.delete(key);
+        }
       }
       return failure(
         "Command was stopped: its caller stopped it or the connection to the node dropped",
@@ -545,8 +551,7 @@ export class TerminalSessions {
     if (session !== undefined) {
       session.discardSettled = true;
       session.updateRememberedDirectory = false;
-      session.graceAbort.abort();
-      void this.#terminate(session, { kind: "stopped" });
+      this.#terminate(session, { kind: "stopped" });
       void this.#settleSession(session);
     } else if (!this.#settled.has(key)) {
       this.#rememberKilledBeforeStart(key);
@@ -559,8 +564,7 @@ export class TerminalSessions {
     this.#killedBeforeStart.clear();
     for (const session of this.#active.values()) {
       session.discardSettled = true;
-      session.graceAbort.abort();
-      void this.#terminate(session, { kind: "stopped" });
+      this.#terminate(session, { kind: "stopped" });
       void this.#settleSession(session);
     }
   }
@@ -617,24 +621,33 @@ export class TerminalSessions {
     });
   }
 
-  async #terminate(session: Session, ending: TerminalEnding): Promise<void> {
-    if (session.rawExit !== undefined) {
-      // The shell itself has already exited; only cut short any remaining exit grace drain.
+  #terminate(session: Session, ending: TerminalEnding): TerminalSettledOutcome | undefined {
+    if (session.rawExit !== undefined && session.group.background() === "finished") {
       session.graceAbort.abort();
-      session.termination.resolve();
       return;
     }
-    if (session.killing) return session.termination.promise;
-    session.killing = true;
+    if (session.killing) return;
     session.timeoutAbort.abort();
     const stopped = session.group.kill();
-    if (stopped.ok) {
-      session.forcedEnding ??= ending;
-      await session.exitPromise;
-    } else {
-      session.forcedEnding ??= { kind: "stop-failed", reason: stopped.reason };
+    if (!stopped.ok) {
+      const failure: TerminalSettledOutcome = {
+        running: false,
+        sessionId: session.sessionId,
+        output: session.output.text,
+        droppedBytes: session.output.droppedBytes,
+        wallTimeMs: this.#clock.now() - session.startedAt,
+        ending: { kind: "stop-failed", reason: stopped.reason },
+        pipesHeld: session.openPipes() > 0,
+        backgroundRunning: session.group.background() === "running",
+      };
+      session.lastStopFailure = deliverOutcome(session, failure);
+      session.stopFailed.resolve(failure);
+      return failure;
     }
-    session.termination.resolve();
+    session.killing = true;
+    session.lastStopFailure = undefined;
+    if (session.rawExit === undefined) session.forcedEnding = ending;
+    else session.graceAbort.abort();
   }
 
   #settleSession(session: Session): Promise<TerminalSettledOutcome> {
@@ -643,11 +656,11 @@ export class TerminalSessions {
   }
 
   async #finishSession(session: Session): Promise<TerminalSettledOutcome> {
-    await session.processDone;
+    const rawExit = await session.exitPromise;
     session.timeoutAbort.abort();
 
     let outcome: TerminalSettledOutcome;
-    if (session.rawExit?.kind === "not-started" && session.forcedEnding === undefined) {
+    if (rawExit.kind === "not-started" && session.forcedEnding === undefined) {
       session.metadata && session.group.metadata?.destroy();
       session.group.child.stdin.destroy();
       this.#commands.untrack(session.group);
@@ -658,14 +671,12 @@ export class TerminalSessions {
         output: drained.text,
         droppedBytes: drained.droppedBytes,
         wallTimeMs: this.#clock.now() - session.startedAt,
-        ending: toTerminalEnding(session.rawExit),
+        ending: toTerminalEnding(rawExit),
         pipesHeld: false,
         backgroundRunning: false,
       };
     } else {
-      let ending =
-        session.forcedEnding ??
-        (session.rawExit === undefined ? { kind: "stopped" } : toTerminalEnding(session.rawExit));
+      let ending = session.forcedEnding ?? toTerminalEnding(rawExit);
       const alreadyKilled =
         ending.kind === "timed-out" ||
         ending.kind === "stopped" ||
@@ -683,7 +694,15 @@ export class TerminalSessions {
           ending = { kind: "stop-failed", reason };
         },
       });
-      if (background !== "running") this.#commands.untrack(session.group);
+      let backgroundRunning = background === "running";
+      if (backgroundRunning && session.lastStopFailure !== undefined) {
+        const groupLifetime = new AbortController().signal;
+        while (session.group.background() === "running") {
+          await this.#clock.sleep(EXIT_GRACE_MS, groupLifetime);
+        }
+        backgroundRunning = false;
+      }
+      if (!backgroundRunning) this.#commands.untrack(session.group);
 
       let workingDirectory: string | undefined;
       if (
@@ -707,40 +726,20 @@ export class TerminalSessions {
         wallTimeMs: this.#clock.now() - session.startedAt,
         ending,
         pipesHeld,
-        backgroundRunning: background === "running",
+        backgroundRunning,
         ...(workingDirectory === undefined ? {} : { workingDirectory }),
       };
     }
 
     this.#active.delete(session.key);
-    const entry: SettledEntry = {
-      outcome,
-      writeConsumed: false,
-      consumedConversations: new Set(),
-    };
+    const entry = deliverOutcome(session, outcome);
     session.settledEntry = entry;
-    if (session.killConsumers.size > 0) {
-      entry.writeConsumed = true;
-      for (const consumer of session.killConsumers) {
-        entry.consumedConversations.add(consumer.conversationId);
-      }
-    }
-    if (session.waiters.write !== undefined) {
-      entry.writeConsumed = true;
-      entry.consumedConversations.add(session.activeWriteConversationId);
-      const notifyWrite = session.waiters.write;
-      session.waiters.write = undefined;
-      notifyWrite(outcome);
-    }
     if (!session.discardSettled) {
       rememberBounded(this.#settled, session.key, entry, MAX_SETTLED);
     }
     const observers = [...session.observers];
     session.observers.clear();
     for (const notify of observers) notify();
-    const waitListeners = [...session.waiters.wait];
-    session.waiters.wait.clear();
-    for (const listener of waitListeners) listener(entry);
     return outcome;
   }
 
@@ -752,6 +751,20 @@ export class TerminalSessions {
       if (oldest !== undefined) this.#killedBeforeStart.delete(oldest);
     }
   }
+}
+
+function deliverOutcome(session: Session, outcome: TerminalSettledOutcome): SettledEntry {
+  const consumedConversations = new Set([...session.killConsumers].map((c) => c.conversationId));
+  if (session.waiters.write !== undefined) {
+    consumedConversations.add(session.activeWriteConversationId);
+    const notifyWrite = session.waiters.write;
+    session.waiters.write = undefined;
+    notifyWrite(outcome);
+  }
+  const entry = { outcome, consumedConversations, writeConsumed: consumedConversations.size > 0 };
+  for (const listener of session.waiters.wait) listener(entry);
+  session.waiters.wait.clear();
+  return entry;
 }
 
 function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | "aborted"> {

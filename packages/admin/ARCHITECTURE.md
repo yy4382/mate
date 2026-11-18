@@ -10,7 +10,7 @@
 
 `openAdmin` 为 `openAgentManager` 提供 `prepareWorkspace: prepareGatewayWorkspace(...)` 与 `buildAgent(...)`：
 
-1. 每个打开的 Agent 通过 `gatewayAgentPorts(gateway, store, nodeId, agentId, { clock, unconfirmedSessions })` 构造 `terminal`、`files`、`memory` 端口以及关闭清理函数 `close()`。`Admin` 按 Agent 持有 `unconfirmedSessions` 映射；`pauseAgent` 在本地暂停完成后若存在未确认停止的 `(sessionId, nodeId)`（包括对已暂停 Agent 重试 `pauseAgent`），会调用 `killAgentSession` 重新尝试确认，全部确认或 `deleteAgent` 时清除记录。
+1. 每次打开 Agent，`gatewayAgentPorts` 为它创建 `terminal`、`files`、`memory` 端口。关闭端口时停止仍在运行的终端会话。
 2. 组装主对话扩展集合：`terminalExtension`、`filesExtension`、`memoryExtension`、`subagentExtension`、`reminders`、`historyExtension`、`idleCompaction`、`docsExtension([webhookDocsDirectory])`、`webhookExtension`（Manager 再在其后追加 `chatExtension`）。同时将 `reminders.background` 与 `idleCompaction.background` 传给 runtime，并在关闭或取消进行中的 `exec` 时去重发送 `terminal_write({ kill: true })` 且在 `ports.close()` 等待所有进行中清理完成后再返回。
 3. **`subagent` 能力白名单：** 通过 `subagentExtension({ extensions: [terminal, files, memory, historyExtension, docs, compact.extension] })` 显式授权子对话可见扩展，结构上排除 `chatExtension`、`webhookExtension`、`reminders` 与递归的 `subagent`。
 
@@ -18,8 +18,8 @@
 
 - `files` 端口每次读取当前授权节点列表（`nodeAccess`），按 `node` 名字将 `read`/`write`/`edit` 转给在线目标 node 的工作区。
 - `terminal` 端口将运行中会话路由（`activeSessionNodes`，不设上限并在发出 `terminal_exec` 前先登记，以免暂停或中断竞态丢失会话）与已结束会话路由（`settledSessionNodes`，FIFO 最多保留 1,024 条）分离，确保大量短命令不会挤掉仍在运行的长会话。每当 `terminal_exec` 返回 `running: true`，端口即附加一个被动的 `watchActiveSession`（`terminal_wait({ sessionId, observeOnly: true })`），让自然退出但未再被 `write_stdin` 或 `notify_on_exit` 查询过的后台会话也能立即从 `activeSessionNodes` 移入 `settledSessionNodes`。后续 `write` 和 `wait`（含 `CommandWatchTask` 的后台等待）均依据 `sessionId` 自动路由到原执行 node 并再次校验当前授权。
-- 若 `exec` 在返回 `running: true` 前或返回后被关闭/中止（例如 `pauseAgent`），端口以 `killSession` 去重（记录在 `pendingKills`）调用 `killAgentSession`，在 5 秒 `Clock` 超时保护下向目标 node 发送 `terminal_write({ kill: true })` 并检查结构化 `TerminalOutcome`。若节点离线、请求超时、网关报错或返回 `running: true` / `ending.kind === "stop-failed"`，结果将记入 `unconfirmedSessions`，`ports.close()` 在等待所有 `pendingKills` 完成后抛出 `AdminError("stop-unconfirmed")`，而不会在未确认时返回 `204`。
-- 当 `write` 或 `watchActiveSession` 观察到会话结束时，路由条目由 `activeSessionNodes` 移至 `settledSessionNodes`，使并发待决的 `terminal_wait` 仍可到达目标 node；当 `exec` 直接结束或报错时从 `activeSessionNodes` 删除对应条目，正常 `wait` 完成时亦移入有界 `settledSessionNodes`。
+- 暂停时，管理模块先把目标 Agent、会话和 node ID 写入控制库的 `pending_terminal_stops`，再向该 node 发送 `terminal_write({ kill: true })`。收到停止确认后清除记录。节点离线、5 秒内未收到回执或收到 `stop-failed` 时，Agent 保持暂停，调用方收到 `503 stop-unconfirmed`。控制面重启后再次暂停会重试这些会话。删除 Agent 时同时清除它的记录。
+- node 确认会话结束后，控制面保留有界路由，供并发的等待者领取结果。若 node 报告 `stop-failed`，控制面保留该会话以便再次停止。Agent 列表为仍有待确认命令的已暂停 Agent 返回 `pendingTerminalStops: true`，网页和移动端据此显示“重试停止命令”。
 - `memory` 端口只从主 node 调用 `memory_read` 读取 `memory/MEMORY.md`；主 node 离线时返回 `{ status: "offline" }`。
 
 ## 观察、子 Agent 查询、模型与 Webhook

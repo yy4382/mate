@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
+import type { CommandProcess } from "./types.ts";
 
 /**
  * One process group a command started, identified so that a recycled ID can never be mistaken for it.
@@ -11,6 +12,7 @@ import { readdirSync, readFileSync } from "node:fs";
 export class PosixProcessGroup {
   readonly pgid: number;
   readonly #leaderStart: string | undefined;
+  #killed = false;
 
   constructor(pgid: number) {
     this.pgid = pgid;
@@ -23,13 +25,17 @@ export class PosixProcessGroup {
   }
 
   /** SIGKILL every member, unless the ID now belongs to someone else. Never throws. */
-  kill(): void {
-    if (!this.#owned()) return;
+  kill(): ReturnType<CommandProcess["kill"]> {
+    if (this.#killed || !this.#owned()) return { ok: true };
     try {
       process.kill(-this.pgid, "SIGKILL");
-    } catch {
-      // Already gone.
+      this.#killed = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      }
     }
+    return { ok: true };
   }
 
   #owned(): boolean {

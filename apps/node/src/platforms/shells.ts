@@ -23,8 +23,7 @@ export const posixCommands = {
       child,
       ...(metadata instanceof Readable ? { metadata } : {}),
       kill() {
-        group?.kill();
-        return { ok: true };
+        return group?.kill() ?? { ok: true };
       },
       background() {
         return group?.running() ? "running" : "finished";

@@ -162,17 +162,13 @@ export function AgentDetail({ agentId }: { agentId: string }) {
   const [management, setManagement] = useState<"menu" | "delete" | null>(null);
   const name = agent?.displayName ?? t("chat.agent");
   const other = agent?.accountId;
-  const lifecycle = () => {
+  const lifecycle = (action: "pause" | "resume") => {
     if (!agent || agent.state === "unreadable" || !ready) return;
     setManagement(null);
     void operation
       .run(
-        () =>
-          client.request(
-            `/api/admin/agents/${encodeURIComponent(agentId)}/${agent.state === "open" ? "pause" : "resume"}`,
-            "POST",
-          ),
-        agent.state === "open" ? t("management.agent_paused") : t("management.agent_resumed"),
+        () => client.request(`/api/admin/agents/${encodeURIComponent(agentId)}/${action}`, "POST"),
+        action === "pause" ? t("management.agent_paused") : t("management.agent_resumed"),
       )
       .then(() => {
         agents.refresh();
@@ -235,7 +231,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
               <Button
                 title={t("management.resume_agent")}
                 disabled={operation.busy}
-                onPress={lifecycle}
+                onPress={() => lifecycle("resume")}
               />
             </Empty>
             <Outcome operation={operation} />
@@ -276,7 +272,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                   title={t("management.resume_agent")}
                   primary
                   disabled={operation.busy}
-                  onPress={lifecycle}
+                  onPress={() => lifecycle("resume")}
                 />
               )}
               {other !== undefined && (
@@ -337,6 +333,13 @@ export function AgentDetail({ agentId }: { agentId: string }) {
         onClose={() => setManagement(null)}
       >
         <Section>
+          {agent?.state === "paused" && agent.pendingTerminalStops && (
+            <Row
+              title={t("management.retry_stop_commands")}
+              disabled={operation.busy}
+              onPress={() => lifecycle("pause")}
+            />
+          )}
           {agent && agent.state !== "unreadable" && (
             <Row
               title={
@@ -348,7 +351,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                   : t("management.continue_from_the_saved_context")
               }
               disabled={operation.busy}
-              onPress={lifecycle}
+              onPress={() => lifecycle(agent.state === "open" ? "pause" : "resume")}
             />
           )}
           <Row

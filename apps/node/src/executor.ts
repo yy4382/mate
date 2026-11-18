@@ -38,13 +38,15 @@ export class Executor {
     signal: AbortSignal,
   ): Promise<ToolResult> {
     const directory = join(this.#root, call.agentId);
-    if (call.access === "visit") {
-      const prepared = this.prepareWorkspace(call.agentId, "visit");
-      if (prepared.isError) return prepared;
-    } else if (!isDirectory(directory)) {
-      return failure(
-        `The workspace ${directory} does not exist. The node does not recreate it; prepare the workspace again.`,
-      );
+    if (call.tool !== "terminal_write" && call.tool !== "terminal_wait") {
+      if (call.access === "visit") {
+        const prepared = this.prepareWorkspace(call.agentId, "visit");
+        if (prepared.isError) return prepared;
+      } else if (!isDirectory(directory)) {
+        return failure(
+          `The workspace ${directory} does not exist. The node does not recreate it; prepare the workspace again.`,
+        );
+      }
     }
 
     switch (call.tool) {

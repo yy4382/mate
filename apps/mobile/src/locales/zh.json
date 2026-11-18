@@ -490,6 +490,7 @@
     "it_may_have_been_deleted": "它可能已被删除。",
     "agent_paused": "Agent 已暂停。",
     "agent_paused_stop_unconfirmed": "Agent 已暂停，但未能确认节点上的运行中命令已停止。",
+    "retry_stop_commands": "重试停止命令",
     "agent_resumed": "Agent 已恢复。",
     "overview": "总览",
     "observe": "观察",

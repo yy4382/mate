@@ -254,7 +254,7 @@ export function formatTerminalOutcome(outcome: TerminalOutcome): {
   if (outcome.workingDirectory !== undefined) {
     parts.push(`[Working directory: ${outcome.workingDirectory}]`);
   }
-  const ending = describeEnding(outcome.ending);
+  const ending = describeEnding(outcome.ending, outcome.sessionId);
   if (ending !== undefined) parts.push(ending);
   const text = parts.filter((part) => part !== "").join("\n");
   const isError =
@@ -263,7 +263,7 @@ export function formatTerminalOutcome(outcome: TerminalOutcome): {
   return { text: text === "" ? "(no output)" : text, isError };
 }
 
-function describeEnding(ending: TerminalEnding): string | undefined {
+function describeEnding(ending: TerminalEnding, sessionId: string): string | undefined {
   switch (ending.kind) {
     case "exited":
       return ending.code === 0 ? undefined : `Command exited with code ${ending.code}`;
@@ -276,7 +276,7 @@ function describeEnding(ending: TerminalEnding): string | undefined {
     case "stopped":
       return "Command was stopped: its caller stopped it or the connection to the node dropped";
     case "stop-failed":
-      return `Command could not be stopped; processes may still be running: ${ending.reason}`;
+      return `Command could not be stopped; processes may still be running: ${ending.reason}\n[Retry with write_stdin, kill: true, session_id: ${sessionId}]`;
     case "not-started":
       return `Command could not start: ${ending.reason}`;
   }
