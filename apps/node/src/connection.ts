@@ -3,8 +3,10 @@ import { hostname, release } from "node:os";
 import { WebSocket } from "ws";
 import type { Clock } from "@palace/clock";
 import {
+  decodeTerminalOutcome,
   GatewayMessageSchema,
   NodeRequestSchema,
+  ToolNameSchema,
   type GatewayMessage,
   type GatewayRunTool,
   type NodeRequest,
@@ -60,6 +62,8 @@ export function connect(
     const lifetime = new AbortController();
     // Running calls by the request ID the gateway gave each; aborting one stops it.
     const calls = new Map<string, AbortController>();
+    // Recently yielded terminal_exec calls by requestId, so late gateway.stop.tool frames still kill them.
+    const yieldedSessions = new Map<string, { agentId: string; sessionId: string }>();
     let authRequestId: string | undefined;
     let nonce = "";
     let authenticated = false;
@@ -82,6 +86,7 @@ export function connect(
     lifetime.signal.addEventListener("abort", () => {
       for (const stop of calls.values()) stop.abort();
       calls.clear();
+      yieldedSessions.clear();
       executor.connectionClosed();
     });
 
@@ -114,6 +119,20 @@ export function connect(
         (chunk) => send({ type: "node.tool.output", requestId: message.requestId, chunk }),
         stop.signal,
       );
+      if (message.tool === "terminal_exec") {
+        const decoded = decodeTerminalOutcome(result);
+        if (decoded.ok && decoded.outcome.running) {
+          yieldedSessions.delete(message.requestId);
+          yieldedSessions.set(message.requestId, {
+            agentId: message.agentId,
+            sessionId: decoded.outcome.sessionId,
+          });
+          if (yieldedSessions.size > 1024) {
+            const oldest = yieldedSessions.keys().next().value;
+            if (oldest !== undefined) yieldedSessions.delete(oldest);
+          }
+        }
+      }
       calls.delete(message.requestId);
       send({ type: "node.tool.result", requestId: message.requestId, ...result });
     };
@@ -130,6 +149,7 @@ export function connect(
             signature: signChallenge(options.identity, nonce),
             system: nodeSystem(),
             workspaceVisits: true,
+            tools: [...ToolNameSchema.options],
           });
           return;
         case "gateway.refused":
@@ -147,6 +167,7 @@ export function connect(
               pairingToken: options.pairingToken,
               system: nodeSystem(),
               workspaceVisits: true,
+              tools: [...ToolNameSchema.options],
             });
             return;
           }
@@ -169,10 +190,20 @@ export function connect(
         case "gateway.run.tool":
           void runTool(message);
           return;
-        case "gateway.stop.tool":
-          calls.get(message.requestId)?.abort();
-          calls.delete(message.requestId);
+        case "gateway.stop.tool": {
+          const stop = calls.get(message.requestId);
+          if (stop !== undefined) {
+            stop.abort();
+            calls.delete(message.requestId);
+            return;
+          }
+          const yielded = yieldedSessions.get(message.requestId);
+          if (yielded !== undefined) {
+            yieldedSessions.delete(message.requestId);
+            executor.stopSession(yielded.agentId, yielded.sessionId);
+          }
           return;
+        }
         case "gateway.prepare.workspace":
           send({
             type: "node.tool.result",

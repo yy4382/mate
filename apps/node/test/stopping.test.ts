@@ -21,10 +21,12 @@ import {
   pidsOf,
   readPid,
   running,
+  scriptCommand,
   startNodeProcess,
   temporaryDirectory,
   textOf,
   windows,
+  writeStdin,
 } from "./support.ts";
 
 describe("node connection and stopping (TESTS 1.3)", () => {
@@ -71,6 +73,66 @@ describe("node connection and stopping (TESTS 1.3)", () => {
     node.gateway.disconnect();
     for (const pid of secondPids)
       await eventually(() => !running(pid), `detached process ${pid} is stopped`);
+  });
+
+  it("stops a newly yielded session on late gateway.stop.tool or terminal_write kill before it can touch files", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const gatedCommand = (tag: string, releaseFile: string, leakedFile: string) =>
+      scriptCommand(
+        workspace,
+        [
+          'import { existsSync, writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(`${tag}.pids`)}, String(process.pid));`,
+          `const timer = setInterval(() => {`,
+          `  if (existsSync(${JSON.stringify(releaseFile)})) {`,
+          `    clearInterval(timer);`,
+          `    writeFileSync(${JSON.stringify(leakedFile)}, "mutated");`,
+          "    process.exit(0);",
+          "  }",
+          "}, 10);",
+        ].join("\n"),
+        tag,
+      );
+
+    // Case A: gateway.stop.tool arrives after terminal_exec already yielded running: true.
+    const sessionA = randomUUID();
+    const execA = await node.gateway.runTool("exec-yield-stop", agentId, "terminal_exec", {
+      sessionId: sessionA,
+      command: gatedCommand("yield-stop-a", "release-a", "leaked-a"),
+      yieldTimeMs: 20,
+    });
+    expect(displayTerminalResult(execA).outcome?.running).toBe(true);
+    const pidsA = await pidsOf(workspace, "yield-stop-a");
+    node.gateway.stopTool("exec-yield-stop");
+    for (const pid of pidsA) {
+      await eventually(() => !running(pid), `yielded process ${pid} stopped via late stopTool`);
+    }
+    writeFileSync(join(workspace, "release-a"), "go");
+    expect(existsSync(join(workspace, "leaked-a"))).toBe(false);
+
+    // Case B: terminal_write({ kill: true }) arrives while terminal_exec is still waiting in flight.
+    const sessionB = randomUUID();
+    const execB = execCommand(node, agentId, {
+      sessionId: sessionB,
+      command: gatedCommand("kill-race-b", "release-b", "leaked-b"),
+      yieldTimeMs: 30_000,
+    });
+    const pidsB = await pidsOf(workspace, "kill-race-b");
+    const killResult = await writeStdin(node, agentId, {
+      sessionId: sessionB,
+      yieldTimeMs: 0,
+      kill: true,
+    });
+    expect(killResult.isError).toBe(false);
+    expect(killResult.outcome).toMatchObject({ running: false, ending: { kind: "killed" } });
+    writeFileSync(join(workspace, "release-b"), "go");
+    const settledB = await execB;
+    expect(settledB.outcome?.running).toBe(false);
+    for (const pid of pidsB) {
+      await eventually(() => !running(pid), `raced process ${pid} is stopped`);
+    }
+    expect(existsSync(join(workspace, "leaked-b"))).toBe(false);
   });
 
   it("a stop ends that one call's process group and leaves every other call running, of the same Agent or another", async () => {

@@ -10,7 +10,7 @@
 
 | 导出工厂 | 扩展名 | 工具与提示 | 状态与协作 |
 |---|---|---|---|
-| `terminalExtension(port, { closing })` | `terminal` | `exec_command`、`write_stdin`；提示说明 `yield_time_ms`、`notify_on_exit` 和 `node` 路由 | 以 Durable 后台任务 `palace.terminal.watch` 实现退出通知；node 端通过单消费者协议保证 `write_stdin` 看到退出后不会重复通知 |
+| `terminalExtension(port, { closing })` | `terminal` | `exec_command`、`write_stdin`（均配置 `outputLimits: { retain: "tail" }`）；提示说明 `yield_time_ms`、`notify_on_exit` 和 `node` 路由 | 以 Durable 后台任务 `palace.terminal.watch` 按对话独立实现退出通知；node 端按对话隔离消费状态，同一对话主动用 `write_stdin` 看到退出后不会重复通知 |
 | `filesExtension(port, { closing })` | `files` | `node_list`（每次现读）、`read`（`replay: "safe"`）、`write`、`edit`（`replay: "unsafe"`） | 可选 `node` 参数在端口分流前剥离 |
 | `memoryExtension(port, { closing })` | `memory` | 仅位置提示段 `memory`（`{ tag: false }`） | 每次请求前从主 node 读取 `memory/MEMORY.md`（上限 64 KiB）；主 node 离线或读取失败时沿用 `input.shown["memory"]` |
 | `subagentExtension({ extensions, roles? })` | `subagent` | `subagent`（前台或 `run_in_background: true`，支持 `resume` 和可选 `role`）、`subagent_stop` | 对话文档 `palace.subagents`；新建子对话时经 Durable `configure` 继承父对话模型与 thinking 并设置正向 `extensions` 白名单，禁止递归包含 `subagent` |
@@ -24,13 +24,14 @@
 ### 1. 终端执行与 `notify_on_exit`
 
 - `exec_command` 为每次调用分配 UUID 作为 `session_id`，传入 `yield_time_ms`（默认 10,000 ms，范围 0 到 60,000 ms）和可选 `timeout_ms`、`workdir`、`node`、`notify_on_exit`。
+- `exec_command` 和 `write_stdin` 均显式设置 `outputLimits: { retain: "tail" }`，避免输出超过 Durable 默认的 2,000 行 / 50 KB 限制时按头部截断而丢失末尾的 `[Command still running ...; session_id: ...]` 与 `[Exit notification armed: ...]` 行。
 - 若命令在 `yield_time_ms` 内结束，立即返回完整结果；否则返回 `running: true` 和 `session_id`。之后模型可用 `write_stdin({ session_id, chars?, eof?, kill?, yield_time_ms?, notify_on_exit? })` 写入 stdin、关闭输入、强杀或追加读取。
-- 当 `exec_command` 或同一会话上的 `write_stdin` 传了 `notify_on_exit: true` 且命令仍在运行时，扩展在当前对话下创建一条去重的 `palace.terminal.watch` Durable 后台任务，调用 `port.wait` 挂起等待；结束后若尚未被 `write_stdin` 消费，则向所属对话以 `whenBusy: "steer"` 提交 `<command_notification>`。
+- 当 `exec_command` 或同一会话上的 `write_stdin` 传了 `notify_on_exit: true` 且命令仍在运行时，扩展在当前对话下创建一条按对话去重的 `palace.terminal.watch` Durable 后台任务，携带 `conversationId` 调用 `port.wait` 挂起等待；不同对话（如父对话与子 Agent）可各自独立监视同一 `session_id`，仅当当前对话尚未通过 `write_stdin` 消费该次退出时才以 `whenBusy: "steer"` 提交 `<command_notification>`。
 
 ### 2. 子 Agent 与后台任务通用等待
 
 - `subagent` 默认前台等待结果，传 `run_in_background: true` 时立即返回 `{ status: "running", agent_id }` 并由后台任务在完成后向父对话 `steer` 投递 `<subagent_result>`。
-- 子 Agent 即使调用了 `notify_on_exit: true` 后提前结束自身 turn，也不需要在 `subagent` 里 import `terminal` 模块：`waitUntilChildSettled` 通过 Durable 原生的 `child.waitForIdle` 和 `tx.scanTasks({ conversationId: childId, status })` 等待子对话下的所有活跃任务进入终态并再次变为空闲后，才读取最终回答或向父对话回报。
+- 子 Agent 即使调用了 `notify_on_exit: true` 后提前结束自身 turn，也不需要在 `subagent` 里 import `terminal` 模块：`waitUntilChildSettled` 通过 Durable 原生的 `child.waitForIdle` 和 `tx.scanTasks({ conversationId: childId, status })` 等待子对话下的所有活跃任务进入终态并再次变为空闲后才继续；随后通过启动前记忆的 `baselineTaskId` 与 `inspectChildRun` 检查本次运行期间创建的所有 `GenerationTask` 和后台任务，只要后续轮次（如 `<command_notification>` 触发的续跑）失败、faulted 或 orphaned，就中止子对话并以失败结果或 `status="failed"` 汇报，不回落读取前一轮的"仍在等待"文本；成功时亦跳过后续 `UserEntry` 以提取最新一轮的回复。
 - `subagent_stop` 在 `palace.subagent.control` 写取消标记后中止子对话并等待对应运行任务结束，不向父对话发送结果；子对话上下文仍保留以便后续 `resume`。
 
 ### 3. 记忆目录与系统提示

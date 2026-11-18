@@ -144,8 +144,8 @@ describe("node gateway limits (TESTS)", () => {
       "agent-1",
       {
         access: "home",
-        tool: "terminal_exec",
-        arguments: { sessionId: "s1", command: "sleep 60" },
+        tool: "read",
+        arguments: { path: "notes.txt" },
       },
       () => {},
       never,

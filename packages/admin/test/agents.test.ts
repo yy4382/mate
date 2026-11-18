@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { encodeMemoryReadOutcome } from "@palace/node-protocol";
-import { describe, expect, it, vi } from "vitest";
+import { encodeMemoryReadOutcome, encodeTerminalOutcome } from "@palace/node-protocol";
+import { FakeNode } from "@palace/testkit";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { AdminError } from "../src/index.ts";
-import { environment, ok, settings } from "./support.ts";
+import { environment, newIdentity, ok, settings } from "./support.ts";
 
 describe("creating an Agent on a node", () => {
   it("prepares the workspace on the chosen node, and the Agent's commands run there", async () => {
@@ -239,6 +240,211 @@ describe("pausing, resuming and deleting", () => {
     expect(node.memoryReads).toContainEqual(
       expect.objectContaining({ agentId, tool: "memory_read", access: "home" }),
     );
+    env.provider.assertComplete();
+  });
+
+  it("sends a kill request for an exec_command whose background transition raced pauseAgent and waits for termination before returning", async () => {
+    const env = await environment();
+    const admin = await env.open();
+    env.useScriptedProvider(admin);
+    const node = await env.pairNode(admin);
+    const execArrived = Promise.withResolvers<void>();
+    const killArrived = Promise.withResolvers<void>();
+    const releaseKill = Promise.withResolvers<void>();
+    node.answer = () => {
+      execArrived.resolve();
+      return new Promise(() => undefined);
+    };
+    node.answerKill = async (call) => {
+      killArrived.resolve();
+      await releaseKill.promise;
+      return {
+        outputs: [],
+        result: encodeTerminalOutcome({
+          running: false,
+          sessionId: String(call.arguments.sessionId ?? ""),
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 0,
+          ending: { kind: "killed" },
+          pipesHeld: false,
+          backgroundRunning: false,
+        }),
+      };
+    };
+
+    const { agentId, account } = await env.hire(admin, node.nodeId);
+    env.provider.step("build", (request) => {
+      request.call([{ name: "exec_command", arguments: { command: "make" } }]);
+    });
+    env.post("Build it, @richard.", [account]);
+    await execArrived.promise;
+
+    let pausedFinished = false;
+    const pausing = admin.pauseAgent(agentId).then(() => {
+      pausedFinished = true;
+    });
+    await killArrived.promise;
+    await Promise.resolve();
+    expect(pausedFinished, "pauseAgent waits for cleanup kill acknowledgement").toBe(false);
+    expect(node.kills).toEqual([
+      expect.objectContaining({
+        agentId,
+        tool: "terminal_write",
+        arguments: { sessionId: expect.any(String), yieldTimeMs: 0, kill: true },
+      }),
+    ]);
+
+    releaseKill.resolve();
+    await pausing;
+    expect(pausedFinished).toBe(true);
+    expect(await admin.agents()).toEqual([expect.objectContaining({ state: "paused" })]);
+  });
+
+  it(
+    "retains routing for a long-running terminal session across more than 1,024 completed short sessions",
+    { timeout: 60_000 },
+    async () => {
+      const env = await environment();
+      const admin = await env.open();
+      env.useScriptedProvider(admin);
+      const node = await env.pairNode(admin);
+      let longSessionId = "";
+      node.answer = async (call) => {
+        if (call.tool === "terminal_exec") {
+          const sessionId = String(call.arguments.sessionId);
+          if (call.arguments.command === "long-job") longSessionId = sessionId;
+          return {
+            outputs: [],
+            result: encodeTerminalOutcome({
+              running: true,
+              sessionId,
+              output: "",
+              droppedBytes: 0,
+              wallTimeMs: 10,
+            }),
+          };
+        }
+        const sessionId = String(call.arguments.sessionId);
+        if (sessionId === longSessionId) {
+          return {
+            outputs: [],
+            result: encodeTerminalOutcome({
+              running: true,
+              sessionId,
+              output: "pong\n",
+              droppedBytes: 0,
+              wallTimeMs: 20,
+            }),
+          };
+        }
+        return {
+          outputs: [],
+          result: encodeTerminalOutcome({
+            running: false,
+            sessionId,
+            output: "short-done\n",
+            droppedBytes: 0,
+            wallTimeMs: 15,
+            ending: { kind: "exited", code: 0 },
+            pipesHeld: false,
+            backgroundRunning: false,
+          }),
+        };
+      };
+
+      const { agentId, account } = await env.hire(admin, node.nodeId);
+      env.provider.step("start long session", (request) => {
+        request.call([
+          { name: "exec_command", arguments: { command: "long-job", yield_time_ms: 10 } },
+        ]);
+      });
+      const batches = 5;
+      const perBatch = 205;
+      for (let b = 0; b < batches; b++) {
+        env.provider.step(`short exec batch ${b}`, (request) => {
+          request.call(
+            Array.from({ length: perBatch }, () => ({
+              name: "exec_command",
+              arguments: { command: "short", yield_time_ms: 10 },
+            })),
+          );
+        });
+        env.provider.step(`short finish batch ${b}`, (request) => {
+          const outputs = request.toolOutputs().slice(-perBatch);
+          const ids = outputs.map((text) => /session_id:\s*([^\]]+)/.exec(text)?.[1] ?? "");
+          expect(ids.every((id) => id.length > 0)).toBe(true);
+          request.call(
+            ids.map((id) => ({
+              name: "write_stdin",
+              arguments: { session_id: id, yield_time_ms: 10 },
+            })),
+          );
+        });
+      }
+      env.provider
+        .step("check long session", (request) => {
+          request.call([
+            {
+              name: "write_stdin",
+              arguments: { session_id: longSessionId, chars: "ping\n", yield_time_ms: 10 },
+            },
+          ]);
+        })
+        .step("done", (request) => {
+          expect(request.toolOutputs().at(-1)).toContain("pong");
+          request.text("long session intact");
+        });
+
+      env.post("Run many sessions, @richard.", [account]);
+      await env.provider.received(batches * 2 + 3);
+      env.provider.assertComplete();
+
+      await admin.pauseAgent(agentId);
+      expect(node.kills.some((call) => call.arguments.sessionId === longSessionId)).toBe(true);
+    },
+  );
+
+  it("keeps a legacy home node online and serves supported tools when it connects without advertising newer tools", async () => {
+    const env = await environment();
+    const admin = await env.open();
+    env.useScriptedProvider(admin);
+    const identity = newIdentity();
+    const arrivedTools: string[] = [];
+    const legacy = new FakeNode({
+      gatewayUrl: env.gatewayUrl,
+      ...identity,
+      pairingToken: admin.createPairingToken().pairingToken,
+      tools: null,
+      onRunTool: async (call) => {
+        if (!["bash", "read", "write", "edit"].includes(call.tool)) {
+          legacy.terminate();
+          throw new Error(`unexpected tool for legacy node: ${call.tool}`);
+        }
+        arrivedTools.push(call.tool);
+        return { outputs: [], result: ok("legacy file content") };
+      },
+    });
+    onTestFinished(() => legacy.terminate());
+    await legacy.connect();
+
+    const { agentId, account } = await env.hire(admin, identity.nodeId);
+    let readCallId = "";
+    env.provider
+      .step("read file", (request) => {
+        expect(request.systemTexts().join("\n")).toContain("memory/MEMORY.md could not be read");
+        readCallId = request.call([{ name: "read", arguments: { path: "notes.txt" } }])[0] ?? "";
+      })
+      .step("reply", (request) => {
+        expect(request.toolOutput(readCallId)).toContain("legacy file content");
+        request.text("done on legacy node");
+      });
+
+    env.post("Check notes, @richard.", [account]);
+    await env.provider.received(2);
+    expect(arrivedTools).toEqual(["read"]);
+    expect(env.gateway.status(identity.nodeId).online).toBe(true);
+    await admin.pauseAgent(agentId);
     env.provider.assertComplete();
   });
 });

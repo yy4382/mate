@@ -11,14 +11,15 @@
 `openAdmin` 为 `openAgentManager` 提供 `prepareWorkspace: prepareGatewayWorkspace(...)` 与 `buildAgent(...)`：
 
 1. 每个打开的 Agent 通过 `gatewayAgentPorts(gateway, store, nodeId, agentId)` 构造 `terminal`、`files`、`memory` 端口以及关闭清理函数 `close()`。
-2. 组装主对话扩展集合：`terminalExtension`、`filesExtension`、`memoryExtension`、`subagentExtension`、`reminders`、`historyExtension`、`idleCompaction`、`docsExtension([webhookDocsDirectory])`、`webhookExtension`（Manager 再在其后追加 `chatExtension`）。同时将 `reminders.background` 与 `idleCompaction.background` 传给 runtime，并在关闭时调用 `ports.close()` 向所有仍在运行且未收回授权的后台终端会话发送 `terminal_write({ kill: true })`。
+2. 组装主对话扩展集合：`terminalExtension`、`filesExtension`、`memoryExtension`、`subagentExtension`、`reminders`、`historyExtension`、`idleCompaction`、`docsExtension([webhookDocsDirectory])`、`webhookExtension`（Manager 再在其后追加 `chatExtension`）。同时将 `reminders.background` 与 `idleCompaction.background` 传给 runtime，并在关闭或取消进行中的 `exec` 时去重发送 `terminal_write({ kill: true })` 且在 `ports.close()` 等待所有进行中清理完成后再返回。
 3. **`subagent` 能力白名单：** 通过 `subagentExtension({ extensions: [terminal, files, memory, historyExtension, docs, compact.extension] })` 显式授权子对话可见扩展，结构上排除 `chatExtension`、`webhookExtension`、`reminders` 与递归的 `subagent`。
 
 ## 多 Node 调度与终端会话路由
 
 - `files` 端口每次读取当前授权节点列表（`nodeAccess`），按 `node` 名字将 `read`/`write`/`edit` 转给在线目标 node 的工作区。
-- `terminal` 端口在 `exec` 启动时根据可选 `node` 名字（缺省为主 node）检查权限并转发 `terminal_exec`；若返回 `running: true`，把 `sessionId -> nodeId` 记入有界路由表（最多保留 1,024 条）并加入活跃会话集。后续 `write` 和 `wait`（含 `CommandWatchTask` 的后台等待）均依据 `sessionId` 自动路由到原执行 node 并再次校验当前授权。
-- 当 `write` 观察到会话结束时，会话仅从活跃集移除而保留路由映射，使并发待决的 `terminal_wait` 仍可到达目标 node 并拿到 `{ consumed: true }`；当 `exec` 直接结束、报错或完成 `wait` 时彻底清理。
+- `terminal` 端口将运行中会话路由（`activeSessionNodes`，不设上限并在发出 `terminal_exec` 前先登记，以免暂停或中断竞态丢失会话）与已结束会话路由（`settledSessionNodes`，FIFO 最多保留 1,024 条）分离，确保大量短命令不会挤掉仍在运行的长会话。后续 `write` 和 `wait`（含 `CommandWatchTask` 的后台等待）均依据 `sessionId` 自动路由到原执行 node 并再次校验当前授权。
+- 若 `exec` 在返回 `running: true` 前或返回后被关闭/中止（例如 `pauseAgent`），端口以 `killSession` 去重（记录在 `pendingKills` 并带 5 秒超时保护）向目标 node 发送 `terminal_write({ kill: true })`；`ports.close()` 会等待所有挂起的 `killSession` 完成，确保暂停返回后命令不会继续修改工作区。
+- 当 `write` 观察到会话结束时，路由条目由 `activeSessionNodes` 移至 `settledSessionNodes`，使并发待决的 `terminal_wait` 仍可到达目标 node；当 `exec` 直接结束、报错或完成 `wait` 时彻底清理对应条目。
 - `memory` 端口只从主 node 调用 `memory_read` 读取 `memory/MEMORY.md`；主 node 离线时返回 `{ status: "offline" }`。
 
 ## 观察、子 Agent 查询、模型与 Webhook

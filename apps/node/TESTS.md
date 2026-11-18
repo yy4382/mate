@@ -8,7 +8,7 @@
 
 **替身：** 假网关。
 
-- node 每次认证和配对都报告宿主平台、架构、hostname、系统版本和程序版本。源码运行报告 `dev`。
+- node 每次认证和配对都报告宿主平台、架构、hostname、系统版本、程序版本和支持的 `tools` 列表。源码运行报告 `dev`。
 
 ### 1.1 命令
 
@@ -41,7 +41,7 @@
 - POSIX 命令已经返回、后台进程还占着输出时收到停止，后台进程也被杀掉。Windows 只保证 shell 仍存活时的进程树。
 - 通过真实网关：调用方中止调用后，node 上这次调用的进程组消失，调用方得到"已停止"；另一个 Agent 的并发调用不受影响，拿到自己的结果。
 - 三个平台都证明 node 正常关闭时清理仍在运行的命令。POSIX 还检查命令已经返回的后台进程组。
-- 终端会话（`terminal_exec`、`terminal_write`、`terminal_wait`）：长命令超过 `yieldTimeMs` 返回 `running: true`，`terminal_write` 可写入标准输入、传 `eof: true` 或 `kill: true`；`terminal_wait` 与 `terminal_write` 遵循单消费者规则（已由 `write` 消费的退出结果让 `wait` 得到 `{ consumed: true }`）；WebSocket 断线触发 `connectionClosed()` 清理活跃会话。
+- 终端会话（`terminal_exec`、`terminal_write`、`terminal_wait`）：长命令超过 `yieldTimeMs` 返回 `running: true`，`terminal_write` 可写入标准输入、传 `eof: true` 或 `kill: true`；多个不同 `conversationId` 并发调用 `terminal_wait` 等待同一会话均能拿到结果而不互相覆盖，`terminal_write` 仅消费所属对话的通知（其余对话的 `terminal_wait` 仍正常拿到退出结果）；`gateway.stop.tool` 在 `terminal_exec` 刚 yield 后抵达或 `terminal_write({ kill: true })` 与进行中的 `terminal_exec` 并发竞态时仍能终止进程树并阻止后续工作区写入；WebSocket 断线触发 `connectionClosed()` 清理活跃会话。
 - 记忆读取（`memory_read`）：不存在返回 `missing`；超过 64 KiB 截断在完整字符处并标明 `truncated`；符号链接或越界目标按工作区安全规则拒绝。
 - 修改或删除工作目录里的 `memory/MEMORY.md` 或 `memory/`，不影响之后的命令执行。
 - 主工作目录不存在时，所有工具报错且不重建。显式准备主工作区会创建 `memory/` 目录（不创建根 `MEMORY.md`），已有文件不覆盖。访问工作区在显式准备和执行前准备时均不初始化 `memory/` 或 `MEMORY.md`。工作区路径是普通文件时访问工具失败，移除冲突后重试成功。重复准备及重连保留已有文件；远端用户自行创建再删除的文件不会补写。

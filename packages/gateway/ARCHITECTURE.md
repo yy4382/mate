@@ -45,7 +45,7 @@ runtime 把一次完整的工具调用（工具名、参数、可选 node 名字
 
 ## 升级顺序
 
-控制面先于 node 升级，node 不能比控制面新。新版 node 在握手时声明 `workspaceVisits: true`，网关只在当前连接上保存这个声明，不落库，也不从版本号推断。没有声明的连接仍可执行主 node 操作，但网关拒绝向它发 `visit` 的准备和工具调用，提示升级目标 node。准备消息的 `access` 缺省为 `home`，保留旧调用的含义。
+控制面先于 node 升级，node 不能比控制面新。新版 node 在握手（`node.authenticate` / `node.pair`）时声明 `workspaceVisits: true` 与 `tools` 列表，网关只在当前连接上保存这两个声明，不落库，也不从版本号推断。没有声明 `workspaceVisits` 的连接仍可执行主 node 操作，但网关拒绝向它发 `visit` 的准备和工具调用，提示升级目标 node；未传 `tools` 的旧连接缺省视为只支持 `LEGACY_NODE_TOOLS`（`read`、`write`、`edit`），网关会在本地直接拒绝 `memory_read`、`terminal_exec`、`terminal_write`、`terminal_wait` 等新工具并返回错误结果，不向连接发送未知工具消息以免旧 node 断线，直到该 node 升级后重连。准备消息的 `access` 缺省为 `home`，保留旧调用的含义。
 
 ## 持久化
 

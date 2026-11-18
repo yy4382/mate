@@ -6,6 +6,7 @@ import { ChatApp } from "@palace/chat";
 import { createNodeGateway } from "@palace/gateway";
 import {
   encodeMemoryReadOutcome,
+  encodeTerminalOutcome,
   type GatewayBrowse,
   type GatewayRunTool,
   type NodeBrowseOutcome,
@@ -46,12 +47,16 @@ export type TestNode = {
   readonly calls: GatewayRunTool[];
   /** `memory_read` calls requested for the system prompt before turns. */
   readonly memoryReads: GatewayRunTool[];
+  /** Cleanup `terminal_write({ kill: true })` calls sent when pausing or closing. */
+  readonly kills: GatewayRunTool[];
   /** Request IDs of the calls the gateway told it to stop. */
   readonly stopped: string[];
   /** How the next tool calls are answered; by default at once with "ok". */
   answer: (call: GatewayRunTool) => Promise<Answer>;
   /** How `memory_read` calls are answered; by default with `{ status: "missing" }`. */
   answerMemory: (call: GatewayRunTool) => Promise<Answer>;
+  /** How cleanup kill calls are answered; by default immediately killed. */
+  answerKill: (call: GatewayRunTool) => Promise<Answer>;
   readonly browses: GatewayBrowse[];
   /** How the next browses are answered; by default with an empty directory. */
   answerBrowse: (browse: GatewayBrowse) => Promise<NodeBrowseOutcome>;
@@ -143,6 +148,7 @@ export async function environment(data = temporaryDirectory()) {
       const prepared: { agentId: string; access: NodeAccess }[] = [];
       const calls: GatewayRunTool[] = [];
       const memoryReads: GatewayRunTool[] = [];
+      const kills: GatewayRunTool[] = [];
       const stopped: string[] = [];
       const browses: GatewayBrowse[] = [];
       const node = new FakeNode({
@@ -159,6 +165,10 @@ export async function environment(data = temporaryDirectory()) {
           if (call.tool === "memory_read") {
             memoryReads.push(call);
             return test.answerMemory(call);
+          }
+          if (call.tool === "terminal_write" && call.arguments.kill === true) {
+            kills.push(call);
+            return test.answerKill(call);
           }
           calls.push(call);
           return test.answer(call);
@@ -177,11 +187,25 @@ export async function environment(data = temporaryDirectory()) {
         answerPrepare: async () => {},
         calls,
         memoryReads,
+        kills,
         stopped,
         answer: async () => ({ outputs: [], result: ok("ok") }),
         answerMemory: async () => ({
           outputs: [],
           result: encodeMemoryReadOutcome({ status: "missing" }),
+        }),
+        answerKill: async (call) => ({
+          outputs: [],
+          result: encodeTerminalOutcome({
+            running: false,
+            sessionId: String(call.arguments.sessionId ?? ""),
+            output: "",
+            droppedBytes: 0,
+            wallTimeMs: 0,
+            ending: { kind: "killed" },
+            pipesHeld: false,
+            backgroundRunning: false,
+          }),
         }),
         browses,
         answerBrowse: async ({ path }) => ({

@@ -30,6 +30,9 @@ export const ToolNameSchema = z.enum([
 ]);
 export type ToolName = z.infer<typeof ToolNameSchema>;
 
+/** Tools supported by pre-capability-handshake nodes, assumed when `tools` is absent on connect. */
+export const LEGACY_NODE_TOOLS: readonly ToolName[] = ["read", "write", "edit"];
+
 export const NodeAccessSchema = z.enum(["home", "visit"]);
 export type NodeAccess = z.infer<typeof NodeAccessSchema>;
 
@@ -355,6 +358,7 @@ export const NodeAuthenticateSchema = z.object({
   signature: z.string().min(1),
   system: NodeSystemSchema,
   workspaceVisits: z.literal(true).optional(),
+  tools: z.array(z.string().min(1).max(64)).max(64).optional(),
 });
 
 export const NodePairSchema = z.object({
@@ -368,6 +372,7 @@ export const NodePairSchema = z.object({
   pairingToken: z.string().min(1),
   system: NodeSystemSchema,
   workspaceVisits: z.literal(true).optional(),
+  tools: z.array(z.string().min(1).max(64)).max(64).optional(),
 });
 
 export const NodePingSchema = z.object({

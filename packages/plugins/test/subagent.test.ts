@@ -1,11 +1,11 @@
-import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { LiveDoc, ToolResultEntry, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { Type } from "@earendil-works/pi-ai";
 import {
   encodeTerminalOutcome,
   encodeTerminalWaitOutcome,
   type ToolResult,
 } from "@palace/node-protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { filesExtension, type FilesPort } from "../src/files.ts";
 import { listSubagents, subagentConversationId, subagentExtension } from "../src/subagent.ts";
 import { terminalExtension, type TerminalPort } from "../src/terminal.ts";
@@ -206,7 +206,7 @@ describe("subagent extension", () => {
         request.text("Reported final answer.");
       });
 
-    agent.provider
+    const workerLane = agent.provider
       .lane("worker", (request) => request.userTexts()[0] === "run slow suite")
       .step("worker starts cmd", (request) => {
         request.call([
@@ -227,6 +227,12 @@ describe("subagent extension", () => {
     const { runtime } = await agent.open({ extensions: [terminal, subagent] });
     await (await runtime.submit("go", { requestId: "m1" })).settled();
     const finishCommand = await within(2000, "command wait started", waitCallReady.promise);
+    await within(2000, "worker turn 1", workerLane.received(2));
+    const childId = await subagentConversationId(runtime, "sub-1");
+    expect(childId).toBeDefined();
+    await vi.waitFor(async () => {
+      expect((await runtime.snapshot(LiveDoc, childId!))?.run).toBeUndefined();
+    });
     // Worker ended turn 1 already; root must NOT have received subagent_result yet!
     await runtime.idle();
     expect(agent.provider.requests.some((r) => r.step === "receives subagent_result")).toBe(false);
@@ -294,5 +300,253 @@ describe("subagent extension", () => {
     expect(secondChildTools).toContain("read");
     expect(secondChildTools).not.toContain("secret_tool");
     expect(secondChildTools).not.toContain("subagent");
+  });
+
+  it("propagates follow-up turn failures after notify_on_exit to both foreground and background subagents", async () => {
+    const waiters = new Map<string, () => void>();
+    const termPort: TerminalPort = {
+      exec: async (call) =>
+        encodeTerminalOutcome({
+          running: true,
+          sessionId: call.sessionId,
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 10,
+        }),
+      write: async (call) =>
+        encodeTerminalOutcome({
+          running: false,
+          sessionId: call.sessionId,
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 10,
+          ending: { kind: "exited", code: 0 },
+          pipesHeld: false,
+          backgroundRunning: false,
+        }),
+      wait: (call) =>
+        new Promise((resolve) => {
+          waiters.set(call.sessionId, () =>
+            resolve(
+              encodeTerminalWaitOutcome({
+                consumed: false,
+                outcome: {
+                  running: false,
+                  sessionId: call.sessionId,
+                  output: "done\n",
+                  droppedBytes: 0,
+                  wallTimeMs: 50,
+                  ending: { kind: "exited", code: 0 },
+                  pipesHeld: false,
+                  backgroundRunning: false,
+                },
+              }),
+            ),
+          );
+        }),
+    };
+    const terminal = terminalExtension(termPort);
+    const subagent = subagentExtension({ extensions: [terminal] });
+    const agent = await testAgent();
+    const bgDelivered = Promise.withResolvers<string>();
+    const sessions: string[] = [];
+
+    agent.provider
+      .step("root fg", (request) => {
+        request.call([{ name: "subagent", arguments: { prompt: "fg notify job" } }]);
+      })
+      .step("root sees fg failure and starts bg", (request) => {
+        const fgOut = request.toolOutputs().at(-1) ?? "";
+        expect(fgOut).toContain("bad follow-up fg");
+        expect(fgOut).not.toContain("Still waiting fg.");
+        request.call([
+          { name: "subagent", arguments: { prompt: "bg notify job", run_in_background: true } },
+        ]);
+      })
+      .step("root acks bg", (request) => request.text("Running bg."))
+      .step("root sees bg failure", (request) => {
+        const msg = request.userTexts().at(-1) ?? "";
+        bgDelivered.resolve(msg);
+        request.text("Handled bg failure.");
+      });
+
+    agent.provider
+      .lane("fg worker", (request) => request.userTexts()[0] === "fg notify job")
+      .step("fg starts cmd", (request) => {
+        request.call([
+          { name: "exec_command", arguments: { command: "job1", notify_on_exit: true } },
+        ]);
+      })
+      .step("fg waits", (request) => {
+        const id = /session_id:\s*(\S+?)\]/.exec(request.toolOutputs().at(-1) ?? "")?.[1] ?? "";
+        sessions.push(id);
+        setTimeout(() => waiters.get(id)?.(), 0);
+        request.text("Still waiting fg.");
+      })
+      .step("fg follow-up HTTP 400", (request) => {
+        request.status(400, "bad follow-up fg");
+      });
+
+    agent.provider
+      .lane("bg worker", (request) => request.userTexts()[0] === "bg notify job")
+      .step("bg starts cmd", (request) => {
+        request.call([
+          { name: "exec_command", arguments: { command: "job2", notify_on_exit: true } },
+        ]);
+      })
+      .step("bg waits", (request) => {
+        const id = /session_id:\s*(\S+?)\]/.exec(request.toolOutputs().at(-1) ?? "")?.[1] ?? "";
+        sessions.push(id);
+        setTimeout(() => waiters.get(id)?.(), 0);
+        request.text("Still waiting bg.");
+      })
+      .step("bg follow-up HTTP 400", (request) => {
+        request.status(400, "bad follow-up bg");
+      });
+
+    const { runtime } = await agent.open({ extensions: [terminal, subagent] });
+    const events: ToolResult[] = [];
+    const watch = await runtime.watchEvents((batch) => {
+      for (const ev of batch) {
+        if (
+          ev.type === "tool_execution_end" &&
+          ev.toolName === "subagent" &&
+          ToolResultEntry.is(ev.entry)
+        ) {
+          const msg = ev.entry.model?.[0];
+          if (msg?.role === "toolResult") {
+            events.push({ content: [{ type: "text", text: "" }], isError: msg.isError });
+          }
+        }
+      }
+    });
+
+    await (await runtime.submit("go", { requestId: "m1" })).settled();
+    const bgMsg = await within(2000, "background failed delivery", bgDelivered.promise);
+    expect(bgMsg).toContain('status="failed"');
+    expect(bgMsg).toContain("bad follow-up bg");
+    expect(bgMsg).not.toContain("Still waiting bg.");
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[0]?.isError).toBe(true);
+    await watch.stop();
+    await runtime.idle();
+    agent.provider.assertComplete();
+  });
+
+  it("allows parent and subagent conversations to independently arm notify_on_exit on the same terminal session", async () => {
+    const waiters: Array<{ conversationId: number; resolve: () => void }> = [];
+    let sharedSessionId = "";
+    const termPort: TerminalPort = {
+      exec: async (call) => {
+        sharedSessionId = call.sessionId;
+        return encodeTerminalOutcome({
+          running: true,
+          sessionId: call.sessionId,
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 10,
+        });
+      },
+      write: async (call) =>
+        encodeTerminalOutcome({
+          running: true,
+          sessionId: call.sessionId,
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 20,
+        }),
+      wait: (call) =>
+        new Promise((resolve) => {
+          waiters.push({
+            conversationId: call.conversationId,
+            resolve: () =>
+              resolve(
+                encodeTerminalWaitOutcome({
+                  consumed: false,
+                  outcome: {
+                    running: false,
+                    sessionId: call.sessionId,
+                    output: "shared finished\n",
+                    droppedBytes: 0,
+                    wallTimeMs: 100,
+                    ending: { kind: "exited", code: 0 },
+                    pipesHeld: false,
+                    backgroundRunning: false,
+                  },
+                }),
+              ),
+          });
+        }),
+    };
+    const terminal = terminalExtension(termPort);
+    const subagent = subagentExtension({ extensions: [terminal] });
+    const agent = await testAgent();
+    const rootNotified = Promise.withResolvers<string>();
+    const childResult = Promise.withResolvers<string>();
+
+    agent.provider
+      .step("root starts and watches", (request) => {
+        request.call([
+          {
+            name: "exec_command",
+            arguments: { command: "shared", yield_time_ms: 10, notify_on_exit: true },
+          },
+        ]);
+      })
+      .step("root delegates watch to bg subagent", (request) => {
+        request.call([
+          {
+            name: "subagent",
+            arguments: {
+              prompt: `watch session ${sharedSessionId}`,
+              run_in_background: true,
+            },
+          },
+        ]);
+      })
+      .step("root answers turn 1", (request) => request.text("Both watching."))
+      .step("root handles command_notification", (request) => {
+        rootNotified.resolve(request.userTexts().at(-1) ?? "");
+        request.text("Saw command exit.");
+      })
+      .step("root handles subagent_result", (request) => {
+        childResult.resolve(request.userTexts().at(-1) ?? "");
+        request.text("All settled.");
+      });
+
+    agent.provider
+      .lane("watcher", (request) => (request.userTexts()[0] ?? "").startsWith("watch session "))
+      .step("child arms watch", (request) => {
+        request.call([
+          {
+            name: "write_stdin",
+            arguments: { session_id: sharedSessionId, yield_time_ms: 10, notify_on_exit: true },
+          },
+        ]);
+      })
+      .step("child ends turn 1", (request) => request.text("Child watching."))
+      .step("child woken", (request) => {
+        expect(request.userTexts().at(-1)).toContain("shared finished");
+        request.text("Child saw shared exit.");
+      });
+
+    const { runtime } = await agent.open({ extensions: [terminal, subagent] });
+    await (await runtime.submit("go", { requestId: "m1" })).settled();
+    await vi.waitFor(() => expect(waiters).toHaveLength(2));
+    expect(new Set(waiters.map((w) => w.conversationId)).size).toBe(2);
+
+    const rootWaiter = waiters.find((w) => w.conversationId === runtime.rootConversationId);
+    const childWaiter = waiters.find((w) => w.conversationId !== runtime.rootConversationId);
+    expect(rootWaiter).toBeDefined();
+    expect(childWaiter).toBeDefined();
+
+    rootWaiter!.resolve();
+    const settledRoot = await within(2000, "root notification", rootNotified.promise);
+    childWaiter!.resolve();
+    const settledChild = await within(2000, "subagent result", childResult.promise);
+    expect(settledRoot).toContain("shared finished");
+    expect(settledChild).toContain("Child saw shared exit.");
+    await runtime.idle();
+    agent.provider.assertComplete();
   });
 });

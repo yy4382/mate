@@ -127,6 +127,92 @@ describe("node gateway tool calls (TESTS)", () => {
     expect(legacyPreparations).toEqual(["home"]);
   });
 
+  it("refuses tools absent from the node handshake without sending anything over the wire, and resets advertised tools on reconnect", async () => {
+    const under = await startGateway();
+    const arrived: string[] = [];
+    const legacy = await under.pairedNode({
+      tools: null,
+      onRunTool: async (message) => {
+        arrived.push(message.tool);
+        return { outputs: [], result: toolResult(`ran ${message.tool}`) };
+      },
+    });
+
+    const memoryRead = await under.gateway.runTool(
+      legacy.nodeId,
+      "agent-1",
+      { access: "home", tool: "memory_read", arguments: {} },
+      () => {},
+      never,
+    );
+    const terminalExec = await under.gateway.runTool(
+      legacy.nodeId,
+      "agent-1",
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: "s1", command: "pwd" },
+      },
+      () => {},
+      never,
+    );
+    for (const result of [memoryRead, terminalExec]) {
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatch(/upgrade/i);
+    }
+    expect(arrived).toEqual([]);
+    expect(
+      await under.gateway.runTool(
+        legacy.nodeId,
+        "agent-1",
+        { access: "home", tool: "read", arguments: { path: "notes.txt" } },
+        () => {},
+        never,
+      ),
+    ).toEqual(toolResult("ran read"));
+    expect(under.gateway.status(legacy.nodeId).online).toBe(true);
+
+    const capableCalls: string[] = [];
+    const capable = new FakeNode({
+      gatewayUrl: under.url,
+      nodeId: legacy.nodeId,
+      publicKey: legacy.publicKey,
+      sign: legacy.sign,
+      onRunTool: async (message) => {
+        capableCalls.push(message.tool);
+        return { outputs: [], result: toolResult("ran terminal") };
+      },
+    });
+    onTestFinished(() => capable.terminate());
+    await capable.connect();
+    expect(
+      await under.gateway.runTool(
+        legacy.nodeId,
+        "agent-1",
+        {
+          access: "home",
+          tool: "terminal_exec",
+          arguments: { sessionId: "s2", command: "pwd" },
+        },
+        () => {},
+        never,
+      ),
+    ).toEqual(toolResult("ran terminal"));
+    expect(capableCalls).toEqual(["terminal_exec"]);
+
+    await legacy.connect();
+    const afterDowngrade = await under.gateway.runTool(
+      legacy.nodeId,
+      "agent-1",
+      { access: "home", tool: "memory_read", arguments: {} },
+      () => {},
+      never,
+    );
+    expect(afterDowngrade.isError).toBe(true);
+    expect(text(afterDowngrade)).toMatch(/upgrade/i);
+    expect(arrived).toEqual(["read"]);
+  });
+
   it("streams a call's output to the caller and then returns its result", async () => {
     const under = await startGateway();
     const node = await under.pairedNode({

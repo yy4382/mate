@@ -3,6 +3,8 @@ import { Type } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
   AssistantEntry,
+  GenerationTask,
+  UserEntry,
   configure,
   defineDoc,
   defineExtension,
@@ -11,6 +13,7 @@ import {
   type AgentChange,
   type ConversationHandle,
   type ConversationId,
+  type Cursor,
   type EntryId,
   type EntryRecord,
   type Extension,
@@ -116,6 +119,14 @@ function defineRunTask(options: { readonly name: string; readonly background: bo
           });
           return;
         }
+        const recordedBaseline = await runtime.memo<TaskId>("baselineTaskId", context);
+        const baselineTaskId =
+          recordedBaseline ??
+          (await runtime.memo(
+            "baselineTaskId",
+            await latestChildTaskId(runtime, childId, context),
+            context,
+          ));
         const submission = await child.submit(
           {
             type: "input",
@@ -141,7 +152,12 @@ function defineRunTask(options: { readonly name: string; readonly background: bo
             });
             return;
           }
-          const failure = `Subagent ${agentId} failed: ${settled.reason}`;
+          await child.abort(context, { background: true });
+          const detail =
+            typeof settled.detail === "string" && settled.detail !== ""
+              ? ` (${settled.detail})`
+              : "";
+          const failure = `Subagent ${agentId} failed: ${settled.reason}${detail}`;
           if (options.background) {
             await reportToParent(runtime, agentId, "failed", failure, context);
           }
@@ -164,8 +180,41 @@ function defineRunTask(options: { readonly name: string; readonly background: bo
           return;
         }
 
+        const inspection = await inspectChildRun(runtime, childId, baselineTaskId, context);
+        if (inspection.kind === "aborted") {
+          await clearActiveAndCommit(runtime, agentId, context, {
+            status: "terminal",
+            outcome: { status: "aborted" },
+          });
+          return;
+        }
+        if (inspection.kind === "failed") {
+          await child.abort(context, { background: true });
+          const failure = `Subagent ${agentId} failed: ${inspection.message}`;
+          if (options.background) {
+            await reportToParent(runtime, agentId, "failed", failure, context);
+          }
+          await clearActiveAndCommit(runtime, agentId, context, {
+            status: "terminal",
+            outcome: {
+              status: "completed",
+              result: { agentId, reply: failure, ok: false },
+            },
+          });
+          return;
+        }
+
         const view = await runtime.context(childId, context);
-        const reply = latestAssistantText(view.entries, settled.answer);
+        let minReplyEntryId = settled.answer;
+        for (const entry of view.entries) {
+          if (
+            UserEntry.is(entry) &&
+            (minReplyEntryId === undefined || entry.id > minReplyEntryId)
+          ) {
+            minReplyEntryId = entry.id;
+          }
+        }
+        const reply = latestAssistantText(view.entries, minReplyEntryId);
         if (options.background) {
           await reportToParent(runtime, agentId, "completed", reply, context);
         }
@@ -249,6 +298,59 @@ async function clearActiveAndCommit(
     }
     return nextState;
   }, context);
+}
+
+async function latestChildTaskId(
+  runtime: TaskRuntime<SubagentRunInput, { readonly phase: "run" }, SubagentRunResult, object>,
+  childId: ConversationId,
+  context: Context,
+): Promise<TaskId> {
+  let latest = 0 as TaskId;
+  await runtime.commit(async (tx) => {
+    const page = await tx.scanTasks({ conversationId: childId, order: "descending" }, 1);
+    if (page.items[0] !== undefined) latest = page.items[0].id;
+    return undefined;
+  }, context);
+  return latest;
+}
+
+type ChildRunInspection =
+  | { readonly kind: "ok" }
+  | { readonly kind: "aborted" }
+  | { readonly kind: "failed"; readonly message: string };
+
+/** Inspect every generation and background task created during this subagent run so follow-up failures propagate. */
+async function inspectChildRun(
+  runtime: TaskRuntime<SubagentRunInput, { readonly phase: "run" }, SubagentRunResult, object>,
+  childId: ConversationId,
+  baselineTaskId: TaskId,
+  context: Context,
+): Promise<ChildRunInspection> {
+  let inspection: ChildRunInspection = { kind: "ok" };
+  await runtime.commit(async (tx) => {
+    let cursor: Cursor | undefined;
+    do {
+      const page = await tx.scanTasks({ conversationId: childId, order: "ascending" }, 100, cursor);
+      for (const item of page.items) {
+        if (item.id <= baselineTaskId) continue;
+        if (item.kind !== GenerationTask.definition.name && !item.background) continue;
+        if (item.state.status !== "terminal") continue;
+        const { outcome } = item.state;
+        if (outcome.status === "aborted") {
+          inspection = { kind: "aborted" };
+        } else if (outcome.status === "failed" || outcome.status === "faulted") {
+          inspection = { kind: "failed", message: outcome.error.message };
+          return undefined;
+        } else if (outcome.status === "orphaned") {
+          inspection = { kind: "failed", message: outcome.reason };
+          return undefined;
+        }
+      }
+      cursor = page.next;
+    } while (cursor !== undefined);
+    return undefined;
+  }, context);
+  return inspection;
 }
 
 /**
@@ -456,7 +558,12 @@ export function subagentExtension(options: SubagentOptions): Extension {
       if (outcome.status === "completed") {
         return {
           content: [
-            { type: "text", text: `Subagent ${outcome.result.agentId}:\n${outcome.result.reply}` },
+            {
+              type: "text",
+              text: outcome.result.ok
+                ? `Subagent ${outcome.result.agentId}:\n${outcome.result.reply}`
+                : outcome.result.reply,
+            },
           ],
           isError: !outcome.result.ok,
         };

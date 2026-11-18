@@ -2,13 +2,14 @@ import type { NodeGateway } from "@palace/gateway";
 import {
   decodeMemoryReadOutcome,
   decodeTerminalOutcome,
+  decodeTerminalWaitOutcome,
   type NodeAccess,
   type ToolResult,
 } from "@palace/node-protocol";
 import type { FilesPort, MemoryPort, TerminalPort } from "@palace/plugins";
 import type { AdminStore } from "./store.ts";
 
-const MAX_SESSION_ROUTES = 1024;
+const MAX_SETTLED_SESSION_ROUTES = 1024;
 
 export type GatewayAgentPorts = {
   readonly terminal: TerminalPort;
@@ -35,8 +36,10 @@ export function gatewayAgentPorts(
   homeNodeId: string,
   agentId: string,
 ): GatewayAgentPorts {
-  const sessionNodes = new Map<string, string>();
-  const activeSessions = new Set<string>();
+  let closed = false;
+  const activeSessionNodes = new Map<string, string>();
+  const settledSessionNodes = new Map<string, string>();
+  const pendingKills = new Map<string, Promise<void>>();
 
   const accessibleNodes = () =>
     gateway.nodes().flatMap((node) => {
@@ -44,14 +47,47 @@ export function gatewayAgentPorts(
       return access === undefined ? [] : [{ node, access }];
     });
 
-  const rememberSessionNode = (sessionId: string, targetNodeId: string): void => {
-    if (sessionNodes.has(sessionId)) {
-      sessionNodes.delete(sessionId);
-    } else if (sessionNodes.size >= MAX_SESSION_ROUTES) {
-      const oldest = sessionNodes.keys().next().value;
-      if (oldest !== undefined) sessionNodes.delete(oldest);
+  const rememberSettledSession = (sessionId: string, targetNodeId: string): void => {
+    activeSessionNodes.delete(sessionId);
+    settledSessionNodes.delete(sessionId);
+    if (settledSessionNodes.size >= MAX_SETTLED_SESSION_ROUTES) {
+      const oldest = settledSessionNodes.keys().next().value;
+      if (oldest !== undefined) settledSessionNodes.delete(oldest);
     }
-    sessionNodes.set(sessionId, targetNodeId);
+    settledSessionNodes.set(sessionId, targetNodeId);
+  };
+
+  const killSession = (sessionId: string, nodeId: string): Promise<void> => {
+    activeSessionNodes.delete(sessionId);
+    const existing = pendingKills.get(sessionId);
+    if (existing !== undefined) return existing;
+    const node = gateway.nodes().find((candidate) => candidate.nodeId === nodeId);
+    const access = store.nodeAccess(agentId, homeNodeId, nodeId);
+    if (node === undefined || !node.online || access === undefined) {
+      return Promise.resolve();
+    }
+    const promise = gateway
+      .runTool(
+        nodeId,
+        agentId,
+        {
+          tool: "terminal_write",
+          arguments: { sessionId, yieldTimeMs: 0, kill: true },
+          access,
+          conversationId: 0,
+        },
+        () => {},
+        AbortSignal.timeout(5_000),
+      )
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .finally(() => {
+        if (pendingKills.get(sessionId) === promise) pendingKills.delete(sessionId);
+      });
+    pendingKills.set(sessionId, promise);
+    return promise;
   };
 
   type ResolvedNode =
@@ -89,7 +125,7 @@ export function gatewayAgentPorts(
   };
 
   const resolveBoundSession = (sessionId: string): ResolvedNode => {
-    const targetNodeId = sessionNodes.get(sessionId);
+    const targetNodeId = activeSessionNodes.get(sessionId) ?? settledSessionNodes.get(sessionId);
     if (targetNodeId === undefined) {
       return { ok: false, result: failure(`Unknown or expired terminal session: ${sessionId}`) };
     }
@@ -109,39 +145,48 @@ export function gatewayAgentPorts(
 
   const terminal: TerminalPort = {
     async exec(call, onOutput, signal) {
+      if (closed || signal.aborted) return failure("Command was stopped");
       const { conversationId, node: nodeName, ...execArgs } = call;
       const target = resolveByName(nodeName);
       if (!target.ok) return target.result;
-      rememberSessionNode(execArgs.sessionId, target.nodeId);
-      const result = await gateway.runTool(
-        target.nodeId,
-        agentId,
-        {
-          tool: "terminal_exec",
-          arguments: {
-            sessionId: execArgs.sessionId,
-            command: execArgs.command,
-            yieldTimeMs: execArgs.yieldTimeMs,
-            ...(execArgs.workdir === undefined ? {} : { workdir: execArgs.workdir }),
-            ...(execArgs.timeoutMs === undefined ? {} : { timeoutMs: execArgs.timeoutMs }),
+      activeSessionNodes.set(execArgs.sessionId, target.nodeId);
+      settledSessionNodes.delete(execArgs.sessionId);
+      try {
+        const result = await gateway.runTool(
+          target.nodeId,
+          agentId,
+          {
+            tool: "terminal_exec",
+            arguments: {
+              sessionId: execArgs.sessionId,
+              command: execArgs.command,
+              yieldTimeMs: execArgs.yieldTimeMs,
+              ...(execArgs.workdir === undefined ? {} : { workdir: execArgs.workdir }),
+              ...(execArgs.timeoutMs === undefined ? {} : { timeoutMs: execArgs.timeoutMs }),
+            },
+            access: target.access,
+            conversationId,
           },
-          access: target.access,
-          conversationId,
-        },
-        onOutput,
-        signal,
-      );
-      const decoded = decodeTerminalOutcome(result);
-      if (decoded.ok && decoded.outcome.running) {
-        activeSessions.add(execArgs.sessionId);
-      } else {
-        activeSessions.delete(execArgs.sessionId);
-        sessionNodes.delete(execArgs.sessionId);
+          onOutput,
+          signal,
+        );
+        if (closed || signal.aborted) {
+          await killSession(execArgs.sessionId, target.nodeId);
+          return result;
+        }
+        const decoded = decodeTerminalOutcome(result);
+        if (!decoded.ok || !decoded.outcome.running) {
+          activeSessionNodes.delete(execArgs.sessionId);
+        }
+        return result;
+      } catch (error) {
+        activeSessionNodes.delete(execArgs.sessionId);
+        throw error;
       }
-      return result;
     },
 
     async write(call, onOutput, signal) {
+      if (closed) return failure("Agent is closing");
       const { conversationId, ...writeArgs } = call;
       const target = resolveBoundSession(writeArgs.sessionId);
       if (!target.ok) return target.result;
@@ -165,32 +210,33 @@ export function gatewayAgentPorts(
       );
       const decoded = decodeTerminalOutcome(result);
       if (decoded.ok && !decoded.outcome.running) {
-        // Keep sessionNodes entry so a concurrent CommandWatchTask terminal_wait reaches the node and sees { consumed: true }.
-        activeSessions.delete(writeArgs.sessionId);
+        // Move to bounded settled routes so concurrent terminal_wait calls still reach the node and get { consumed }.
+        rememberSettledSession(writeArgs.sessionId, target.nodeId);
       }
       return result;
     },
 
     async wait(call, signal) {
+      if (closed) return failure("Agent is closing");
       const { conversationId, ...waitArgs } = call;
       const target = resolveBoundSession(waitArgs.sessionId);
       if (!target.ok) return target.result;
-      try {
-        return await gateway.runTool(
-          target.nodeId,
-          agentId,
-          {
-            tool: "terminal_wait",
-            arguments: waitArgs,
-            access: target.access,
-            conversationId,
-          },
-          () => {},
-          signal,
-        );
-      } finally {
-        activeSessions.delete(waitArgs.sessionId);
+      const result = await gateway.runTool(
+        target.nodeId,
+        agentId,
+        {
+          tool: "terminal_wait",
+          arguments: waitArgs,
+          access: target.access,
+          conversationId,
+        },
+        () => {},
+        signal,
+      );
+      if (decodeTerminalWaitOutcome(result).ok) {
+        rememberSettledSession(waitArgs.sessionId, target.nodeId);
       }
+      return result;
     },
   };
 
@@ -257,38 +303,16 @@ export function gatewayAgentPorts(
     files,
     memory,
     async close() {
-      const sessions = [...activeSessions];
-      const routes = new Map(sessionNodes);
-      activeSessions.clear();
-      sessionNodes.clear();
-      if (sessions.length === 0) return;
-      const nodesById = new Map(gateway.nodes().map((node) => [node.nodeId, node]));
-      const kills: Promise<unknown>[] = [];
-      for (const sessionId of sessions) {
-        const nodeId = routes.get(sessionId);
-        if (nodeId === undefined) continue;
-        const node = nodesById.get(nodeId);
-        if (node === undefined || !node.online) continue;
-        const access = store.nodeAccess(agentId, homeNodeId, nodeId);
-        if (access === undefined) continue;
-        kills.push(
-          gateway
-            .runTool(
-              nodeId,
-              agentId,
-              {
-                tool: "terminal_write",
-                arguments: { sessionId, yieldTimeMs: 0, kill: true },
-                access,
-                conversationId: 0,
-              },
-              () => {},
-              new AbortController().signal,
-            )
-            .catch(() => undefined),
-        );
+      closed = true;
+      const active = [...activeSessionNodes.entries()];
+      activeSessionNodes.clear();
+      settledSessionNodes.clear();
+      for (const [sessionId, nodeId] of active) {
+        void killSession(sessionId, nodeId);
       }
-      await Promise.allSettled(kills);
+      while (pendingKills.size > 0) {
+        await Promise.allSettled([...pendingKills.values()]);
+      }
     },
   };
 }

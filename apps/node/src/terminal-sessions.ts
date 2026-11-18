@@ -28,6 +28,12 @@ type ExecCall = {
   readonly arguments: TerminalExecArgs;
 };
 
+type SettledEntry = {
+  readonly outcome: TerminalSettledOutcome;
+  writeConsumed: boolean;
+  readonly consumedConversations: Set<number | undefined>;
+};
+
 type Session = {
   readonly key: string;
   readonly agentId: string;
@@ -50,26 +56,27 @@ type Session = {
   killing: boolean;
   updateRememberedDirectory: boolean;
   discardSettled: boolean;
-  activeWrite: boolean;
-  settled: TerminalSettledOutcome | undefined;
-  finishStarted: boolean;
+  hasActiveWrite: boolean;
+  activeWriteConversationId: number | undefined;
+  settlePromise: Promise<TerminalSettledOutcome> | undefined;
+  settledEntry: SettledEntry | undefined;
   waiters: {
     write?: ((outcome: TerminalSettledOutcome) => void) | undefined;
-    wait?: ((outcome: TerminalWaitOutcome) => void) | undefined;
+    readonly wait: Set<(entry: SettledEntry) => void>;
   };
 };
 
 /**
  * Stateful terminal sessions keyed by `(agentId, sessionId)`. Keeps live process handles, unread output buffers,
- * and bounded unconsumed settled receipts across `terminal_exec`, `terminal_write`, and `terminal_wait`.
+ * and bounded settled receipts across `terminal_exec`, `terminal_write`, and `terminal_wait`.
  */
 export class TerminalSessions {
   readonly #commands: Commands;
   readonly #shells: Shells;
   readonly #clock: Clock;
   readonly #active = new Map<string, Session>();
-  readonly #settled = new Map<string, TerminalSettledOutcome>();
-  readonly #consumed = new Set<string>();
+  readonly #settled = new Map<string, SettledEntry>();
+  readonly #killedBeforeStart = new Set<string>();
 
   constructor(commands: Commands, shells: Shells, clock: Clock) {
     this.#commands = commands;
@@ -84,13 +91,16 @@ export class TerminalSessions {
   ): Promise<ToolResult> {
     const { agentId, workspace, arguments: args } = call;
     const key = sessionKey(agentId, args.sessionId);
-    if (this.#active.has(key) || this.#settled.has(key) || this.#consumed.has(key)) {
+    if (this.#active.has(key) || this.#settled.has(key)) {
       return failure(`Terminal session ${args.sessionId} already exists`);
+    }
+    if (this.#killedBeforeStart.delete(key) || signal.aborted) {
+      return stoppedOutcome(args.sessionId);
     }
 
     const posix = process.platform !== "win32";
     const snapshot = posix ? await this.#shells.prepare(signal) : undefined;
-    if (snapshot === "stopped" || signal.aborted) {
+    if (this.#killedBeforeStart.delete(key) || snapshot === "stopped" || signal.aborted) {
       return stoppedOutcome(args.sessionId);
     }
     if (snapshot !== undefined && !snapshot.ok) {
@@ -190,11 +200,12 @@ export class TerminalSessions {
       forcedEnding: undefined,
       killing: false,
       updateRememberedDirectory: shellsSessionKey !== undefined,
-      discardSettled: false,
-      activeWrite: false,
-      settled: undefined,
-      finishStarted: false,
-      waiters: {},
+      discardSettled: true,
+      hasActiveWrite: false,
+      activeWriteConversationId: undefined,
+      settlePromise: undefined,
+      settledEntry: undefined,
+      waiters: { wait: new Set() },
     };
     const recordExit = (ending: Ending) => {
       session.rawExit = ending;
@@ -264,8 +275,9 @@ export class TerminalSessions {
 
     if (yielded) {
       signal.removeEventListener("abort", onExecAbort);
+      session.discardSettled = false;
       session.updateRememberedDirectory = false;
-      this.#ensureDetachedMonitor(session);
+      void this.#settleSession(session);
       detachStream();
       const drained = output.drain();
       return encodeTerminalOutcome({
@@ -284,9 +296,8 @@ export class TerminalSessions {
     if (signal.aborted) graceRelay();
     signal.addEventListener("abort", graceRelay, { once: true });
     try {
-      const outcome = await this.#finishSession(session, true);
+      const outcome = await this.#settleSession(session);
       detachStream();
-      this.#active.delete(key);
       const mergedNotes = [...notes, ...(outcome.notes ?? [])];
       return encodeTerminalOutcome({
         ...outcome,
@@ -298,52 +309,75 @@ export class TerminalSessions {
   }
 
   async write(
-    call: { readonly agentId: string; readonly arguments: TerminalWriteArgs },
+    call: {
+      readonly agentId: string;
+      readonly conversationId?: number | undefined;
+      readonly arguments: TerminalWriteArgs;
+    },
     onOutput: (chunk: string) => void,
     signal: AbortSignal,
   ): Promise<ToolResult> {
     const key = sessionKey(call.agentId, call.arguments.sessionId);
     const alreadySettled = this.#settled.get(key);
+
+    if (call.arguments.kill === true) {
+      if (alreadySettled !== undefined) {
+        if (!alreadySettled.writeConsumed) {
+          alreadySettled.writeConsumed = true;
+          alreadySettled.consumedConversations.add(call.conversationId);
+          return encodeTerminalOutcome(alreadySettled.outcome);
+        }
+        return failure(`Unknown or already finished terminal session: ${call.arguments.sessionId}`);
+      }
+      const session = this.#active.get(key);
+      if (session === undefined) {
+        this.#rememberKilledBeforeStart(key);
+        return failure(`Unknown or already finished terminal session: ${call.arguments.sessionId}`);
+      }
+      session.updateRememberedDirectory = false;
+      const finish = this.#settleSession(session);
+      await this.#terminate(session, { kind: "killed" });
+      const outcome = await raceAbort(finish, signal);
+      if (outcome === "aborted") {
+        return failure("Command write was stopped by its caller");
+      }
+      if (session.settledEntry !== undefined) {
+        session.settledEntry.writeConsumed = true;
+        session.settledEntry.consumedConversations.add(call.conversationId);
+      }
+      return encodeTerminalOutcome(outcome);
+    }
+
     if (alreadySettled !== undefined) {
-      this.#settled.delete(key);
-      this.#markConsumed(key);
-      const notes = [...(alreadySettled.notes ?? [])];
+      if (alreadySettled.writeConsumed) {
+        return failure(`Unknown or already finished terminal session: ${call.arguments.sessionId}`);
+      }
+      alreadySettled.writeConsumed = true;
+      alreadySettled.consumedConversations.add(call.conversationId);
+      const notes = [...(alreadySettled.outcome.notes ?? [])];
       if (call.arguments.chars !== undefined && call.arguments.chars.length > 0) {
         notes.push("[Process had already exited; stdin was not written]");
       }
       return encodeTerminalOutcome({
-        ...alreadySettled,
+        ...alreadySettled.outcome,
         ...(notes.length === 0 ? {} : { notes }),
       });
     }
 
     const session = this.#active.get(key);
-    if (session === undefined) {
+    if (session === undefined || session.discardSettled) {
       return failure(`Unknown or already finished terminal session: ${call.arguments.sessionId}`);
     }
-    if (session.activeWrite) {
+    if (session.hasActiveWrite) {
       return failure(
         `Another write_stdin call is already active for terminal session ${call.arguments.sessionId}`,
       );
     }
 
-    session.activeWrite = true;
+    session.hasActiveWrite = true;
+    session.activeWriteConversationId = call.conversationId;
     const detachStream = session.output.attach(onOutput);
     try {
-      if (call.arguments.kill === true) {
-        const outcome = await this.#awaitWriteSettle(
-          session,
-          () => this.#terminate(session, { kind: "killed" }),
-          undefined,
-          signal,
-        );
-        if (outcome === "aborted" || outcome === "yield") {
-          return failure("Command write was stopped by its caller");
-        }
-        this.#markConsumed(key);
-        return encodeTerminalOutcome(outcome);
-      }
-
       if (call.arguments.chars !== undefined && call.arguments.chars.length > 0) {
         if (!session.group.child.stdin.writableEnded && !session.group.child.stdin.destroyed) {
           session.group.child.stdin.write(call.arguments.chars);
@@ -357,7 +391,7 @@ export class TerminalSessions {
 
       const settled = await this.#awaitWriteSettle(
         session,
-        () => this.#ensureDetachedMonitor(session),
+        () => void this.#settleSession(session),
         call.arguments.yieldTimeMs,
         signal,
       );
@@ -374,75 +408,109 @@ export class TerminalSessions {
           wallTimeMs: this.#clock.now() - session.startedAt,
         });
       }
-      this.#markConsumed(key);
+      if (session.settledEntry !== undefined) {
+        session.settledEntry.writeConsumed = true;
+        session.settledEntry.consumedConversations.add(call.conversationId);
+      }
       return encodeTerminalOutcome(settled);
     } finally {
       session.waiters.write = undefined;
-      session.activeWrite = false;
+      session.hasActiveWrite = false;
+      session.activeWriteConversationId = undefined;
       detachStream();
     }
   }
 
   async wait(
-    call: { readonly agentId: string; readonly arguments: TerminalWaitArgs },
+    call: {
+      readonly agentId: string;
+      readonly conversationId?: number | undefined;
+      readonly arguments: TerminalWaitArgs;
+    },
     signal: AbortSignal,
   ): Promise<ToolResult> {
     const key = sessionKey(call.agentId, call.arguments.sessionId);
-    if (this.#consumed.delete(key)) {
-      return encodeTerminalWaitOutcome({ consumed: true });
-    }
     const alreadySettled = this.#settled.get(key);
     if (alreadySettled !== undefined) {
-      this.#settled.delete(key);
-      return encodeTerminalWaitOutcome({ consumed: false, outcome: alreadySettled });
+      const consumed =
+        alreadySettled.consumedConversations.has(call.conversationId) ||
+        alreadySettled.consumedConversations.has(undefined);
+      return encodeTerminalWaitOutcome(
+        consumed ? { consumed: true } : { consumed: false, outcome: alreadySettled.outcome },
+      );
     }
 
     const session = this.#active.get(key);
-    if (session === undefined) {
+    if (session === undefined || session.discardSettled) {
       return failure(
         `Terminal session ${call.arguments.sessionId} was lost or does not exist on this node`,
       );
     }
 
-    this.#ensureDetachedMonitor(session);
-    const waitResult = await new Promise<TerminalWaitOutcome | "aborted">((resolveWait) => {
+    void this.#settleSession(session);
+    const waitResult = await new Promise<SettledEntry | "aborted">((resolveWait) => {
+      const listener = (entry: SettledEntry) => {
+        signal.removeEventListener("abort", onAbort);
+        resolveWait(entry);
+      };
       const onAbort = () => {
-        session.waiters.wait = undefined;
+        session.waiters.wait.delete(listener);
         resolveWait("aborted");
       };
       if (signal.aborted) {
-        onAbort();
+        resolveWait("aborted");
         return;
       }
+      session.waiters.wait.add(listener);
       signal.addEventListener("abort", onAbort, { once: true });
-      session.waiters.wait = (outcome) => {
-        signal.removeEventListener("abort", onAbort);
-        session.waiters.wait = undefined;
-        resolveWait(outcome);
-      };
     });
 
     if (waitResult === "aborted") {
-      session.discardSettled = true;
-      await this.#terminate(session, { kind: "stopped" });
-      session.graceAbort.abort();
-      await session.processDone;
-      this.#settled.delete(key);
+      if (session.waiters.wait.size === 0 && !session.hasActiveWrite) {
+        session.discardSettled = true;
+        const finish = this.#settleSession(session);
+        await this.#terminate(session, { kind: "stopped" });
+        session.graceAbort.abort();
+        await finish;
+        this.#settled.delete(key);
+      }
       return failure(
         "Command was stopped: its caller stopped it or the connection to the node dropped",
       );
     }
 
-    return encodeTerminalWaitOutcome(waitResult);
+    const consumed =
+      waitResult.consumedConversations.has(call.conversationId) ||
+      waitResult.consumedConversations.has(undefined);
+    return encodeTerminalWaitOutcome(
+      consumed ? { consumed: true } : { consumed: false, outcome: waitResult.outcome },
+    );
+  }
+
+  /** Stop one active yielded session when the gateway cancels an in-flight call at its yield boundary. */
+  stopSession(agentId: string, sessionId: string): void {
+    const key = sessionKey(agentId, sessionId);
+    const session = this.#active.get(key);
+    if (session !== undefined) {
+      session.discardSettled = true;
+      session.updateRememberedDirectory = false;
+      session.graceAbort.abort();
+      void this.#terminate(session, { kind: "stopped" });
+      void this.#settleSession(session);
+    } else if (!this.#settled.has(key)) {
+      this.#rememberKilledBeforeStart(key);
+    }
   }
 
   /** Stop live detached sessions when the WebSocket connection drops and drop unconsumed receipts. */
   connectionClosed(): void {
     this.#settled.clear();
+    this.#killedBeforeStart.clear();
     for (const session of this.#active.values()) {
       session.discardSettled = true;
       session.graceAbort.abort();
       void this.#terminate(session, { kind: "stopped" });
+      void this.#settleSession(session);
     }
   }
 
@@ -452,9 +520,8 @@ export class TerminalSessions {
     yieldTimeMs: number | undefined,
     signal: AbortSignal,
   ): Promise<TerminalSettledOutcome | "yield" | "aborted"> {
-    if (session.settled !== undefined) {
-      this.#settled.delete(session.key);
-      return session.settled;
+    if (session.settledEntry !== undefined) {
+      return session.settledEntry.outcome;
     }
     const yieldAbort = new AbortController();
     return new Promise((resolveWrite) => {
@@ -477,10 +544,9 @@ export class TerminalSessions {
         resolveWrite(outcome);
       };
       trigger();
-      if (session.settled !== undefined) {
-        const outcome = session.settled;
+      if (session.settledEntry !== undefined) {
+        const outcome = session.settledEntry.outcome;
         cleanup();
-        this.#settled.delete(session.key);
         resolveWrite(outcome);
         return;
       }
@@ -520,38 +586,22 @@ export class TerminalSessions {
     session.termination.resolve();
   }
 
-  #ensureDetachedMonitor(session: Session): void {
-    if (session.finishStarted) return;
-    session.finishStarted = true;
-    void (async () => {
-      const outcome = await this.#finishSession(session, false);
-      session.settled = outcome;
-      this.#active.delete(session.key);
-      if (session.waiters.write !== undefined) {
-        const notifyWrite = session.waiters.write;
-        session.waiters.write = undefined;
-        notifyWrite(outcome);
-        session.waiters.wait?.({ consumed: true });
-      } else if (session.waiters.wait !== undefined) {
-        const notifyWait = session.waiters.wait;
-        session.waiters.wait = undefined;
-        notifyWait({ consumed: false, outcome });
-      } else if (!session.discardSettled) {
-        rememberBounded(this.#settled, session.key, outcome, MAX_SETTLED);
-      }
-    })();
+  #settleSession(session: Session): Promise<TerminalSettledOutcome> {
+    session.settlePromise ??= this.#finishSession(session);
+    return session.settlePromise;
   }
 
-  async #finishSession(session: Session, inlineExec: boolean): Promise<TerminalSettledOutcome> {
+  async #finishSession(session: Session): Promise<TerminalSettledOutcome> {
     await session.processDone;
     session.timeoutAbort.abort();
 
+    let outcome: TerminalSettledOutcome;
     if (session.rawExit?.kind === "not-started" && session.forcedEnding === undefined) {
       session.metadata && session.group.metadata?.destroy();
       session.group.child.stdin.destroy();
       this.#commands.untrack(session.group);
       const drained = session.output.drain();
-      return {
+      outcome = {
         running: false,
         sessionId: session.sessionId,
         output: drained.text,
@@ -561,66 +611,97 @@ export class TerminalSessions {
         pipesHeld: false,
         backgroundRunning: false,
       };
+    } else {
+      let ending =
+        session.forcedEnding ??
+        (session.rawExit === undefined ? { kind: "stopped" } : toTerminalEnding(session.rawExit));
+      const alreadyKilled =
+        ending.kind === "timed-out" ||
+        ending.kind === "stopped" ||
+        ending.kind === "killed" ||
+        ending.kind === "stop-failed";
+
+      const { pipesHeld, background } = await drainExitGrace({
+        clock: this.#clock,
+        group: session.group,
+        openPipes: session.openPipes,
+        metadataPending: () => session.metadata?.pending === true,
+        alreadyKilled,
+        signal: session.graceAbort.signal,
+        onStopFailed: (reason) => {
+          ending = { kind: "stop-failed", reason };
+        },
+      });
+      if (background !== "running") this.#commands.untrack(session.group);
+
+      let workingDirectory: string | undefined;
+      if (
+        session.updateRememberedDirectory &&
+        session.shellsSessionKey !== undefined &&
+        !alreadyKilled
+      ) {
+        workingDirectory = this.#shells.recordDirectory(
+          session.shellsSessionKey,
+          session.startDirectory,
+          session.metadata?.record,
+        );
+      }
+
+      const drained = session.output.drain();
+      outcome = {
+        running: false,
+        sessionId: session.sessionId,
+        output: drained.text,
+        droppedBytes: drained.droppedBytes,
+        wallTimeMs: this.#clock.now() - session.startedAt,
+        ending,
+        pipesHeld,
+        backgroundRunning: background === "running",
+        ...(workingDirectory === undefined ? {} : { workingDirectory }),
+      };
     }
 
-    let ending =
-      session.forcedEnding ??
-      (session.rawExit === undefined ? { kind: "stopped" } : toTerminalEnding(session.rawExit));
-    const alreadyKilled =
-      ending.kind === "timed-out" ||
-      ending.kind === "stopped" ||
-      ending.kind === "killed" ||
-      ending.kind === "stop-failed";
-
-    const { pipesHeld, background } = await drainExitGrace({
-      clock: this.#clock,
-      group: session.group,
-      openPipes: session.openPipes,
-      metadataPending: () => session.metadata?.pending === true,
-      alreadyKilled,
-      signal: session.graceAbort.signal,
-      onStopFailed: (reason) => {
-        ending = { kind: "stop-failed", reason };
-      },
-    });
-    if (background !== "running") this.#commands.untrack(session.group);
-
-    let workingDirectory: string | undefined;
-    if (
-      inlineExec &&
-      session.updateRememberedDirectory &&
-      session.shellsSessionKey !== undefined &&
-      !alreadyKilled
-    ) {
-      workingDirectory = this.#shells.recordDirectory(
-        session.shellsSessionKey,
-        session.startDirectory,
-        session.metadata?.record,
-      );
-    }
-
-    const drained = session.output.drain();
-    return {
-      running: false,
-      sessionId: session.sessionId,
-      output: drained.text,
-      droppedBytes: drained.droppedBytes,
-      wallTimeMs: this.#clock.now() - session.startedAt,
-      ending,
-      pipesHeld,
-      backgroundRunning: background === "running",
-      ...(workingDirectory === undefined ? {} : { workingDirectory }),
+    this.#active.delete(session.key);
+    const entry: SettledEntry = {
+      outcome,
+      writeConsumed: false,
+      consumedConversations: new Set(),
     };
+    session.settledEntry = entry;
+    if (session.waiters.write !== undefined) {
+      entry.writeConsumed = true;
+      entry.consumedConversations.add(session.activeWriteConversationId);
+      const notifyWrite = session.waiters.write;
+      session.waiters.write = undefined;
+      notifyWrite(outcome);
+    }
+    if (!session.discardSettled) {
+      rememberBounded(this.#settled, session.key, entry, MAX_SETTLED);
+    }
+    const waitListeners = [...session.waiters.wait];
+    session.waiters.wait.clear();
+    for (const listener of waitListeners) listener(entry);
+    return outcome;
   }
 
-  #markConsumed(key: string): void {
-    this.#consumed.delete(key);
-    this.#consumed.add(key);
-    if (this.#consumed.size > MAX_CONSUMED) {
-      const oldest = this.#consumed.values().next().value;
-      if (oldest !== undefined) this.#consumed.delete(oldest);
+  #rememberKilledBeforeStart(key: string): void {
+    this.#killedBeforeStart.delete(key);
+    this.#killedBeforeStart.add(key);
+    if (this.#killedBeforeStart.size > MAX_CONSUMED) {
+      const oldest = this.#killedBeforeStart.values().next().value;
+      if (oldest !== undefined) this.#killedBeforeStart.delete(oldest);
     }
   }
+}
+
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | "aborted"> {
+  if (signal.aborted) return Promise.resolve("aborted");
+  const aborted = Promise.withResolvers<"aborted">();
+  const onAbort = () => aborted.resolve("aborted");
+  signal.addEventListener("abort", onAbort, { once: true });
+  return Promise.race([promise, aborted.promise]).finally(() =>
+    signal.removeEventListener("abort", onAbort),
+  );
 }
 
 function sessionKey(agentId: string, sessionId: string): string {

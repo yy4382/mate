@@ -1,5 +1,6 @@
 import {
   decodeMemoryReadOutcome,
+  decodeTerminalWaitOutcome,
   EXEC_YIELD_MS,
   MEMORY_MAX_BYTES,
   TERMINAL_TIMEOUT_MS,
@@ -356,6 +357,112 @@ describe("node commands (TESTS 1.1)", () => {
           output: "finished-later\n",
           ending: { kind: "exited", code: 2 },
         },
+      },
+    });
+  });
+
+  it("delivers exit notification to multiple concurrent terminal_wait callers and tracks write_stdin consumption per conversation", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const shared = scriptCommand(
+      workspace,
+      'setTimeout(() => { process.stdout.write("both-see-me\\n"); process.exit(0); }, 250);',
+      "shared-wait",
+    );
+    const first = await execCommand(
+      node,
+      agentId,
+      { command: shared, yieldTimeMs: 10 },
+      undefined,
+      undefined,
+      0,
+    );
+    expect(first.outcome?.running).toBe(true);
+
+    const wait0 = node.run(
+      agentId,
+      "terminal_wait",
+      { sessionId: first.sessionId },
+      undefined,
+      undefined,
+      0,
+    );
+    const wait1 = node.run(
+      agentId,
+      "terminal_wait",
+      { sessionId: first.sessionId },
+      undefined,
+      undefined,
+      1,
+    );
+    const [res0, res1] = await Promise.all([wait0, wait1]);
+    expect(decodeTerminalWaitOutcome(res0)).toMatchObject({
+      ok: true,
+      outcome: {
+        consumed: false,
+        outcome: { sessionId: first.sessionId, output: "both-see-me\n" },
+      },
+    });
+    expect(decodeTerminalWaitOutcome(res1)).toMatchObject({
+      ok: true,
+      outcome: {
+        consumed: false,
+        outcome: { sessionId: first.sessionId, output: "both-see-me\n" },
+      },
+    });
+
+    // Consuming exit via write_stdin in conversation 1 suppresses only conversation 1's waiter.
+    const gated = scriptCommand(
+      workspace,
+      [
+        'let buf = "";',
+        'process.stdin.on("data", (c) => (buf += c));',
+        'process.stdin.on("end", () => { process.stdout.write("only-0-watches\\n"); process.exit(0); });',
+      ].join("\n"),
+      "per-conv-consume",
+    );
+    const second = await execCommand(
+      node,
+      agentId,
+      { command: gated, yieldTimeMs: 10 },
+      undefined,
+      undefined,
+      0,
+    );
+    expect(second.outcome?.running).toBe(true);
+
+    const p0 = node.run(
+      agentId,
+      "terminal_wait",
+      { sessionId: second.sessionId },
+      undefined,
+      undefined,
+      0,
+    );
+    const p1 = node.run(
+      agentId,
+      "terminal_wait",
+      { sessionId: second.sessionId },
+      undefined,
+      undefined,
+      1,
+    );
+    const w1 = await node.run(
+      agentId,
+      "terminal_write",
+      { sessionId: second.sessionId, eof: true, yieldTimeMs: 5000 },
+      undefined,
+      undefined,
+      1,
+    );
+    expect(w1.isError).toBe(false);
+    const [o0, o1] = await Promise.all([p0, p1]);
+    expect(decodeTerminalWaitOutcome(o1)).toEqual({ ok: true, outcome: { consumed: true } });
+    expect(decodeTerminalWaitOutcome(o0)).toMatchObject({
+      ok: true,
+      outcome: {
+        consumed: false,
+        outcome: { sessionId: second.sessionId, output: "only-0-watches\n" },
       },
     });
   });

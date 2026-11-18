@@ -129,6 +129,8 @@ export function filesExtension(
         description: tool.description,
         parameters: withNode(tool.parameters),
         replay: name === "read" ? "safe" : "unsafe",
+        ...(tool.prepareArguments === undefined ? {} : { prepareArguments: tool.prepareArguments }),
+        ...(tool.outputLimits === undefined ? {} : { outputLimits: tool.outputLimits }),
         execute: (args, api, context) => forward(name, args, api, context),
       })),
     ],

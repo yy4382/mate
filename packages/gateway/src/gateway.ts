@@ -159,8 +159,9 @@ export function createNodeGateway(options: NodeGatewayOptions): NodeGateway {
       const ws = ctx.connected.get(nodeId);
       if (ws === undefined) return offlineResult();
       if (signal.aborted) return stoppedResult();
-      if (access === "visit" && !ctx.sessions.get(ws)?.workspaceVisits)
-        return workspaceVisitUnsupported();
+      const session = ctx.sessions.get(ws);
+      if (access === "visit" && !session?.workspaceVisits) return workspaceVisitUnsupported();
+      if (!session?.tools.has(tool)) return toolUnsupported(tool);
 
       const { requestId } = message;
       const stop = () => {
@@ -247,6 +248,18 @@ function workspaceVisitUnsupported(): ToolResult {
       {
         type: "text",
         text: "Upgrade the target node to use independent Agent workspaces for visits.",
+      },
+    ],
+    isError: true,
+  };
+}
+
+function toolUnsupported(tool: ToolName): ToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Upgrade the target node to use ${tool}.`,
       },
     ],
     isError: true,

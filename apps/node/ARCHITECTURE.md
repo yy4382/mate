@@ -22,9 +22,9 @@ node 是一台 Linux、macOS 或 Windows 机器上以宿主现有账号运行的
 
 node 不直接使用 Durable 的单次执行工具，而是通过 `src/terminal-sessions.ts` 提供持久化的多步会话协议，支持流式交互与单消费者结束通知：
 
-- **`terminal_exec`：** 为一次命令创建会话（按 `(agentId, sessionId)` 索引），标准输入为普通管道（stdin pipe，非 PTY）。若命令在 `yieldTimeMs`（默认 10,000 ms，范围 0 到 60,000 ms）内结束，直接返回完整 `TerminalOutcome`；超时仍在运行时返回 `{ running: true, sessionId }` 并将会话转入后台挂起监控。硬超时 `timeoutMs` 最大一天。
-- **`terminal_write`：** 向活跃或已保留的会话写入 `chars`、发送 `eof: true`、发送 `kill: true` 或等待最多 `yieldTimeMs` 的增量输出。结束态通过有界集合（最多保留 256 个已结束结果，1,024 个已消费键）传递一次，保证不丢输出也不重复回报。
-- **`terminal_wait`：** 给控制面 `CommandWatchTask` 使用的等待调用，在会话结束时返回；若某个 `terminal_write` 已经观察并消费了该次退出，则 `terminal_wait` 收到 `{ consumed: true }` 并静默退出，避免与主动轮询/写入冲突。
+- **`terminal_exec`：** 为一次命令创建会话（按 `(agentId, sessionId)` 索引），标准输入为普通管道（stdin pipe，非 PTY）。若命令在 `yieldTimeMs`（默认 10,000 ms，范围 0 到 60,000 ms）内结束，直接返回完整 `TerminalOutcome`；超时仍在运行时返回 `{ running: true, sessionId }` 并将会话转入后台挂起监控。硬超时 `timeoutMs` 最大一天。若 `terminal_write({ kill: true })` 先于会话建立到达（`#killedBeforeStart`），会在启动窗口立即终止而不遗漏。
+- **`terminal_write`：** 向活跃或已保留的会话写入 `chars`、发送 `eof: true`、发送 `kill: true` 或等待最多 `yieldTimeMs` 的增量输出。`kill: true` 跨预启动、inline 与后台已 yield 三种状态立即生效，不等待另一个并发 `terminal_write` 轮询完成。结束态针对 `terminal_write` 保持单消费者语义（`writeConsumed`），同时按 `conversationId` 记录 `consumedConversations`（最多保留 256 个已结束结果），确保主动拉取退出的对话不再收到重复通知，也不影响其他对话的监视。
+- **`terminal_wait`：** 给控制面 `CommandWatchTask` 使用的等待调用，内部以多个并发等待者集合挂起，允许多个对话（如父对话与子 Agent）同时等待同一会话并各自拿到完整的结束状态；只有发起过 `terminal_write` 并消费了退出结果的那个 `conversationId` 会收到 `{ consumed: true }`。
 - **平台执行：** Linux 和 macOS 使用 node 账号的 Bash 或 zsh（记录每对话最近工作目录），Windows 使用 `powershell.exe -NoProfile -Command`。命令进程组跟踪与僵尸进程处理在各平台共用同一套 `Commands` 状态机。
 
 ## 环境变量与启动快照（Linux/macOS）
@@ -38,4 +38,4 @@ node 不直接使用 Durable 的单次执行工具，而是通过 `src/terminal-
 
 ## 停止、服务与持久化
 
-连接断开时，`Executor.connectionClosed()` 停止该连接对应的活跃终端会话与进行中调用；node 正常关闭时清理所有活跃进程组。`palace node` CLI、服务定义、清单验证及身份存储布局保持原有规则不变。
+连接断开时，`Executor.connectionClosed()` 停止该连接对应的活跃终端会话与进行中调用；`connection.ts` 在 `node.authenticate` / `node.pair` 中上报当前支持的工具列表（`tools`），并以有界 `yieldedSessions` 记录刚转入后台的 `terminal_exec` 映射（`requestId -> sessionId`），使控制面刚发出 `running` 后紧随而至的 `gateway.stop.tool` 仍能通过 `executor.stopSession` 终止对应会话；node 正常关闭时清理所有活跃进程组。`palace node` CLI、服务定义、清单验证及身份存储布局保持原有规则不变。

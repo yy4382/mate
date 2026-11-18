@@ -1,6 +1,7 @@
 import type { Clock } from "@palace/clock";
 import {
   GatewayMessageSchema,
+  LEGACY_NODE_TOOLS,
   NodeAuthenticateSchema,
   NodePairSchema,
   NodeRequestSchema,
@@ -59,6 +60,7 @@ export interface NodeSession {
   /** Set once the connection has authenticated or paired; until then the connection is unauthenticated. */
   nodeId: string | undefined;
   workspaceVisits: boolean;
+  tools: ReadonlySet<string>;
   lastHeartbeatAt: number;
   /** Aborted when authentication completes, which cancels the handshake timeout. */
   readonly handshake: AbortController;
@@ -116,6 +118,7 @@ export function acceptNodeSocket(ws: WebSocket, ctx: GatewayContext): void {
     nonce: randomBytes(32).toString("base64url"),
     nodeId: undefined,
     workspaceVisits: false,
+    tools: new Set(LEGACY_NODE_TOOLS),
     lastHeartbeatAt: ctx.clock.now(),
     handshake: new AbortController(),
     ended: new AbortController(),
@@ -239,6 +242,7 @@ function handleAuthenticate(
   }
   recordNodeConnection(ctx.db, msg.nodeId, msg.system, () => ctx.clock.now());
   session.workspaceVisits = msg.workspaceVisits === true;
+  session.tools = new Set(msg.tools ?? LEGACY_NODE_TOOLS);
   markConnected(ws, msg.nodeId, session, ctx);
   sendGateway(ws, { type: "gateway.authenticated", requestId: msg.requestId, nodeId: msg.nodeId });
 }
@@ -286,6 +290,7 @@ function handlePair(
     return;
   }
   session.workspaceVisits = msg.workspaceVisits === true;
+  session.tools = new Set(msg.tools ?? LEGACY_NODE_TOOLS);
   markConnected(ws, msg.nodeId, session, ctx);
   sendGateway(ws, { type: "gateway.paired", requestId: msg.requestId, nodeId: msg.nodeId });
 }

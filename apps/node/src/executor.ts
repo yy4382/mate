@@ -66,7 +66,11 @@ export class Executor {
         const parsed = parseTerminalWriteArgs(call.arguments);
         if (!parsed.ok) return failure(parsed.error);
         return this.#sessions.write(
-          { agentId: call.agentId, arguments: parsed.arguments },
+          {
+            agentId: call.agentId,
+            conversationId: call.conversationId,
+            arguments: parsed.arguments,
+          },
           onOutput,
           signal,
         );
@@ -74,7 +78,14 @@ export class Executor {
       case "terminal_wait": {
         const parsed = parseTerminalWaitArgs(call.arguments);
         if (!parsed.ok) return failure(parsed.error);
-        return this.#sessions.wait({ agentId: call.agentId, arguments: parsed.arguments }, signal);
+        return this.#sessions.wait(
+          {
+            agentId: call.agentId,
+            conversationId: call.conversationId,
+            arguments: parsed.arguments,
+          },
+          signal,
+        );
       }
       case "memory_read":
         return readWorkspaceMemory(directory);
@@ -111,6 +122,11 @@ export class Executor {
       return failure(`Failed to prepare workspace: ${reason}`);
     }
     return { content: [{ type: "text", text: "Workspace prepared." }], isError: false };
+  }
+
+  /** Stop an already yielded terminal session for an agent. */
+  stopSession(agentId: string, sessionId: string): void {
+    this.#sessions.stopSession(agentId, sessionId);
   }
 
   /** Clean up active terminal sessions when a WebSocket connection closes. */

@@ -151,7 +151,7 @@ Durable 里"一个存储，加上在这个存储上运行 agent 的机制"。run
 避免：session（在聊天语境里有歧义）。
 
 **子 Agent**（subagent）
-由 `subagent` 工具（`subagentExtension`）从主对话派生的隔离 Durable 子对话，通过正向白名单仅拥有安全扩展（终端、文件、记忆、历史、文档、空闲压缩），没有聊天或递归 `subagent` 工具。默认前台运行并等待返回结果；传 `run_in_background: true` 时立即返回 `agent_id`，并在子对话及其所有后台任务（含 `notify_on_exit`）均完成后以 `<subagent_result>` 向父对话汇报；支持 `resume` 继续同一上下文和 `subagent_stop` 中止运行。
+由 `subagent` 工具（`subagentExtension`）从主对话派生的隔离 Durable 子对话，通过正向白名单仅拥有安全扩展（终端、文件、记忆、历史、文档、空闲压缩），没有聊天或递归 `subagent` 工具。默认前台运行并等待返回结果；传 `run_in_background: true` 时立即返回 `agent_id`，并在子对话及其所有后台任务（含 `notify_on_exit`）均完成后向父对话汇报。内部会检查本次运行期间创建的所有生成任务与后台任务，若后续唤醒轮次失败（如 `<command_notification>` 触发的续跑发生错误），会将失败传播为工具错误或 `<subagent_result status="failed">`；支持 `resume` 继续同一上下文和 `subagent_stop` 中止运行。
 
 **收件箱**（inbox）
 Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入都提交到这里：通知、webhook、提醒、`<command_notification>` 和 `<subagent_result>`。Agent 正在运行时，以 `steer` 方式提交的输入会插在当前这轮工具调用之后。
@@ -188,7 +188,7 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 主对话空闲到提示缓存快过期、上一次请求的输入又很大时，runtime 不用 Durable 的摘要请求，而是提交一条普通输入，请 Agent 自己写**检查点摘要**（checkpoint summary）。这条请求延续对话的前缀，读热缓存。回答合格时，runtime 写一个以这条回答为起点的压缩标记，之后的上下文从它开始。所有模型用同一条规则：空闲到缓存寿命的 5/6 时压缩，阈值是 Durable 后台压缩线的 2/3 与 200k 中较小的一个；缓存寿命等参数按默认值、提供商、模型三层数据给出；只在主对话做。
 
 **终端会话**（terminal session）
-`exec_command` 在 node 端 `TerminalSessions` 中建立的命令进程会话，由 UUID `session_id` 标识。`yield_time_ms` 到期未退出时返回 `running: true` 与 `session_id`，此后可通过 `write_stdin` 发送标准输入、传 `eof: true`、传 `kill: true` 或继续拉取增量输出，并由管理模块按 `session_id` 自动路由到当初启动该会话的 node。启用 `notify_on_exit: true` 时在当前对话创建 `palace.terminal.watch` 后台任务调用 `terminal_wait`：若命令退出前已被 `write_stdin` 观察消费，node 返回 `{ consumed: true }` 且不再唤醒；否则结束后以 `steer` 提交 `<command_notification>` 自动唤醒对话。
+`exec_command` 在 node 端 `TerminalSessions` 中建立的命令进程会话，由 UUID `session_id` 标识。`yield_time_ms` 到期未退出时返回 `running: true` 与 `session_id`，此后可通过 `write_stdin` 发送标准输入、传 `eof: true`、传 `kill: true` 或继续拉取增量输出，并由管理模块区分运行中与已结束会话的路由表（运行中路由不因大量短命令而驱逐）按 `session_id` 自动路由到当初启动该会话的 node。启用 `notify_on_exit: true` 时在当前对话创建 `palace.terminal.watch` 后台任务调用 `terminal_wait`：多对话可各自独立监视同一会话，node 端按 `conversationId` 追踪 `write_stdin` 是否已消费本次退出，所属对话未消费则以 `steer` 提交 `<command_notification>` 自动唤醒。
 避免：后台进程（命令自己放到后台的进程，比如 `cmd &`，仍归命令进程组管）；守护进程（Agent 用 `setsid` 等方式自己脱离进程组的进程，Palace 不跟踪）。
 
 ## 环境与控制面

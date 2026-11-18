@@ -167,6 +167,7 @@ export function terminalExtension(
       ),
     }),
     replay: "unsafe",
+    outputLimits: { retain: "tail" },
     async execute(args, api, context) {
       const sessionId = randomUUID();
       const signal = combineSignals(options.closing, context.abortSignal);
@@ -240,6 +241,7 @@ export function terminalExtension(
       ),
     }),
     replay: "unsafe",
+    outputLimits: { retain: "tail" },
     async execute(args, api, context) {
       const signal = combineSignals(options.closing, context.abortSignal);
       const raw = await untilAborted(

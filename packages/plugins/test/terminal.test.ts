@@ -344,4 +344,52 @@ describe("terminal extension", () => {
     await second.runtime.idle();
     agent.provider.assertComplete();
   });
+
+  it("retains trailing output and session_id when yielded output exceeds Durable line limits", async () => {
+    const port = new StubTerminalPort();
+    const longOutput = `${Array.from({ length: 3000 }, (_, i) => `line-${i + 1}`).join("\n")}\n`;
+    port.execHandler = async (call) =>
+      encodeTerminalOutcome({
+        running: true,
+        sessionId: call.sessionId,
+        output: longOutput,
+        droppedBytes: 0,
+        wallTimeMs: 100,
+      });
+    port.writeHandler = async (call) =>
+      encodeTerminalOutcome({
+        running: false,
+        sessionId: call.sessionId,
+        output: "finished\n",
+        droppedBytes: 0,
+        wallTimeMs: 150,
+        ending: { kind: "exited", code: 0 },
+        pipesHeld: false,
+        backgroundRunning: false,
+      });
+
+    const agent = await testAgent();
+    agent.provider
+      .step("start noisy", (request) => {
+        request.call([
+          { name: "exec_command", arguments: { command: "seq 1 3000", yield_time_ms: 10 } },
+        ]);
+      })
+      .step("continue with preserved session_id", (request) => {
+        const out = request.toolOutputs().at(-1) ?? "";
+        expect(out).toContain("line-3000");
+        const sessionId = /session_id:\s*(\S+?)\]/.exec(out)?.[1] ?? "";
+        expect(sessionId).not.toBe("");
+        request.call([{ name: "write_stdin", arguments: { session_id: sessionId, eof: true } }]);
+      })
+      .step("done", (request) => {
+        expect(request.toolOutputs().at(-1)).toContain("finished");
+        request.text("Completed.");
+      });
+
+    const { runtime } = await agent.open({ extensions: [terminalExtension(port)] });
+    await (await runtime.submit("go", { requestId: "m1" })).settled();
+    expect(port.writeCalls).toHaveLength(1);
+    agent.provider.assertComplete();
+  });
 });
