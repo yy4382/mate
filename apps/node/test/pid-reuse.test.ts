@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { connectedNode, eventually, linux, textOf } from "./support.ts";
+import { connectedNode, execCommand, eventually, linux, textOf } from "./support.ts";
 
 /**
  * Forcing Linux to hand a recorded PID to another process needs a PID namespace whose next PID the test may set. An
@@ -42,7 +43,7 @@ describe("node process groups and PID reuse (TESTS 1.1)", () => {
       });
       const { agentId, workspace } = await node.agent();
       const run = async (command: string) => {
-        const result = await node.run(agentId, "bash", { command });
+        const result = await execCommand(node, agentId, { command });
         expect(result.isError, textOf(result)).toBe(false);
         return textOf(result);
       };
@@ -66,7 +67,9 @@ describe("node process groups and PID reuse (TESTS 1.1)", () => {
       ).toBe(group);
 
       // Shutting down stops every group the node recorded, which includes that ID.
-      void node.run(agentId, "bash", { command: "kill -TERM $PPID" }).catch(() => {});
+      void node
+        .run(agentId, "terminal_exec", { sessionId: randomUUID(), command: "kill -TERM $PPID" })
+        .catch(() => {});
       await eventually(() => node.stderr().includes("node-exited"), "the node exits");
       const before = statSync(join(workspace, "alive")).mtimeMs;
       await new Promise((resolve) => setTimeout(resolve, 600));

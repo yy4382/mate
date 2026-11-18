@@ -2,7 +2,6 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   AgentDoc,
   createSession,
-  defineDoc,
   ROOT_CONVERSATION_ID,
   UsageDoc,
   type Cursor,
@@ -16,47 +15,56 @@ import { openAgentStorage } from "./storage.ts";
 /** Token use of every conversation of an Agent, by model and by tool, as Durable records it. */
 export type AgentUsage = UsageState;
 
-/** What an Agent's file says about it while no runtime is open on it. */
-export type AgentState = {
-  readonly paused: boolean;
-  /** The node the Agent's workspace is on, recorded when the Agent was created and never changed. */
-  readonly nodeId: string;
+export type AgentFileState<T = undefined> = {
   readonly settings: AgentSettings;
   readonly usage: AgentUsage;
+  readonly extra: T;
 };
 
-/** The Agent Manager's own record in an Agent's file. `nodeId` is written once, in the commit that creates the store. */
-export const AgentStateDoc = defineDoc<{ paused: boolean; nodeId: string }>({
-  kind: "mate.agent-state",
-  version: 1,
-  scope: "session",
-  initial: () => ({ paused: false, nodeId: "" }),
-});
+/**
+ * Open a bare Durable session on a closed Agent's file (documents only, no agent machinery that could start work)
+ * and run `use`. The file must not have a runtime open on it.
+ */
+export async function withAgentFileSession<T>(
+  file: string,
+  use: (session: Session) => Promise<T>,
+): Promise<T> {
+  const { storage } = await openAgentStorage(file, undefined, (database) => database);
+  const session = createSession(storage);
+  try {
+    return await use(session);
+  } finally {
+    await session.close(BACKGROUND_CONTEXT);
+  }
+}
 
-/** Read an Agent's state from its file. The file must not have a runtime open on it. */
-export function readAgentState(file: string): Promise<AgentState> {
-  return withSession(file, async (session, storage) => {
-    const record = await session.snapshot(AgentStateDoc, BACKGROUND_CONTEXT);
-    if (record === undefined || record.nodeId === "")
-      throw new Error(`Agent store ${file} records no node`);
+/**
+ * Read a closed Agent's settings, usage, and optional extra state from its file. The file must not have a runtime
+ * open on it.
+ */
+export async function readAgentFile(file: string): Promise<AgentFileState>;
+export async function readAgentFile<T>(
+  file: string,
+  read: (session: Session) => Promise<T>,
+): Promise<AgentFileState<T>>;
+export async function readAgentFile<T = undefined>(
+  file: string,
+  read?: (session: Session) => Promise<T>,
+): Promise<AgentFileState<T>> {
+  const { storage } = await openAgentStorage(file, undefined, (database) => database);
+  const session = createSession(storage);
+  try {
+    const extra = (read === undefined ? undefined : await read(session)) as T;
     return {
-      paused: record.paused,
-      nodeId: record.nodeId,
       settings: settingsOf(
         await session.snapshot(AgentDoc, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT),
       ),
       usage: await usageOf(session, storage),
+      extra,
     };
-  });
-}
-
-/** Record in an Agent's file whether it is paused. The file must not have a runtime open on it. */
-export function setAgentPaused(file: string, paused: boolean): Promise<void> {
-  return withSession(file, (session) =>
-    session.commit(async (tx) => {
-      (await tx.doc(AgentStateDoc)).paused = paused;
-    }, BACKGROUND_CONTEXT),
-  );
+  } finally {
+    await session.close(BACKGROUND_CONTEXT);
+  }
 }
 
 /**
@@ -64,23 +72,9 @@ export function setAgentPaused(file: string, paused: boolean): Promise<void> {
  * must not have a runtime open on it.
  */
 export function configureAgentFile(file: string, settings: AgentSettings): Promise<void> {
-  return withSession(file, (session) =>
+  return withAgentFileSession(file, (session) =>
     session.commit((tx) => configureConversations(tx, settings), BACKGROUND_CONTEXT),
   );
-}
-
-/** A bare Durable session on the file: documents only, no agent machinery that could start work. */
-async function withSession<T>(
-  file: string,
-  use: (session: Session, storage: SqliteStorage) => Promise<T>,
-): Promise<T> {
-  const { storage } = await openAgentStorage(file, undefined, (database) => database);
-  const session = createSession(storage);
-  try {
-    return await use(session, storage);
-  } finally {
-    await session.close(BACKGROUND_CONTEXT);
-  }
 }
 
 /** The sum of every conversation's usage ledger, as `Harness.usage` sums it for an open Agent. */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { testAgent, text } from "./support.ts";
+import { testAgent } from "./support.ts";
 
-const make = { name: "bash", arguments: { command: "make" } };
+const make = { name: "run_action", arguments: { input: "make" } };
 const notice = (id: number) => ({
   requestId: `notice:${id}`,
   whenBusy: "steer" as const,
@@ -13,7 +13,6 @@ describe("replacing queued inputs", () => {
     const agent = await testAgent();
     agent.provider
       .step("start", (request) => void request.call([make]))
-      // Durable hands the model one steered input per boundary.
       .step("continue with the reminder", (request) => {
         expect(request.userTexts(), "the reminder stays").toEqual([
           "build it",
@@ -31,12 +30,12 @@ describe("replacing queued inputs", () => {
       });
     const { runtime } = await agent.open();
     await runtime.submit("build it", { requestId: "m1" });
-    const call = await agent.workspace.nextCall();
+    const call = await agent.tools.nextCall();
 
     await runtime.submit("reminder: stand-up", { requestId: "reminder:r1", whenBusy: "steer" });
     await runtime.submit("1 unread", notice(1));
     await runtime.submit("2 unread", notice(2));
-    call.resolve(text("built"));
+    call.resolve("built");
     await runtime.idle();
 
     agent.provider.assertComplete();
@@ -48,7 +47,7 @@ describe("replacing queued inputs", () => {
       .step("start", (request) => void request.call([make]))
       .step("second round", (request) => {
         expect(request.userTexts()).toEqual(["build it", "1 unread"]);
-        request.call([{ name: "bash", arguments: { command: "make test" } }]);
+        request.call([{ name: "run_action", arguments: { input: "make test" } }]);
       })
       .step("finish", (request) => {
         expect(request.userTexts(), "both notices").toEqual(["build it", "1 unread", "2 unread"]);
@@ -56,13 +55,13 @@ describe("replacing queued inputs", () => {
       });
     const { runtime } = await agent.open();
     await runtime.submit("build it", { requestId: "m1" });
-    const build = await agent.workspace.nextCall();
+    const build = await agent.tools.nextCall();
     await runtime.submit("1 unread", notice(1));
-    build.resolve(text("built"));
-    const tests = await agent.workspace.nextCall();
+    build.resolve("built");
+    const tests = await agent.tools.nextCall();
 
     await runtime.submit("2 unread", notice(2));
-    tests.resolve(text("passed"));
+    tests.resolve("passed");
     await runtime.idle();
 
     agent.provider.assertComplete();
@@ -72,13 +71,12 @@ describe("replacing queued inputs", () => {
     const agent = await testAgent();
     agent.provider.step(
       "start",
-      (request) => void request.call([{ name: "read", arguments: { path: "MEMORY.md" } }]),
+      (request) => void request.call([{ name: "read_item", arguments: { key: "notes" } }]),
     );
     const first = await agent.open();
     await first.runtime.submit("recall", { requestId: "m1" });
-    await agent.workspace.nextCall();
+    await agent.tools.nextCall();
     await first.runtime.submit("1 unread", notice(1));
-    // Dies before the connector stored its position, so the same notice comes again.
     first.database().freeze();
 
     agent.provider.step("after restart", (request) => {
@@ -86,10 +84,9 @@ describe("replacing queued inputs", () => {
       request.text("recalled");
     });
     const second = await agent.open();
-    // The read reruns and is still working, so the notice is still queued when it comes again.
-    const rerun = await agent.workspace.nextCall();
+    const rerun = await agent.tools.nextCall();
     await second.runtime.submit("1 unread", notice(1));
-    rerun.resolve(text("notes"));
+    rerun.resolve("notes");
     await second.runtime.idle();
 
     agent.provider.assertComplete();

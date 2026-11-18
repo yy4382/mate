@@ -13,6 +13,7 @@ import type { z } from "zod";
  * - `unknown-model`: the provider's catalog has no such model.
  * - `unsupported-thinking-level`: the model does not accept that thinking level. It is refused, never lowered.
  * - `agent-closed`: the Agent is paused or closed, so there is nothing running to watch.
+ * - `stop-unconfirmed`: the Agent was paused locally, while stopping one or more running commands on its node could not be confirmed.
  * - `unknown-assistant`: the Agent has no work assistant by that name.
  * - `unknown-webhook`: no webhook has that ID.
  * - `invalid-webhook`: a delivery named no webhook, gave the wrong secret, or named a webhook whose Agent is gone.
@@ -33,6 +34,7 @@ export type AdminErrorReason =
   | "unknown-model"
   | "unsupported-thinking-level"
   | "agent-closed"
+  | "stop-unconfirmed"
   | "unknown-assistant"
   | "unknown-webhook"
   | "invalid-webhook"

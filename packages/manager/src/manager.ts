@@ -1,44 +1,60 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import type { Plugin } from "@palace/agent-plugin";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { defineDoc, type Extension } from "@earendil-works/pi-durable";
 import type { ChatApp } from "@palace/chat";
 import { systemClock, type Clock } from "@palace/clock";
 import {
   configureAgentFile,
   createAgentStore,
   openAgentRuntime,
-  readAgentState,
-  setAgentPaused,
+  readAgentFile,
+  withAgentFileSession,
   type AgentRuntime,
   type AgentSettings,
-  type AgentState as AgentFileState,
   type AgentUsage,
   type CredentialsLookup,
-  type WorkspacePort,
+  type RuntimeBackgroundTask,
 } from "@palace/runtime";
 import { AgentFiles } from "./agent-files.ts";
-import { chatPlugin } from "./chat-plugin.ts";
+import { chatExtension } from "./chat-plugin.ts";
 import { connectInbox, type InboxConnector } from "./connector.ts";
 
 /**
- * Where Agents' workspaces live: on nodes. Preparing is idempotent: it creates the Agent's workspace on the node once,
- * later calls do nothing. The port runs the Agent's workspace tools on that node.
+ * Manager-owned Agent store document holding whether the Agent is paused and which node hosts its workspace. Kept as
+ * kind `"mate.agent-state"` v1 so existing Agent SQLite stores remain readable across updates.
  */
-export type WorkspaceHost = {
-  prepare(nodeId: string, agentId: string): Promise<void>;
-  port(nodeId: string, agentId: string): WorkspacePort;
+export const ManagerAgentStateDoc = defineDoc<{ paused: boolean; nodeId: string }>({
+  kind: "mate.agent-state",
+  version: 1,
+  scope: "session",
+  initial: () => ({ paused: false, nodeId: "" }),
+});
+
+export type AgentBuildContext = {
+  readonly agentId: string;
+  readonly nodeId: string;
+  readonly clock: Clock;
+  readonly closing: AbortSignal;
+};
+
+export type BuiltAgent = {
+  readonly extensions?: readonly Extension[];
+  readonly background?: readonly RuntimeBackgroundTask[];
+  readonly close?: () => void | Promise<void>;
 };
 
 export type AgentManagerOptions = {
   /** `data/agents/`. Created if missing. */
   readonly directory: string;
   readonly chat: ChatApp;
-  readonly workspaces: WorkspaceHost;
+  /** Preparing is idempotent: it creates the Agent's workspace on the node once, later calls do nothing. */
+  readonly prepareWorkspace: (nodeId: string, agentId: string) => Promise<void>;
+  /** Assemble extensions, background tasks, and cleanup hooks when opening an Agent's runtime. */
+  readonly buildAgent?: (context: AgentBuildContext) => BuiltAgent | Promise<BuiltAgent>;
   /** Each provider's credentials, read at every model request of every Agent. */
   readonly credentials: CredentialsLookup;
   readonly clock?: Clock;
-  /** Installed in every Agent's runtime, before the chat plugin the manager adds itself. */
-  readonly plugins?: readonly Plugin[];
   /** Told about an Agent that failed to open, a failed connector pass, or a runtime whose storage failed. */
   readonly report?: (error: unknown, agentId: string) => void;
 };
@@ -96,16 +112,24 @@ export class AgentIdInUse extends Error {
  * the runtime's storage. Reaching the file through `Closed` makes that impossible; an open Agent is reached through
  * its runtime, and keeps the node it was opened on.
  */
+type ClosedFileState = {
+  readonly paused: boolean;
+  readonly nodeId: string;
+  readonly settings: AgentSettings;
+  readonly usage: AgentUsage;
+};
 type AgentState = Open | Closed;
 type Open = {
   readonly kind: "open";
   readonly nodeId: string;
   readonly runtime: AgentRuntime;
   readonly inbox: InboxConnector;
+  readonly closing: AbortController;
+  readonly closeAgent?: () => void | Promise<void>;
 };
 type Closed = {
   readonly kind: "closed";
-  readonly read: () => Promise<AgentFileState>;
+  readonly read: () => Promise<ClosedFileState>;
   readonly setPaused: (paused: boolean) => Promise<void>;
   readonly configure: (settings: AgentSettings) => Promise<void>;
 };
@@ -195,7 +219,7 @@ export class AgentManager {
     const agentId = spec.agentId ?? randomUUID();
     return this.#lifecycle(agentId, async (state, file) => {
       if (state.kind === "open" || existsSync(file)) throw new AgentIdInUse(agentId);
-      const { chat, workspaces } = this.#options;
+      const { chat, prepareWorkspace } = this.#options;
       chat.ensureAccount({
         externalId: agentId,
         displayName: spec.displayName,
@@ -203,8 +227,14 @@ export class AgentManager {
         kind: "agent",
       });
       try {
-        await workspaces.prepare(spec.nodeId, agentId);
-        await createAgentStore(file, { nodeId: spec.nodeId, settings: spec.settings });
+        await prepareWorkspace(spec.nodeId, agentId);
+        await createAgentStore(file, {
+          settings: spec.settings,
+          init: async (tx) => {
+            const doc = await tx.doc(ManagerAgentStateDoc);
+            doc.nodeId = spec.nodeId;
+          },
+        });
       } catch (error) {
         throw new AgentCreationFailed(agentId, error);
       }
@@ -220,8 +250,10 @@ export class AgentManager {
   /** Close the Agent's runtime, aborting its model requests and tool calls, and record it as paused. */
   pause(agentId: string): Promise<void> {
     return this.#lifecycle(agentId, async (state) => {
-      const closed = state.kind === "open" ? await this.#stop(agentId, state) : state;
-      await closed.setPaused(true);
+      const { closed: closedState, closeError } =
+        state.kind === "open" ? await this.#stop(agentId, state) : { closed: state };
+      await closedState.setPaused(true);
+      if (closeError !== undefined) throw closeError;
     });
   }
 
@@ -237,7 +269,10 @@ export class AgentManager {
   /** Close the Agent, deactivate its chat account, and remove its file. Its messages stay readable. */
   delete(agentId: string): Promise<void> {
     return this.#lifecycle(agentId, async (state) => {
-      if (state.kind === "open") await this.#stop(agentId, state);
+      if (state.kind === "open") {
+        const { closeError } = await this.#stop(agentId, state);
+        if (closeError !== undefined) this.#report(closeError, agentId);
+      }
       const { chat } = this.#options;
       const account = chat.findAccount(agentId);
       // Deactivate before removing, so a delete that dies in between leaves an Agent to delete again.
@@ -255,7 +290,10 @@ export class AgentManager {
       [...agentIds].map((agentId) =>
         this.#serial(agentId, async () => {
           const state = this.#open.get(agentId);
-          if (state !== undefined) await this.#stop(agentId, state);
+          if (state !== undefined) {
+            const { closeError } = await this.#stop(agentId, state);
+            if (closeError !== undefined) this.#report(closeError, agentId);
+          }
         }),
       ),
     );
@@ -290,38 +328,77 @@ export class AgentManager {
     const { paused, nodeId } = await state.read();
     if (paused) return;
     const file = this.#files.file(agentId);
-    const { chat, workspaces, credentials } = this.#options;
+    const { chat, credentials, buildAgent } = this.#options;
     // The chat app holds the account; the Agent ID is its external identity, so there is no second record of it.
     const account = chat.findAccount(agentId);
     if (account === undefined) throw new Error(`Agent ${agentId} has no chat account`);
     const report = (error: unknown) => this.#report(error, agentId);
-    let opened: Open | undefined;
-    const runtime = await openAgentRuntime({
-      file,
-      credentials,
-      workspace: workspaces.port(nodeId, agentId),
-      plugins: [...(this.#options.plugins ?? []), chatPlugin(chat.forAccount(account))],
-      clock: this.#clock,
-      onFatal: (error) => {
-        report(error);
-        // A dead runtime does nothing more; close it in its turn so the Agent is closed, not falsely open.
-        void this.#serial(agentId, async () => {
-          if (opened !== undefined && this.#open.get(agentId) === opened)
-            await this.#stop(agentId, opened);
-        });
-      },
-    });
-    const inbox = await connectInbox({ chat, account, runtime, clock: this.#clock, report });
-    opened = { kind: "open", nodeId, runtime, inbox };
-    this.#open.set(agentId, opened);
+    const closingController = new AbortController();
+    let built: BuiltAgent | undefined;
+    let runtime: AgentRuntime | undefined;
+    try {
+      built = await buildAgent?.({
+        agentId,
+        nodeId,
+        clock: this.#clock,
+        closing: closingController.signal,
+      });
+      let opened: Open | undefined;
+      runtime = await openAgentRuntime({
+        file,
+        credentials,
+        extensions: [...(built?.extensions ?? []), chatExtension(chat.forAccount(account))],
+        ...(built?.background === undefined ? {} : { background: built.background }),
+        clock: this.#clock,
+        onReport: report,
+        onFatal: (error) => {
+          report(error);
+          // A dead runtime does nothing more; close it in its turn so the Agent is closed, not falsely open.
+          void this.#serial(agentId, async () => {
+            if (opened !== undefined && this.#open.get(agentId) === opened) {
+              const { closeError } = await this.#stop(agentId, opened);
+              if (closeError !== undefined) report(closeError);
+            }
+          });
+        },
+      });
+      const inbox = await connectInbox({ chat, account, runtime, clock: this.#clock, report });
+      opened = {
+        kind: "open",
+        nodeId,
+        runtime,
+        inbox,
+        closing: closingController,
+        ...(built?.close === undefined ? {} : { closeAgent: built.close }),
+      };
+      this.#open.set(agentId, opened);
+    } catch (error) {
+      closingController.abort();
+      await runtime?.close().catch(() => undefined);
+      if (built?.close !== undefined) await Promise.resolve(built.close()).catch(() => undefined);
+      throw error;
+    }
   }
 
-  /** Stop the connector, then close the runtime. Runs in the Agent's queue. */
-  async #stop(agentId: string, state: Open): Promise<Closed> {
+  /** Stop the connector, close the runtime, and release built agent resources. Runs in the Agent's queue. */
+  async #stop(
+    agentId: string,
+    state: Open,
+  ): Promise<{ readonly closed: Closed; readonly closeError?: unknown }> {
     this.#open.delete(agentId);
+    state.closing.abort();
     await state.inbox.stop();
     await state.runtime.close();
-    return closed(this.#files.file(agentId));
+    let closeError: unknown;
+    try {
+      await state.closeAgent?.();
+    } catch (error) {
+      closeError = error;
+    }
+    return {
+      closed: closed(this.#files.file(agentId)),
+      ...(closeError === undefined ? {} : { closeError }),
+    };
   }
 
   #report(error: unknown, agentId: string): void {
@@ -332,8 +409,27 @@ export class AgentManager {
 function closed(file: string): Closed {
   return {
     kind: "closed",
-    read: () => readAgentState(file),
-    setPaused: (paused) => setAgentPaused(file, paused),
+    read: async () => {
+      const state = await readAgentFile(file, (session) =>
+        session.snapshot(ManagerAgentStateDoc, BACKGROUND_CONTEXT),
+      );
+      if (state.extra === undefined || state.extra.nodeId === "") {
+        throw new Error(`Agent store ${file} is missing its nodeId`);
+      }
+      return {
+        paused: state.extra.paused,
+        nodeId: state.extra.nodeId,
+        settings: state.settings,
+        usage: state.usage,
+      };
+    },
+    setPaused: (paused) =>
+      withAgentFileSession(file, (session) =>
+        session.commit(async (tx) => {
+          const doc = await tx.doc(ManagerAgentStateDoc);
+          doc.paused = paused;
+        }, BACKGROUND_CONTEXT),
+      ),
     configure: (settings) => configureAgentFile(file, settings),
   };
 }

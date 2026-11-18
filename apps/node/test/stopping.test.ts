@@ -1,26 +1,39 @@
-import { chmodSync, copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { FakeGateway } from "@palace/testkit";
 import {
   connectedNode,
+  displayTerminalResult,
   eventually,
+  execCommand,
   longCommand,
   pidsOf,
   readPid,
   running,
+  scriptCommand,
   startNodeProcess,
   temporaryDirectory,
   textOf,
   windows,
+  writeStdin,
 } from "./support.ts";
 
 describe("node connection and stopping (TESTS 1.3)", () => {
   it("stops the process groups of running tool calls when the connection drops", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    const call = node.run(agentId, "bash", { command: longCommand("call") });
+    const call = execCommand(node, agentId, { command: longCommand("call") });
     const pids = await pidsOf(workspace, "call");
     expect(pids.every(running), "the command runs").toBe(true);
 
@@ -29,15 +42,109 @@ describe("node connection and stopping (TESTS 1.3)", () => {
     for (const pid of pids) await eventually(() => !running(pid), `process ${pid} is stopped`);
   });
 
+  it("stops detached yielded sessions when terminal_wait is stopped or the connection drops", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const first = await execCommand(node, agentId, {
+      command: longCommand("waitstop"),
+      yieldTimeMs: 0,
+    });
+    expect(first.outcome?.running).toBe(true);
+    const firstPids = await pidsOf(workspace, "waitstop");
+    expect(firstPids.every(running)).toBe(true);
+
+    const waitCall = node.gateway.runTool("wait-stop", agentId, "terminal_wait", {
+      sessionId: first.sessionId,
+    });
+    // Allow gateway message to reach node before stopping it.
+    await eventually(() => running(firstPids[0]!), "process runs");
+    node.gateway.stopTool("wait-stop");
+    expect((await waitCall).isError).toBe(true);
+    for (const pid of firstPids)
+      await eventually(() => !running(pid), `waited process ${pid} is stopped`);
+
+    const second = await execCommand(node, agentId, {
+      command: longCommand("drop"),
+      yieldTimeMs: 0,
+    });
+    expect(second.outcome?.running).toBe(true);
+    const secondPids = await pidsOf(workspace, "drop");
+    expect(secondPids.every(running)).toBe(true);
+    node.gateway.disconnect();
+    for (const pid of secondPids)
+      await eventually(() => !running(pid), `detached process ${pid} is stopped`);
+  });
+
+  it("stops a newly yielded session on late gateway.stop.tool or terminal_write kill before it can touch files", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const gatedCommand = (tag: string, releaseFile: string, leakedFile: string) =>
+      scriptCommand(
+        workspace,
+        [
+          'import { existsSync, writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(`${tag}.pids`)}, String(process.pid));`,
+          `const timer = setInterval(() => {`,
+          `  if (existsSync(${JSON.stringify(releaseFile)})) {`,
+          `    clearInterval(timer);`,
+          `    writeFileSync(${JSON.stringify(leakedFile)}, "mutated");`,
+          "    process.exit(0);",
+          "  }",
+          "}, 10);",
+        ].join("\n"),
+        tag,
+      );
+
+    // Case A: gateway.stop.tool arrives after terminal_exec already yielded running: true.
+    const sessionA = randomUUID();
+    const execA = await node.gateway.runTool("exec-yield-stop", agentId, "terminal_exec", {
+      sessionId: sessionA,
+      command: gatedCommand("yield-stop-a", "release-a", "leaked-a"),
+      yieldTimeMs: 20,
+    });
+    expect(displayTerminalResult(execA).outcome?.running).toBe(true);
+    const pidsA = await pidsOf(workspace, "yield-stop-a");
+    node.gateway.stopTool("exec-yield-stop");
+    for (const pid of pidsA) {
+      await eventually(() => !running(pid), `yielded process ${pid} stopped via late stopTool`);
+    }
+    writeFileSync(join(workspace, "release-a"), "go");
+    expect(existsSync(join(workspace, "leaked-a"))).toBe(false);
+
+    // Case B: terminal_write({ kill: true }) arrives while terminal_exec is still waiting in flight.
+    const sessionB = randomUUID();
+    const execB = execCommand(node, agentId, {
+      sessionId: sessionB,
+      command: gatedCommand("kill-race-b", "release-b", "leaked-b"),
+      yieldTimeMs: 30_000,
+    });
+    const pidsB = await pidsOf(workspace, "kill-race-b");
+    const killResult = await writeStdin(node, agentId, {
+      sessionId: sessionB,
+      yieldTimeMs: 0,
+      kill: true,
+    });
+    expect(killResult.isError).toBe(false);
+    expect(killResult.outcome).toMatchObject({ running: false, ending: { kind: "killed" } });
+    writeFileSync(join(workspace, "release-b"), "go");
+    const settledB = await execB;
+    expect(settledB.outcome?.running).toBe(false);
+    for (const pid of pidsB) {
+      await eventually(() => !running(pid), `raced process ${pid} is stopped`);
+    }
+    expect(existsSync(join(workspace, "leaked-b"))).toBe(false);
+  });
+
   it("a stop ends that one call's process group and leaves every other call running, of the same Agent or another", async () => {
     const node = await connectedNode();
     const first = await node.agent();
     const second = await node.agent();
-    const stopped = node.gateway.runTool("call-a", first.agentId, "bash", {
+    const stopped = node.gateway.runTool("call-a", first.agentId, "terminal_exec", {
+      sessionId: randomUUID(),
       command: longCommand("a"),
     });
-    const sameAgent = node.run(first.agentId, "bash", { command: longCommand("b") });
-    const otherAgent = node.run(second.agentId, "bash", { command: longCommand("c") });
+    const sameAgent = execCommand(node, first.agentId, { command: longCommand("b") });
+    const otherAgent = execCommand(node, second.agentId, { command: longCommand("c") });
     const stoppedPids = await pidsOf(first.workspace, "a");
     const otherPids = [
       ...(await pidsOf(first.workspace, "b")),
@@ -45,7 +152,7 @@ describe("node connection and stopping (TESTS 1.3)", () => {
     ];
 
     node.gateway.stopTool("call-a");
-    const result = await stopped;
+    const result = displayTerminalResult(await stopped);
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("Command was stopped");
     for (const pid of stoppedPids) {
@@ -53,7 +160,7 @@ describe("node connection and stopping (TESTS 1.3)", () => {
     }
     expect(otherPids.every(running), "the other calls' commands still run").toBe(true);
 
-    const next = await node.run(first.agentId, "bash", { command: "echo again" });
+    const next = await execCommand(node, first.agentId, { command: "echo again" });
     expect(textOf(next).split(/\r?\n/)[0], "the Agent's next call runs normally").toBe("again");
     node.gateway.disconnect();
     await Promise.allSettled([sameAgent, otherAgent]);
@@ -89,13 +196,14 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
         },
       });
       const { agentId, workspace } = await node.agent();
-      const call = node.gateway.runTool("exit-during-stop", agentId, "bash", {
+      const call = node.gateway.runTool("exit-during-stop", agentId, "terminal_exec", {
+        sessionId: randomUUID(),
         command: longCommand("exit-during-stop"),
       });
       const pids = await pidsOf(workspace, "exit-during-stop");
       try {
         node.gateway.stopTool("exit-during-stop");
-        const result = await call;
+        const result = displayTerminalResult(await call);
         expect(textOf(result)).toContain("Command was stopped");
         expect(textOf(result)).not.toContain("processes may still be running");
         for (const pid of pids) await eventually(() => !running(pid), `process ${pid} is stopped`);
@@ -117,18 +225,20 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
         Object.entries(process.env).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "";
       const node = await connectedNode({ env: { PATH: `${bin};${hostPath}` } });
       const { agentId, workspace } = await node.agent();
-      const call = node.gateway.runTool("cannot-stop", agentId, "bash", {
+      const call = node.gateway.runTool("cannot-stop", agentId, "terminal_exec", {
+        sessionId: randomUUID(),
         command: longCommand("failed-stop"),
       });
       const pids = await pidsOf(workspace, "failed-stop");
       try {
         node.gateway.stopTool("cannot-stop");
-        const result = await Promise.race([
+        const raw = await Promise.race([
           call,
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error("failed stop did not return")), 20_000),
           ),
         ]);
+        const result = displayTerminalResult(raw);
         expect(result.isError).toBe(true);
         expect(textOf(result)).toContain("Command could not be stopped");
         expect(textOf(result)).toContain("processes may still be running");
@@ -144,10 +254,93 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
     },
   );
 
+  it.each(windows ? ["alive"] : ["alive", "exited"])(
+    "retries a failed stop when the shell is %s",
+    async (state) => {
+      const bin = temporaryDirectory();
+      const blocker = join(bin, windows ? "taskkill.exe" : "deny-kill");
+      let env: NodeJS.ProcessEnv;
+      if (windows) {
+        copyFileSync(process.execPath, blocker);
+        const path = Object.entries(process.env).find(([key]) => key.toLowerCase() === "path");
+        env = { PATH: `${bin};${path?.[1] ?? ""}` };
+      } else {
+        writeFileSync(blocker, "");
+        const preload = join(bin, "deny-kill.cjs");
+        writeFileSync(
+          preload,
+          `
+const kill = process.kill;
+process.kill = function(pid, signal) {
+  if (pid < 0 && signal === "SIGKILL" && require("node:fs").existsSync(${JSON.stringify(blocker)})) {
+    throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+  }
+  return kill.call(process, pid, signal);
+};`,
+        );
+        env = { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` };
+      }
+      const node = await connectedNode({ env });
+      const { agentId, workspace } = await node.agent();
+      let command = longCommand("retry-stop");
+      if (state === "exited") {
+        const child = scriptCommand(
+          workspace,
+          [
+            'import { writeFileSync } from "node:fs";',
+            'const writer = setInterval(() => process.stdout.write("."), 20);',
+            'process.stdout.once("error", () => { clearInterval(writer); writeFileSync("pipes-closed", ""); });',
+            "setTimeout(() => process.exit(0), 60_000);",
+          ].join("\n"),
+        );
+        command = `${child} & echo $! > retry-stop.pids; echo $$ > shell.pid`;
+      }
+      const { sessionId } = await execCommand(node, agentId, { command, yieldTimeMs: 0 });
+      const pids = await pidsOf(workspace, "retry-stop");
+      if (state === "exited") {
+        await eventually(
+          () =>
+            existsSync(join(workspace, "shell.pid")) &&
+            !running(readPid(join(workspace, "shell.pid"))),
+          "shell exited",
+        );
+      }
+      let observed = false;
+      const observation = node
+        .run(agentId, "terminal_wait", { sessionId, observeOnly: true })
+        .then((result) => {
+          observed = true;
+          return result;
+        });
+      const stop = () => writeStdin(node, agentId, { sessionId, kill: true });
+      try {
+        const failed = await stop();
+        expect(failed.outcome).toMatchObject({ ending: { kind: "stop-failed" } });
+        if (state === "exited") {
+          await eventually(
+            () => existsSync(join(workspace, "pipes-closed")),
+            "child outlives the shell's exit grace",
+          );
+        }
+        expect(pids.every(running)).toBe(true);
+        await node.run(agentId, "memory_read", {});
+        expect(observed, "an unconfirmed stop keeps the session under observation").toBe(false);
+      } finally {
+        rmSync(blocker);
+      }
+      expect((await stop()).outcome).toMatchObject({
+        ending: { kind: state === "alive" ? "killed" : "exited" },
+      });
+      for (const pid of pids) await eventually(() => !running(pid), `stopped process ${pid}`);
+      expect((await observation).isError).toBe(false);
+    },
+  );
+
   it.skipIf(windows)("stops a POSIX background process after its shell has returned", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    const call = node.gateway.runTool("call-bg", agentId, "bash", {
+    const call = node.gateway.runTool("call-bg", agentId, "terminal_exec", {
+      sessionId: randomUUID(),
       command: "sleep 30 & echo $! > background.pid; echo started; touch returned",
     });
     await eventually(() => existsSync(join(workspace, "returned")), "the command returned");
@@ -156,7 +349,7 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
     expect(running(background), "the background still runs").toBe(true);
 
     node.gateway.stopTool("call-bg");
-    const result = await call;
+    const result = displayTerminalResult(await call);
     expect(textOf(result), "the command itself had finished").toContain("started");
     expect(textOf(result)).not.toContain("Command was stopped");
     await eventually(() => !running(background), "the background is killed", 2_000);
@@ -166,8 +359,8 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     const second = await node.agent();
-    void node.run(agentId, "bash", { command: longCommand("first") }).catch(() => {});
-    void node.run(second.agentId, "bash", { command: longCommand("second") }).catch(() => {});
+    void execCommand(node, agentId, { command: longCommand("first") }).catch(() => {});
+    void execCommand(node, second.agentId, { command: longCommand("second") }).catch(() => {});
     const pids = [
       ...(await pidsOf(workspace, "first")),
       ...(await pidsOf(second.workspace, "second")),
@@ -188,12 +381,12 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
     async () => {
       const node = await connectedNode();
       const { agentId, workspace } = await node.agent();
-      const finished = await node.run(agentId, "bash", {
+      const finished = await execCommand(node, agentId, {
         command: "sleep 30 > /dev/null 2>&1 & echo $! > background.pid",
       });
       expect(finished.isError).toBe(false);
       const background = readPid(join(workspace, "background.pid"));
-      void node.run(agentId, "bash", { command: longCommand("running") }).catch(() => {});
+      void execCommand(node, agentId, { command: longCommand("running") }).catch(() => {});
       const runningPids = await pidsOf(workspace, "running");
       expect(running(background), "the finished command's background still runs").toBe(true);
 
@@ -208,27 +401,34 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
     },
   );
 
-  it("runs commands the same after MEMORY.md is made unreadable or deleted", async () => {
+  it("runs commands the same after memory/MEMORY.md or memory/ is made unreadable or deleted", async () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
-    const memory = join(workspace, "MEMORY.md");
-    expect(existsSync(memory), "preparing creates MEMORY.md").toBe(true);
+    const memoryDir = join(workspace, "memory");
+    const memory = join(memoryDir, "MEMORY.md");
+    expect(existsSync(memoryDir), "preparing creates memory/").toBe(true);
+    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
+    writeFileSync(memory, "fact");
     if (!windows) chmodSync(memory, 0o000);
     expect(
-      textOf(await node.run(agentId, "bash", { command: "echo unreadable" })).split(/\r?\n/)[0],
+      textOf(await execCommand(node, agentId, { command: "echo unreadable" })).split(/\r?\n/)[0],
     ).toBe("unreadable");
     if (windows) chmodSync(memory, 0o600);
-    rmSync(memory);
+    rmSync(memoryDir, { recursive: true });
     expect(
-      textOf(await node.run(agentId, "bash", { command: "echo deleted" })).split(/\r?\n/)[0],
+      textOf(await execCommand(node, agentId, { command: "echo deleted" })).split(/\r?\n/)[0],
     ).toBe("deleted");
     expect(
       (await node.run(agentId, "write", { path: "notes.txt", content: "x" })).isError,
       "file tools too",
     ).toBe(false);
-    expect(existsSync(memory)).toBe(false);
+    expect(existsSync(memoryDir)).toBe(false);
     expect((await node.gateway.prepareWorkspace("prepare-existing", agentId)).isError).toBe(false);
-    expect(readFileSync(memory, "utf8")).toBe("");
+    expect(existsSync(memoryDir)).toBe(true);
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, "topic.md"), "kept");
+    expect((await node.gateway.prepareWorkspace("prepare-preserves", agentId)).isError).toBe(false);
+    expect(readFileSync(join(memoryDir, "topic.md"), "utf8")).toBe("kept");
   });
 
   it("exits instead of retrying when the gateway rejects its identity, with the status its service unit never restarts", async () => {
@@ -288,7 +488,7 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
       await second.waitForNode(15_000);
       node.gateway = second;
       const { agentId } = await node.agent();
-      const result = await node.run(agentId, "bash", { command: "echo back" });
+      const result = await execCommand(node, agentId, { command: "echo back" });
       expect(textOf(result).split(/\r?\n/)[0]).toBe("back");
     } finally {
       await second.close();
@@ -299,14 +499,14 @@ if (require('node:path').basename(process.execPath).toLowerCase() === 'taskkill.
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
     rmSync(workspace, { recursive: true });
-    for (const [tool, args] of [
-      ["bash", { command: "echo hi" }],
-      ["write", { path: "a.txt", content: "a" }],
-      ["read", { path: "a.txt" }],
+    for (const run of [
+      () => execCommand(node, agentId, { command: "echo hi" }),
+      () => node.run(agentId, "write", { path: "a.txt", content: "a" }),
+      () => node.run(agentId, "read", { path: "a.txt" }),
     ] as const) {
-      const result = await node.run(agentId, tool, args);
-      expect(result.isError, tool).toBe(true);
-      expect(textOf(result), tool).toMatch(/does not exist\. The node does not recreate it/);
+      const result = await run();
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toMatch(/does not exist\. The node does not recreate it/);
     }
     expect(existsSync(workspace)).toBe(false);
   });

@@ -1,5 +1,6 @@
+import type { ConversationId, Tx } from "@earendil-works/pi-durable";
 import { describe, expect, it, onTestFinished } from "vitest";
-import { connectInbox, type NoticeTarget } from "../src/index.ts";
+import { ChatCursorsDoc, connectInbox, type NoticeTarget } from "../src/index.ts";
 import {
   agentAccount,
   environment,
@@ -11,24 +12,39 @@ import {
 
 type Submitted = { content: string; requestId: string; whenBusy?: string; replaces?: string };
 
-/** Stands in for the runtime: keeps the cursor in memory and records every submission. */
+/** Stands in for the runtime: keeps the cursor document in memory and records every submission. */
 class RecordingRuntime implements NoticeTarget {
   readonly submitted: Submitted[] = [];
-  position = 0;
+  readonly #cursors: { positions: Record<string, number> } = { positions: {} };
   /** While set, `submit` waits for it: a test holds a pass in the middle with it. */
   gate: Promise<void> | undefined;
   failNextCursor = false;
 
-  async cursor(): Promise<number> {
+  get position(): number {
+    return this.#cursors.positions["chat-inbox"] ?? 0;
+  }
+
+  set position(value: number) {
+    this.#cursors.positions["chat-inbox"] = value;
+  }
+
+  async snapshot(
+    _token: unknown,
+    _arg1?: ConversationId | string,
+    _arg2?: string,
+  ): Promise<Readonly<{ positions: Record<string, number> }> | undefined> {
     if (this.failNextCursor) {
       this.failNextCursor = false;
       throw new Error("storage unavailable");
     }
-    return this.position;
+    return { positions: { ...this.#cursors.positions } };
   }
 
-  async advanceCursor(_name: string, value: number): Promise<void> {
-    this.position = Math.max(this.position, value);
+  async commit<T>(change: (tx: Tx) => T | Promise<T>): Promise<T> {
+    const fakeTx = {
+      doc: async () => this.#cursors,
+    } as unknown as Tx;
+    return change(fakeTx);
   }
 
   async submit(
@@ -54,7 +70,7 @@ async function connect(env: Environment, account: number, runtime: NoticeTarget)
   return { connector, errors };
 }
 
-const recall = { name: "read", arguments: { path: "MEMORY.md" } };
+const recall = { name: "read", arguments: { path: "memory/MEMORY.md" } };
 
 describe("connector", () => {
   it("turns a new inbox event into one notice with requestId notice:<event ID>, steered in", async () => {
@@ -282,13 +298,13 @@ describe("connector with a real runtime", () => {
     // before the position is stored.
     const dies = Promise.withResolvers<void>();
     const dying: NoticeTarget = {
-      cursor: (name) => first.runtime.cursor(name),
+      snapshot: first.runtime.snapshot.bind(first.runtime) as NoticeTarget["snapshot"],
       submit: (content, options) => first.runtime.submit(content, options),
-      advanceCursor: async () => {
+      commit: async () => {
         await agent.workspace.nextCall();
         first.freeze();
         dies.resolve();
-        return new Promise<void>(() => {});
+        return new Promise<never>(() => {});
       },
     };
     const dead = await connectInbox({
@@ -305,9 +321,10 @@ describe("connector with a real runtime", () => {
     const second = await agent.open();
     const rerun = await agent.workspace.nextCall();
     await connect(env, account, second.runtime);
-    expect(await second.runtime.cursor("chat-inbox"), "the position is stored this time").toBe(
-      env.chat.inboxEvents(account)[0]?.eventId,
-    );
+    expect(
+      (await second.runtime.snapshot(ChatCursorsDoc))?.positions["chat-inbox"],
+      "the position is stored this time",
+    ).toBe(env.chat.inboxEvents(account)[0]?.eventId);
     rerun.resolve(text("notes"));
     await second.runtime.idle();
 

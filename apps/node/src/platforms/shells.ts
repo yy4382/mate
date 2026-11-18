@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
-import { Readable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import { PosixProcessGroup } from "./posix-processes.ts";
 import type { CommandProcess, ShellRequest } from "./types.ts";
 
@@ -12,18 +12,18 @@ export const posixCommands = {
         cwd: request.cwd,
         env: request.env,
         detached: true,
-        stdio: ["ignore", "pipe", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe", "pipe"],
       },
     );
-    if (!hasCommandPipes(child)) throw new Error("Command output pipes were not created");
+    if (!hasCommandPipes(child)) throw new Error("Command pipes were not created");
+    child.stdin.on("error", () => {});
     const metadata = child.stdio[3];
     const group = child.pid === undefined ? undefined : new PosixProcessGroup(child.pid);
     return {
       child,
       ...(metadata instanceof Readable ? { metadata } : {}),
       kill() {
-        group?.kill();
-        return { ok: true };
+        return group?.kill() ?? { ok: true };
       },
       background() {
         return group?.running() ? "running" : "finished";
@@ -34,9 +34,11 @@ export const posixCommands = {
 
 function hasCommandPipes(
   child: ChildProcess,
-): child is ChildProcessByStdio<null, Readable, Readable> {
+): child is ChildProcessByStdio<Writable, Readable, Readable> {
   return (
-    child.stdin === null && child.stdout instanceof Readable && child.stderr instanceof Readable
+    child.stdin instanceof Writable &&
+    child.stdout instanceof Readable &&
+    child.stderr instanceof Readable
   );
 }
 
@@ -56,16 +58,14 @@ export const windowsCommands = {
     ].join("\n");
     const quotedCommand = command.replace(/['\u2018-\u201b]/g, "$&$&");
     const invocation = `${prefix.join("; ")}\n. ([ScriptBlock]::Create('${quotedCommand}'))`;
-    const child = spawn(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", invocation],
-      {
-        cwd: request.cwd,
-        env: request.env,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const child = spawn("powershell.exe", ["-NoProfile", "-Command", invocation], {
+      cwd: request.cwd,
+      env: request.env,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    if (!hasCommandPipes(child)) throw new Error("Command pipes were not created");
+    child.stdin.on("error", () => {});
     let exited = false;
     let killed = false;
     child.once("exit", () => {

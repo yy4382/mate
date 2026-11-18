@@ -20,8 +20,8 @@ describe("node gateway tool calls (TESTS)", () => {
       const request = {
         access,
         conversationId: 1,
-        tool: "bash" as const,
-        arguments: { command: "echo hello" },
+        tool: "terminal_exec" as const,
+        arguments: { sessionId: "s1", command: "echo hello" },
       };
       expect(await under.gateway.runTool(node.nodeId, "agent-1", request, () => {}, never)).toEqual(
         toolResult("done"),
@@ -49,7 +49,7 @@ describe("node gateway tool calls (TESTS)", () => {
       under.gateway.runTool(
         node.nodeId,
         "agent-1",
-        { access, tool: "bash", arguments: { command: "pwd" } },
+        { access, tool: "terminal_exec", arguments: { sessionId: "s1", command: "pwd" } },
         () => {},
         never,
       );
@@ -127,6 +127,92 @@ describe("node gateway tool calls (TESTS)", () => {
     expect(legacyPreparations).toEqual(["home"]);
   });
 
+  it("refuses tools absent from the node handshake without sending anything over the wire, and resets advertised tools on reconnect", async () => {
+    const under = await startGateway();
+    const arrived: string[] = [];
+    const legacy = await under.pairedNode({
+      tools: null,
+      onRunTool: async (message) => {
+        arrived.push(message.tool);
+        return { outputs: [], result: toolResult(`ran ${message.tool}`) };
+      },
+    });
+
+    const memoryRead = await under.gateway.runTool(
+      legacy.nodeId,
+      "agent-1",
+      { access: "home", tool: "memory_read", arguments: {} },
+      () => {},
+      never,
+    );
+    const terminalExec = await under.gateway.runTool(
+      legacy.nodeId,
+      "agent-1",
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: "s1", command: "pwd" },
+      },
+      () => {},
+      never,
+    );
+    for (const result of [memoryRead, terminalExec]) {
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatch(/upgrade/i);
+    }
+    expect(arrived).toEqual([]);
+    expect(
+      await under.gateway.runTool(
+        legacy.nodeId,
+        "agent-1",
+        { access: "home", tool: "read", arguments: { path: "notes.txt" } },
+        () => {},
+        never,
+      ),
+    ).toEqual(toolResult("ran read"));
+    expect(under.gateway.status(legacy.nodeId).online).toBe(true);
+
+    const capableCalls: string[] = [];
+    const capable = new FakeNode({
+      gatewayUrl: under.url,
+      nodeId: legacy.nodeId,
+      publicKey: legacy.publicKey,
+      sign: legacy.sign,
+      onRunTool: async (message) => {
+        capableCalls.push(message.tool);
+        return { outputs: [], result: toolResult("ran terminal") };
+      },
+    });
+    onTestFinished(() => capable.terminate());
+    await capable.connect();
+    expect(
+      await under.gateway.runTool(
+        legacy.nodeId,
+        "agent-1",
+        {
+          access: "home",
+          tool: "terminal_exec",
+          arguments: { sessionId: "s2", command: "pwd" },
+        },
+        () => {},
+        never,
+      ),
+    ).toEqual(toolResult("ran terminal"));
+    expect(capableCalls).toEqual(["terminal_exec"]);
+
+    await legacy.connect();
+    const afterDowngrade = await under.gateway.runTool(
+      legacy.nodeId,
+      "agent-1",
+      { access: "home", tool: "memory_read", arguments: {} },
+      () => {},
+      never,
+    );
+    expect(afterDowngrade.isError).toBe(true);
+    expect(text(afterDowngrade)).toMatch(/upgrade/i);
+    expect(arrived).toEqual(["read"]);
+  });
+
   it("streams a call's output to the caller and then returns its result", async () => {
     const under = await startGateway();
     const node = await under.pairedNode({
@@ -136,7 +222,11 @@ describe("node gateway tool calls (TESTS)", () => {
     const result = await under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { access: "home", tool: "bash", arguments: { command: "echo hello world" } },
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: "s1", command: "echo hello world" },
+      },
       (chunk) => chunks.push(chunk),
       never,
     );
@@ -154,7 +244,11 @@ describe("node gateway tool calls (TESTS)", () => {
       under.gateway.runTool(
         node.nodeId,
         "agent-1",
-        { access: "home", tool: "bash", arguments: { command: "echo hi" } },
+        {
+          access: "home",
+          tool: "terminal_exec",
+          arguments: { sessionId: "s1", command: "echo hi" },
+        },
         () => {},
         never,
       ),
@@ -177,7 +271,11 @@ describe("node gateway tool calls (TESTS)", () => {
     const call = under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { access: "home", tool: "bash", arguments: { command: "sleep 60" } },
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: "s1", command: "sleep 60" },
+      },
       (chunk) => chunks.push(chunk),
       never,
     );
@@ -199,7 +297,11 @@ describe("node gateway tool calls (TESTS)", () => {
     const next = under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { access: "home", tool: "bash", arguments: { command: "echo next" } },
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: "s2", command: "echo next" },
+      },
       () => {},
       never,
     );
@@ -226,7 +328,11 @@ describe("node gateway tool calls (TESTS)", () => {
     const call = under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { access: "home", tool: "bash", arguments: { command: "sleep 60" } },
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: "s1", command: "sleep 60" },
+      },
       (chunk) => chunks.push(chunk),
       abort.signal,
     );
@@ -265,7 +371,11 @@ describe("node gateway tool calls (TESTS)", () => {
       under.gateway.runTool(
         node.nodeId,
         agentId,
-        { access: "home", tool: "bash", arguments: { command: "echo" } },
+        {
+          access: "home",
+          tool: "terminal_exec",
+          arguments: { sessionId: agentId, command: "echo" },
+        },
         (chunk) => chunks.push(chunk),
         never,
       );
@@ -290,7 +400,11 @@ describe("node gateway tool calls (TESTS)", () => {
     const call = under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { access: "home", tool: "bash", arguments: { command: "make world" } },
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: "s1", command: "make world" },
+      },
       () => {},
       never,
     );
@@ -316,7 +430,7 @@ describe("node gateway tool calls (TESTS)", () => {
       under.gateway.runTool(
         node.nodeId,
         "../escape",
-        { access: "home", tool: "bash", arguments: { command: "echo" } },
+        { access: "home", tool: "terminal_exec", arguments: { sessionId: "s1", command: "echo" } },
         () => {},
         signal,
       ),
@@ -341,7 +455,7 @@ describe("node gateway tool calls (TESTS)", () => {
     const call = under.gateway.runTool(
       staying.nodeId,
       "agent-1",
-      { access: "home", tool: "bash", arguments: { command: "echo hi" } },
+      { access: "home", tool: "terminal_exec", arguments: { sessionId: "s1", command: "echo hi" } },
       (chunk) => chunks.push(chunk),
       never,
     );

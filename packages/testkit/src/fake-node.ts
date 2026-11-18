@@ -1,6 +1,7 @@
 import {
   GatewayMessageSchema,
   NodeRequestSchema,
+  ToolNameSchema,
   type GatewayBrowse,
   type GatewayRunTool,
   type NodeBrowseOutcome,
@@ -25,6 +26,8 @@ export interface FakeNodeOptions {
   /** Omitted for an older node that does not report system information. */
   system?: NodeSystem;
   workspaceVisits?: true;
+  /** Defaults to all current `ToolNameSchema.options`; pass `null` to omit `tools` like a legacy node. */
+  tools?: readonly string[] | null;
   onRunTool?: (msg: GatewayRunTool) => Promise<{
     outputs: string[];
     result: ToolResult;
@@ -99,12 +102,17 @@ export class FakeNode {
     if (msg.type === "gateway.challenge") {
       this.#challenge = msg.nonce;
       const sig = this.#options.sign(msg.nonce);
+      const tools =
+        this.#options.tools === null
+          ? undefined
+          : [...(this.#options.tools ?? ToolNameSchema.options)];
       const message = {
         type: "node.authenticate" as const,
         requestId: randomUUID(),
         nodeId: this.#options.nodeId,
         signature: sig,
         ...(this.#options.workspaceVisits === true ? { workspaceVisits: true } : {}),
+        ...(tools === undefined ? {} : { tools }),
       };
       const system = this.#options.system;
       this.#ws?.send(JSON.stringify(system === undefined ? message : { ...message, system }));
@@ -120,6 +128,10 @@ export class FakeNode {
         pairingToken !== undefined &&
         publicKey !== undefined
       ) {
+        const tools =
+          this.#options.tools === null
+            ? undefined
+            : [...(this.#options.tools ?? ToolNameSchema.options)];
         const message = {
           type: "node.pair" as const,
           requestId: randomUUID(),
@@ -128,6 +140,7 @@ export class FakeNode {
           signature: this.#options.sign(challenge),
           pairingToken,
           ...(this.#options.workspaceVisits === true ? { workspaceVisits: true } : {}),
+          ...(tools === undefined ? {} : { tools }),
         };
         const system = this.#options.system;
         this.#ws?.send(JSON.stringify(system === undefined ? message : { ...message, system }));

@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   connectedNode,
+  displayTerminalResult,
   eventually,
+  execCommand,
   longCommand,
   pidsOf,
   running,
@@ -20,9 +22,9 @@ describe("node visits (TESTS 1)", () => {
     const agentId = `visitor-${randomUUID()}`;
     const workspace = join(node.workspacesRoot, agentId);
     const chunks: string[] = [];
-    const result = await node.run(
+    const result = await execCommand(
+      node,
       agentId,
-      "bash",
       {
         command: windows
           ? "(Get-Location).Path; $env:HOME; $HOME"
@@ -38,8 +40,8 @@ describe("node visits (TESTS 1)", () => {
     expect(realpathSync.native(shellHome!)).toBe(realpathSync.native(workspace));
     expect(chunks.join("")).toContain(workspace);
     expect(existsSync(workspace)).toBe(true);
-    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
-    expect(existsSync(join(node.home, "MEMORY.md"))).toBe(false);
+    expect(existsSync(join(workspace, "memory"))).toBe(false);
+    expect(existsSync(join(node.home, "memory"))).toBe(false);
   });
 
   it("uses the same workspace for bash, write, edit and read and refuses outside file paths", async () => {
@@ -68,9 +70,9 @@ describe("node visits (TESTS 1)", () => {
     const read = await node.run(agentId, "read", { path }, undefined, "visit");
     expect(read.isError, textOf(read)).toBe(false);
     expect(textOf(read)).toBe("first\nupdated\n");
-    const command = await node.run(
+    const command = await execCommand(
+      node,
       agentId,
-      "bash",
       { command: windows ? "Get-Content -Raw notes/today.md" : "cat notes/today.md" },
       undefined,
       "visit",
@@ -92,7 +94,7 @@ describe("node visits (TESTS 1)", () => {
     expect(textOf(refused)).toContain("is outside the workspace");
     expect(readFileSync(secret, "utf8")).toBe("secret");
     expect(existsSync(workspace)).toBe(true);
-    expect(existsSync(join(node.home, "MEMORY.md"))).toBe(false);
+    expect(existsSync(join(node.home, "memory"))).toBe(false);
   });
 
   it("stops a visited command's process tree while a home command keeps running", async () => {
@@ -101,18 +103,18 @@ describe("node visits (TESTS 1)", () => {
     const visited = node.gateway.runTool(
       "visit-to-stop",
       agentId,
-      "bash",
-      { command: longCommand("visit") },
+      "terminal_exec",
+      { sessionId: randomUUID(), command: longCommand("visit") },
       undefined,
       "visit",
     );
-    const home = node.run(agentId, "bash", { command: longCommand("home") });
+    const home = execCommand(node, agentId, { command: longCommand("home") });
     const visitedPids = await pidsOf(workspace, "visit");
     const homePids = await pidsOf(workspace, "home");
     expect([...visitedPids, ...homePids].every(running)).toBe(true);
 
     node.gateway.stopTool("visit-to-stop");
-    const result = await visited;
+    const result = displayTerminalResult(await visited);
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("Command was stopped");
     for (const pid of visitedPids)
@@ -165,7 +167,7 @@ describe("node visits (TESTS 1)", () => {
     }
   });
 
-  it("prepares visits without initializing MEMORY.md and preserves user-created files", async () => {
+  it("prepares visits without initializing the memory directory and preserves user-created files", async () => {
     const node = await connectedNode();
     const agentId = "visitor";
     const workspace = join(node.workspacesRoot, agentId);
@@ -173,21 +175,22 @@ describe("node visits (TESTS 1)", () => {
       false,
     );
     expect(existsSync(workspace)).toBe(true);
-    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
-    writeFileSync(join(workspace, "MEMORY.md"), "user-created");
+    expect(existsSync(join(workspace, "memory"))).toBe(false);
+    mkdirSync(join(workspace, "memory"), { recursive: true });
+    writeFileSync(join(workspace, "memory/MEMORY.md"), "user-created");
     expect((await node.gateway.prepareWorkspace(randomUUID(), agentId, "visit")).isError).toBe(
       false,
     );
-    expect(readFileSync(join(workspace, "MEMORY.md"), "utf8")).toBe("user-created");
-    rmSync(join(workspace, "MEMORY.md"));
+    expect(readFileSync(join(workspace, "memory/MEMORY.md"), "utf8")).toBe("user-created");
+    rmSync(join(workspace, "memory"), { recursive: true });
     expect((await node.gateway.prepareWorkspace(randomUUID(), agentId, "visit")).isError).toBe(
       false,
     );
     expect(
-      (await node.run(agentId, "bash", { command: "echo ready" }, undefined, "visit")).isError,
+      (await execCommand(node, agentId, { command: "echo ready" }, undefined, "visit")).isError,
     ).toBe(false);
     expect(existsSync(workspace)).toBe(true);
-    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
+    expect(existsSync(join(workspace, "memory"))).toBe(false);
   });
 
   it("refuses visits when the workspace path is a file and retries after its removal", async () => {
@@ -201,15 +204,15 @@ describe("node visits (TESTS 1)", () => {
       outside,
       `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "executed");`,
     );
-    const refused = await node.run(agentId, "bash", { command }, undefined, "visit");
+    const refused = await execCommand(node, agentId, { command }, undefined, "visit");
     expect(refused.isError).toBe(true);
     expect(existsSync(marker)).toBe(false);
     expect(readFileSync(workspace, "utf8")).toBe("not a directory");
     rmSync(workspace);
-    const retried = await node.run(agentId, "bash", { command }, undefined, "visit");
+    const retried = await execCommand(node, agentId, { command }, undefined, "visit");
     expect(retried.isError, textOf(retried)).toBe(false);
     expect(readFileSync(marker, "utf8")).toBe("executed");
-    expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
+    expect(existsSync(join(workspace, "memory"))).toBe(false);
   });
 
   it.runIf(windows)(
@@ -217,9 +220,9 @@ describe("node visits (TESTS 1)", () => {
     async () => {
       const node = await connectedNode({ env: { HOME: undefined } });
       const workspace = join(node.workspacesRoot, "visitor");
-      const result = await node.run(
+      const result = await execCommand(
+        node,
         "visitor",
-        "bash",
         { command: "(Get-Location).Path; Test-Path Env:HOME; $HOME" },
         undefined,
         "visit",

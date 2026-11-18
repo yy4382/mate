@@ -21,7 +21,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@palace/agent-plugin": "workspace:*",
+    "@earendil-works/pi-durable": "1.1.0",
     "@palace/chat": "workspace:*",
     "@palace/clock": "workspace:*",
     "@palace/control-store": "workspace:*",
@@ -29,6 +29,7 @@
     "@palace/manager": "workspace:*",
     "@palace/migrations": "workspace:*",
     "@palace/node-protocol": "workspace:*",
+    "@palace/plugins": "workspace:*",
     "@palace/runtime": "workspace:*",
     "zod": "4.6.5"
   },

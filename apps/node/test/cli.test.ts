@@ -62,8 +62,8 @@ function runningNode(version = "1.0.0"): Host {
   );
   mkdirSync(h.paths.data, { recursive: true });
   writeFileSync(join(h.paths.data, "node-identity.json"), "identity\n");
-  mkdirSync(join(h.paths.workspaces, "agent-1"), { recursive: true });
-  writeFileSync(join(h.paths.workspaces, "agent-1/MEMORY.md"), "remember this\n");
+  mkdirSync(join(h.paths.workspaces, "agent-1/memory"), { recursive: true });
+  writeFileSync(join(h.paths.workspaces, "agent-1/memory/MEMORY.md"), "remember this\n");
   ok(h, "node", "start");
   return h;
 }

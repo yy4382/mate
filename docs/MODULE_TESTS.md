@@ -33,9 +33,9 @@
 | 模块 | 测试说明 |
 | --- | --- |
 | 聊天 app | [packages/chat/TESTS.md](../packages/chat/TESTS.md) |
-| Agent 插件契约 | 没有自己的测试，由 runtime 经 `openAgentRuntime` 和 `submit` 覆盖（[packages/agent-plugin](../packages/agent-plugin/ARCHITECTURE.md)） |
 | Agent runtime | [packages/runtime/TESTS.md](../packages/runtime/TESTS.md) |
-| 聊天插件、连接器与 Agent Manager | [packages/manager/TESTS.md](../packages/manager/TESTS.md) |
+| Agent 能力扩展 | [packages/plugins/TESTS.md](../packages/plugins/TESTS.md) |
+| 聊天扩展、连接器与 Agent Manager | [packages/manager/TESTS.md](../packages/manager/TESTS.md) |
 | Node 网关 | [packages/gateway/TESTS.md](../packages/gateway/TESTS.md) |
 | Node 与 `palace node` CLI | [apps/node/TESTS.md](../apps/node/TESTS.md) |
 | 管理模块 | [packages/admin/TESTS.md](../packages/admin/TESTS.md) |

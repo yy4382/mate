@@ -13,7 +13,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { onTestFinished } from "vitest";
-import type { JsonValue, NodeAccess, ToolName, ToolResult } from "@palace/node-protocol";
+import {
+  decodeTerminalOutcome,
+  decodeTerminalWaitOutcome,
+  formatTerminalOutcome,
+  type JsonValue,
+  type NodeAccess,
+  type TerminalOutcome,
+  type TerminalWaitOutcome,
+  type ToolName,
+  type ToolResult,
+} from "@palace/node-protocol";
 import { FakeGateway } from "@palace/testkit";
 
 const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
@@ -128,8 +138,81 @@ export async function connectedNode(options: StartOptions = {}): Promise<NodePro
   return node;
 }
 
-export function textOf(result: ToolResult): string {
+export function textOf(result: { readonly content: readonly { text: string }[] }): string {
   return result.content.map((part) => part.text).join("");
+}
+
+export function displayTerminalResult(result: ToolResult): {
+  content: [{ type: "text"; text: string }];
+  isError: boolean;
+  outcome?: TerminalOutcome;
+} {
+  const decoded = decodeTerminalOutcome(result);
+  if (!decoded.ok) {
+    return { content: [{ type: "text", text: decoded.error }], isError: result.isError };
+  }
+  const formatted = formatTerminalOutcome(decoded.outcome);
+  return {
+    content: [{ type: "text", text: formatted.text }],
+    isError: formatted.isError,
+    outcome: decoded.outcome,
+  };
+}
+
+export async function execCommand(
+  node: NodeProcess,
+  agentId: string,
+  args: {
+    sessionId?: string;
+    command: string;
+    workdir?: string;
+    yieldTimeMs?: number;
+    timeoutMs?: number;
+  },
+  onOutput?: (chunk: string) => void,
+  access?: NodeAccess,
+  conversationId?: number,
+): Promise<{
+  content: [{ type: "text"; text: string }];
+  isError: boolean;
+  outcome?: TerminalOutcome;
+  sessionId: string;
+}> {
+  const sessionId = args.sessionId ?? randomUUID();
+  const raw = await node.run(
+    agentId,
+    "terminal_exec",
+    { ...args, sessionId },
+    onOutput,
+    access,
+    conversationId,
+  );
+  return { ...displayTerminalResult(raw), sessionId };
+}
+
+export async function writeStdin(
+  node: NodeProcess,
+  agentId: string,
+  args: { sessionId: string; chars?: string; eof?: boolean; kill?: boolean; yieldTimeMs?: number },
+  onOutput?: (chunk: string) => void,
+  access?: NodeAccess,
+): Promise<{
+  content: [{ type: "text"; text: string }];
+  isError: boolean;
+  outcome?: TerminalOutcome;
+}> {
+  const raw = await node.run(agentId, "terminal_write", args, onOutput, access);
+  return displayTerminalResult(raw);
+}
+
+export async function waitTerminal(
+  node: NodeProcess,
+  agentId: string,
+  sessionId: string,
+  access?: NodeAccess,
+): Promise<{ ok: true; outcome: TerminalWaitOutcome } | { ok: false; error: string }> {
+  const raw = await node.run(agentId, "terminal_wait", { sessionId }, undefined, access);
+  return decodeTerminalWaitOutcome(raw);
 }
 
 /**

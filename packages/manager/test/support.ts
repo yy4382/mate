@@ -1,10 +1,12 @@
-import { ChatApp, type AccountChat, type TimelineRef } from "@palace/chat";
+import { Type } from "@earendil-works/pi-ai";
 import {
-  createAgentStore,
-  openAgentRuntime,
-  type AgentSettings,
-  type WorkspacePort,
-} from "@palace/runtime";
+  defineExtension,
+  defineTool,
+  type Extension,
+  type ToolExecutionResult,
+} from "@earendil-works/pi-durable";
+import { ChatApp, type AccountChat, type TimelineRef } from "@palace/chat";
+import { createAgentStore, openAgentRuntime, type AgentSettings } from "@palace/runtime";
 import {
   FakeClock,
   FakeWorkspace,
@@ -15,11 +17,11 @@ import {
 import { join } from "node:path";
 import { onTestFinished } from "vitest";
 import {
-  chatPlugin,
+  chatExtension,
+  ManagerAgentStateDoc,
   openAgentManager,
   type AgentManager,
   type AgentSpec,
-  type WorkspaceHost,
 } from "../src/index.ts";
 
 export { FakeWorkspace, toolText as text } from "@palace/testkit";
@@ -29,11 +31,77 @@ export const settings: AgentSettings = { model: { provider: "openai", modelId: "
 /** The node Agents are created on unless a test chooses another. */
 export const nodeId = "node-a";
 
+const STOPPED: ToolExecutionResult = {
+  content: [
+    { type: "text", text: "The call was stopped because the Agent was paused or shut down." },
+  ],
+  isError: true,
+};
+
+function combineSignals(a: AbortSignal, b: AbortSignal | undefined): AbortSignal {
+  return b === undefined ? a : AbortSignal.any([a, b]);
+}
+
+function workspaceTestExtension(workspace: FakeWorkspace, closing: AbortSignal): Extension {
+  const raceStop = (
+    result: Promise<ToolExecutionResult>,
+    signal: AbortSignal,
+  ): Promise<ToolExecutionResult> => {
+    if (signal.aborted) return Promise.resolve(STOPPED);
+    const { promise, resolve } = Promise.withResolvers<ToolExecutionResult>();
+    const onAbort = () => resolve(STOPPED);
+    signal.addEventListener("abort", onAbort, { once: true });
+    return Promise.race([result, promise]).finally(() =>
+      signal.removeEventListener("abort", onAbort),
+    );
+  };
+
+  return defineExtension({
+    name: "test-workspace",
+    tools: [
+      defineTool({
+        name: "exec_command",
+        description: "Run command on workspace",
+        parameters: Type.Object({ command: Type.String() }),
+        replay: "unsafe",
+        execute: (args, api, context) => {
+          const signal = combineSignals(closing, context.abortSignal);
+          return raceStop(
+            workspace.run(
+              { tool: "terminal_exec", arguments: args, conversationId: api.conversationId },
+              (chunk) => api.output(chunk),
+              signal,
+            ),
+            signal,
+          );
+        },
+      }),
+      defineTool({
+        name: "read",
+        description: "Read file from workspace",
+        parameters: Type.Object({ path: Type.String() }),
+        replay: "safe",
+        execute: (args, api, context) => {
+          const signal = combineSignals(closing, context.abortSignal);
+          return raceStop(
+            workspace.run(
+              { tool: "read", arguments: args, conversationId: api.conversationId },
+              (chunk) => api.output(chunk),
+              signal,
+            ),
+            signal,
+          );
+        },
+      }),
+    ],
+  });
+}
+
 /** Stands in for the nodes: workspaces are prepared on request, and each Agent has a fake workspace on each node. */
-export class FakeWorkspaces implements WorkspaceHost {
+export class FakeWorkspaces {
   /** The node each Agent's workspace was last prepared on. */
   readonly prepared = new Map<string, string>();
-  /** Every port handed out, in order: the node each opened runtime runs its workspace tools on. */
+  /** Every build handed out, in order: the node each opened runtime runs its workspace tools on. */
   readonly ports: { agentId: string; nodeId: string }[] = [];
   readonly #workspaces = new Map<string, FakeWorkspace>();
   /** Runs at the start of the next `prepare` and is then forgotten: a test makes a preparation fail with it. */
@@ -48,10 +116,10 @@ export class FakeWorkspaces implements WorkspaceHost {
     hook?.(agentId);
   }
 
-  port(node: string, agentId: string): WorkspacePort {
+  extensionsFor(node: string, agentId: string, closing: AbortSignal): Extension[] {
     this.onOpen?.(agentId);
     this.ports.push({ agentId, nodeId: node });
-    return this.workspace(agentId, node);
+    return [workspaceTestExtension(this.workspace(agentId, node), closing)];
   }
 
   /** The Agent's workspace on `node`. */
@@ -131,7 +199,10 @@ export async function environment() {
       const manager = await openAgentManager({
         directory: join(data, "agents"),
         chat,
-        workspaces,
+        prepareWorkspace: (node, agentId) => workspaces.prepare(node, agentId),
+        buildAgent: ({ agentId, nodeId: node, closing }) => ({
+          extensions: workspaces.extensionsFor(node, agentId, closing),
+        }),
         credentials: () => ({ apiKey: "test-key", baseUrl: provider.baseUrl }),
         clock,
         report: (error, agentId) => reports.push({ agentId, error }),
@@ -211,21 +282,35 @@ export function agentAccount(env: Environment) {
  */
 export async function realRuntime(env: Environment, account: number) {
   const file = join(env.data, "agent.sqlite");
-  await createAgentStore(file, { nodeId, settings });
+  await createAgentStore(file, {
+    settings,
+    init: async (tx) => {
+      const doc = await tx.doc(ManagerAgentStateDoc);
+      doc.nodeId = nodeId;
+    },
+  });
   const workspace = new FakeWorkspace();
   return {
     workspace,
-    async open(options: { chat?: AccountChat } = {}) {
+    async open(options: { chat?: AccountChat; extensions?: readonly Extension[] } = {}) {
       let database: FaultyDatabase | undefined;
+      const closing = new AbortController();
       const runtime = await openAgentRuntime({
         file,
         credentials: () => ({ apiKey: "test-key", baseUrl: env.provider.baseUrl }),
-        workspace,
         clock: env.clock,
-        plugins: [chatPlugin(options.chat ?? env.chat.forAccount(account))],
+        extensions: [
+          workspaceTestExtension(workspace, closing.signal),
+          chatExtension(options.chat ?? env.chat.forAccount(account)),
+          ...(options.extensions ?? []),
+        ],
         wrapDatabase: (inner) => (database = new FaultyDatabase(inner)),
       });
-      onTestFinished(() => (database?.frozen ? undefined : runtime.close()));
+      onTestFinished(async () => {
+        if (database?.frozen) return;
+        closing.abort();
+        await runtime.close();
+      });
       return {
         runtime,
         freeze: () => database?.freeze(),

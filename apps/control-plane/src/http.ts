@@ -47,6 +47,7 @@ const ADMIN_STATUS: Record<AdminErrorReason, number> = {
   "name-taken": 409,
   "no-credentials": 409,
   "agent-closed": 409,
+  "stop-unconfirmed": 503,
   "not-found": 404,
   "outside-workspace": 403,
   unreadable: 422,

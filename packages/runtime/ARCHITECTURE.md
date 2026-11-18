@@ -4,98 +4,28 @@
 
 ## 职责
 
-运行一个 Agent。runtime 包装一个 `pi-durable` 的 Harness，即 Durable 里"一个存储加上在其上运行 agent 的机制"的对象。Durable 负责 loop、重试、对话记录、收件箱和压缩，runtime 在上面装内置扩展和各包交来的插件。
+`@palace/runtime` 是 `pi-durable` Harness 的薄封装，只负责打开与管理单个 Agent 的 Durable 存储和生命周期，不包含聊天、终端、文件、记忆、子 Agent、提醒、历史、空闲压缩或按需文档等具体业务能力（这些能力全部以原生 `pi-durable` `Extension` 的形式落在 [@palace/plugins](../plugins/ARCHITECTURE.md)、[@palace/manager](../manager/ARCHITECTURE.md) 和 [@palace/admin](../admin/ARCHITECTURE.md) 中）。
 
-消息、任务、已读位置等业务事实都归聊天 app。runtime 不判断"run 是否仍然有效"，runtime 开着它就有效。
-
-每个 Agent 一个 runtime、一个 Harness、一个 SQLite 文件。文件里有一个主对话和若干工作助手对话，它们共享模型设置和凭据。
-
-## 扩展
-
-内置扩展是 runtime 自己的能力，它们要后台任务、Harness 句柄、时钟和中止，所以不走插件契约。
-
-| 扩展 | 内容 | 谁能用 |
-| --- | --- | --- |
-| 工作区 | `bash`、`read`、`write`、`edit` 接受可选的 node 名字，缺省在主 node 执行；`node_list` 每次现读可访问的 node；`bash_stop` 停止后台命令。系统提示说明每个 node 有自己的工作区、互不同步，主 node 工作区的 `MEMORY.md` 是记忆入口 | 主对话和助手 |
-| 提醒 | 设定、列出、取消提醒 | 主对话 |
-| 空闲压缩 | 没有工具，只在每次模型回应时唤醒空闲压缩的循环，见"压缩与历史" | 主对话 |
-| 助手 | 派生、发消息、等待、中断、列出工作助手 | 主对话 |
-| 历史 | `history_search`、`history_read` 查这个对话自己的历史，包括被压缩掉的部分 | 主对话和助手 |
-| 文档 | `palace_docs({ topic })` 读一篇 Palace 功能文档，主题来自装入的插件 | 主对话和助手 |
-
-聊天、webhook 等不属于 runtime 的能力是插件，由所属的包交给 `openAgentRuntime({ plugins })`，见下一节。
-
-系统提示分在各扩展里，一件事只在一处说。工具和参数的描述只写它们自己的意思。工作助手的对话另有一句说明它是谁，主对话没有"你是谁"一段。所有工具直接暴露给模型，不经过"先列出、再调用"的元工具。
-
-## 插件
-
-契约在 [`@palace/agent-plugin`](../agent-plugin/ARCHITECTURE.md)。runtime 把每个插件装成一个同名的 Durable 扩展：它的工具，加一段以插件名为键的系统提示，内容就是 `prompt`。
-
-- **一张表。** 内置扩展和插件按安装顺序放在同一张 `{ extension, scope }` 的表里，安装顺序就是系统提示里各段的顺序。主对话专属的集合从 `scope` 过滤得到，没有另一份手写的列表。顺序是：工作区、历史、文档、助手、提醒、空闲压缩、插件（按传入顺序）、助手身份。
-- **打开时检查，不合格就打不开。** 插件名不能重复，也不能和内置扩展同名（Durable 的安装会悄悄替换同名扩展）；两个插件不能提供同名文档主题。
-- **助手看不到主对话专属插件。** 助手的对话在派生时存下"这些扩展它没有"，存的是扩展名，所以插件名不能改。Durable 选扩展是"已装入的减去存下的"，所以派生之后才装入的主对话专属插件，若不处理就会漏到老助手里。因此打开 runtime 时、`resume()` 之前（此时没有任何 run 在跑），把每个助手存下的集合对齐到当前的主对话专属集合，只改不一致的；插件没变时集合一致，不写任何东西，系统提示不变。`palace_docs` 是内置的，不论插件的 `scope`，助手都能读所有装入插件的文档主题。
-
-## 助手投递
-
-进入工作助手对话的输入只有一条路，即投递：主对话里的一个 Durable 后台任务。它把输入（带 `requestId`）提交给目标对话，目标是助手时再等助手回答，把回答以 `[assistant <名字> answered] <回答>` 作为 `followUp` 提交给主对话（`requestId = assistant-report:<投递任务 ID>`）。每一步都有检查点，所以重启后助手只收到一次输入，主对话只收到一次汇报。主对话的 `send`、`spawn` 和助手后台命令的结束都走投递，所以助手的每个回答都会回到主对话。
-
-## 后台命令
-
-`bash` 带 `background: true` 时，runtime 在发起它的对话里建一个 Durable 后台任务，把任务 ID 作为命令 ID 立即返回给模型。后台任务不让对话保持忙碌，也不随 run 结束或中止，所以 Agent 照常工作、照常空闲。任务把调用交给网关并等结果：
-
-1. 交给网关之前先记下"已交给 node"。重新打开的 runtime 发现任务停在这里，就知道命令可能跑过，也可能没跑完。它汇报"已中断"并写明这两种可能，不重跑。
-2. 命令结束后，在同一次提交里结束任务，并为发起的对话建一个投递（`requestId = command:<ID>`，`steer`），内容是结果全文，第一行写命令 ID、成功或出错、命令本身，显式指定了 node 时也写目标名字。两件事一起提交，所以结果恰好汇报一次。
-
-后台命令的输出不流式显示，只在汇报里出现。`bash_stop(ID)` 中止那个任务，任务的 signal 随之中止，网关停掉 node 上的调用，和前台调用的停止是同一条路。被停止的命令不再汇报。只能停自己对话的后台命令；不认识的 ID 返回错误，已结束的命令返回普通结果说明它已结束。命令结束和交出汇报是同一次提交，所以停止要么在它之前（不汇报），要么在它之后（已结束）。runtime 关闭时后台命令被停掉，重新打开后以"已中断"汇报一次。没有列出后台命令的工具，命令 ID 在 `bash` 的结果里，压缩后也能用历史工具查到。
-
-后台命令的输入是版本 1 的平铺参数加可选的 `node`，旧记录没有 `node` 时按主 node 处理。
-
-## 按需文档
-
-功能怎么工作（接口、鉴权、幂等、限制）不进系统提示，因为大多数运行用不到。Agent 为读懂输入而必须知道的内容（例如 `<external_webhook_content>` 标签的含义）留在系统提示或输入里，越短越好，由插件的 `prompt` 说。其余写进拥有这个功能的包的 `docs/<topic>.md`，插件用 `docs` 交给 runtime，Agent 需要时调用 `palace_docs` 读。
-
-每个主题一个文件，front matter 的 `description` 是索引里的一行。打开 runtime 时从所有装入插件的 `docs` 目录生成 `topic` 的枚举和工具描述里的索引，没有另一份列表；没有任何主题时不提供 `palace_docs`。枚举之外的主题被 Durable 的参数校验拒绝。文档面向模型，用英文写，不含各部署自己的值（例如服务器地址）。
-
-## 压缩与历史
-
-压缩用 Durable 的 `settings.compaction`，摘要由对话自己的模型生成。上下文让模型窗口只剩不到 16384 token 时先压缩再发请求；早 32768 token 时在后台开始压缩；摘要后保留最近约 20000 token 原文。摘要失败时上下文保持原样；提供商以"上下文太长"拒绝时先压缩再重试一次。这些由 Durable 保证，runtime 只给出这三个数。
-
-**空闲压缩。** Durable 的摘要请求用自己的系统提示、把历史压平成一条消息、不带缓存，所以读不到提示缓存。一个大的主对话空闲到缓存快过期时，runtime 改让 Agent 自己写摘要：
-
-- **触发。** 主对话空闲（没有在跑的 run，也没有排队的输入；后台命令可能还在跑），上下文里最新的回答（压缩标记之后）是这个模型的请求，Agent 下一次请求仍用这个模型，这次请求的输入（未缓存、缓存读、缓存写之和）不少于这个模型的阈值，从这次请求开始已过了模型的空闲延迟、还没过缓存寿命，并且检查点请求按 Durable 的估算（这次请求的 token、之后的记录、检查点提示）没有越过它的后台压缩线（模型窗口减 16384 再减 32768 token）：越过时 Durable 会在检查点请求旁边再发一个不带缓存的摘要请求，省不下什么。窗口取自 Durable 用的同一个模型解析，两个数取自 runtime 给 Durable 的同一份 `compaction`。时间从回答里 pi-ai 记下的请求开始时间算起，存在 Durable 里，所以重启不会让它重新计时。
-- **一条规则，参数是数据。** `idle-compaction.ts` 只有逻辑，不点名任何提供商或模型。缓存寿命过了 `compactAfterShare`（默认 5/6，30 分钟的缓存即 25 分钟）时压缩，过了缓存寿命就不再压缩；阈值是 Durable 后台压缩线的 `thresholdShare`（默认 2/3）与 `maxThresholdTokens`（默认 200k）中较小的一个，所以 gpt-6.1-sol（压缩线 222,848）约 148.6k，1M 窗口的模型 200k，128k 窗口的模型约 52k。数据在 `idle-policy.ts`：默认值，再由提供商条目、再由 `provider/modelId` 条目覆盖，每层只替换它写出的字段。现在只有两条提供商的事实：OpenAI 至少保留前缀 30 分钟，DeepSeek 的磁盘缓存至少 72 小时（V4.1 Flash 的论文）。缓存已经掉了的提供商上，检查点请求把重读的代价提前到现在，而不是 Agent 醒来时。不发 `cacheRetention`，两家都不能用它延长寿命。
-- **检查点请求。** runtime 提交一条普通输入（`requestId = idle-summary:<那条回答的 ID>`，`whenBusy: "reject"`），请 Agent 写检查点摘要、不调用工具。它就是对话的下一次请求，前缀和上一次相同，读的是热缓存。期间有输入到来时它被拒绝，什么都不写。
-- **压缩。** 这条输入的回答紧跟在它后面、正常结束、没有工具调用、有文字时，runtime 写一个压缩标记（`requestId = idle-compaction:<回答的 ID>`），标记的起点就是这条回答：上下文从此变成一句"之前的对话已压缩，下一条是你写的检查点摘要"加上这条回答，以及它之后的一切。标记经 Durable 的收件箱写入，空闲时立即生效，忙时在下一个边界生效；Durable 自己的压缩已越过这条回答时作废。回答带工具调用、被截断或没有文字时不压缩，这段上下文也不再问第二次。检查点的输入和回答是普通的历史记录。
-- **崩溃。** 状态都从 Durable 的记录推出：上一条回答、它的提交记录（`idle-summary:` 的 requestId 记着回答的 ID）、标记的提交记录。所以在回答之后、标记之前崩溃，重新打开后直接写标记，不会再问一次；每一步都按 requestId 去重。
-- **只在主对话。** 助手的回答会汇报给主对话，问助手要摘要会漏进主对话的输入。
-
-已知的限制：主对话的任务让一个助手长时间工作时，主对话一直不空闲，它的缓存可能过期而不被注意；回答之后崩溃、重新打开后在循环推导之前就来了真实输入时，这条检查点不会被用上。
-
-被压缩的部分仍在 Durable 存储里。历史扩展把输入、模型回答（含工具调用）和工具结果当作历史记录，按存入顺序从 1 编号。系统提示的变化、摘要和历史工具自己的调用不算记录，否则每查一次下次就多出匹配。Durable 只追加，所以编号不变。
-
-- `history_search(query)` 不分大小写，返回最新的 20 条匹配，每条只给匹配附近约 400 个字符，并给出匹配总数。
-- `history_read(from)` 从编号 `from` 起按顺序读，一页最多 40000 字节的 JSON，保证在 Durable 单个工具结果 50 KB 的上限之内，不被截成无效 JSON。
-
-结果带记录总数和 `inContextFrom`，即还在模型上下文里的第一条记录的编号。两个工具都只读、可重做。
+每个 Agent 对应一个 runtime、一个 Durable Harness 和一个 SQLite 文件。存储中的多个对话（主对话与各子对话）共享模型凭据查询，并在调用 `configure()` 时同步更新模型设置。
 
 ## 接口
 
-给 Agent Manager 和连接器用，签名在 `src/index.ts`。
+给 `@palace/manager`、`@palace/plugins` 与测试使用，签名在 `src/index.ts`：
 
-- `createAgentStore(file, { nodeId, settings })` 新建 Agent 文件，node ID 和设置一次写入，之后 node ID 不变。返回时 Agent 就存在了。
-- `openAgentRuntime({ file, credentials, workspace, plugins?, … })` 打开 Harness 并 `resume()`。`credentials(provider)` 在每次模型请求时现读，改了 key 从下一次请求生效。存储出错时调用一次 `onFatal`，之后这个 runtime 失效，要从文件重新打开。
-- `AgentRuntime` 提供 `submit`（可带 `replaces` 撤回同前缀的未交付输入）、`withdraw`、`cursor` / `advanceCursor`（只进不退）、`configure`、`settings`、`idle`、`usage`、`assistants`、`watchEvents`（只读观察）和 `close`。
-- 在没打开 runtime 的文件上：`readAgentState`、`setAgentPaused`、`configureAgentFile`，只给 Manager 处理关闭状态的 Agent 用。
-- `catalogModels(provider)` 读 pi-ai 模型目录。
+- `createAgentStore(file, { settings, init? })` 在临时文件创建 Durable 根对话、写入初始模型设置与调用方初始文档，最后原子改名为正式文件。
+- `openAgentRuntime({ file, credentials, extensions?, background?, resolveModel?, wrapDatabase?, onFatal?, onReport?, clock? })` 检查扩展名唯一性，全部注册进 Durable registry 并传给主对话的 `settings.extensions`，打开 Harness 后调用 `resume()`，然后启动 `background` 循环。`credentials(provider)` 在每次模型请求时现读。存储适配器发生致命故障时触发一次 `onFatal`。
+- `AgentRuntime` 暴露 `rootConversationId`、`submit`（支持 `replaces` 撤回未交付的同前缀排队输入）、`withdraw`、`snapshot`、`commit`、`configure`、`settings`、`idle`、`usage`、`watchEvents`（按 `conversationId` 观察主对话或任意子对话）和 `close`。
+- 在未打开 runtime 的关闭存储文件上提供只读/事务辅助函数 `withAgentFileSession`、`readAgentFile` 和 `configureAgentFile`，供 Manager 读取元数据、切换暂停状态与修改离线配置。
+- `catalogModels(provider)` 读取 `pi-ai` 内置模型目录。
 
 ## 规则
 
-1. **runtime 的全部状态都在 Durable 存储里。** 提醒、连接器位置、是否暂停都存为 Durable 自定义文档（`defineDoc`），和对话记录一起提交。
-2. **只读、可重做的工具声明 `replay: "safe"`，有副作用的不声明。** 崩溃后 Durable 让没声明的调用以"已中断"结束并告诉模型。聊天工具（在 manager 的聊天插件里）靠 `requestId` 幂等，所以可以声明。
-3. **配置改动不追溯。** 已发出的请求按旧配置完成，改动从下一次请求生效。崩溃后 Durable 可能按旧配置重发一个已准备好的请求，这可以接受。
-4. **用量直接读 Durable 的 `pi.usage`，只用于观察，不设配额。**
-5. **提醒到期时提交 `requestId = reminder:<id>` 的输入，由 Durable 去重。** 不需要轮询循环或另一条唤醒路径。
+1. **所有业务能力都是原生 `Extension`。** runtime 不定义专有插件层，也不假设安装哪些扩展；各包通过 `openAgentRuntime({ extensions, background })` 直接注入。
+2. **凭据不落 Agent 文件，按次现读。** `agentModels` 绑定 `closing` 信号，关闭或中止时立即取消所有挂起的模型 HTTP 请求。
+3. **配置改动不追溯。** 已发出的请求按旧配置完成，新配置从下一次模型请求生效。
+4. **用量直接读 Durable `pi.usage`，只用于观察，不设配额。**
+5. **发生存储错误时进入失效态。** `Lifetime` 在首次持久层异常时标记失效，挂起中的调用与事件观察随即结束，由上层 Manager 队列关闭该 runtime 并在下一次恢复时重新打开。
 
 ## 持久化
 
-`data/agents/<agentId>.sqlite`，WAL 加 `synchronous=FULL`（由传入的 SQLite 适配器设置）。
+`data/agents/<agentId>.sqlite`，启用 WAL 与 `synchronous=FULL`（经传入的 SQLite 适配器设置）。

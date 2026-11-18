@@ -34,7 +34,7 @@
 
 **跨站防护。** 请求体必须是 `application/json`，否则回 415，因为别的站点的表单或不预检的 `fetch` 发不出这种请求。带 `Origin` 的非 GET 请求要求 `Origin` 的 host 等于 `Host`，否则回 403 `cross-origin`。没有 `Origin`（脚本、curl）的请求放行。
 
-**拒绝的形状。** 请求体原样交给聊天 app 或管理模块解析。拒绝回 `{ error, message }`，`error` 就是模块的 `reason`，每个 reason 对应固定的状态码。创建 Agent 在文件改名之前失败回 500 `creation-failed` 并带 `agentId`，客户端用它重做。
+**拒绝的形状。** 请求体原样交给聊天 app 或管理模块解析。拒绝回 `{ error, message }`，`error` 就是模块的 `reason`，每个 reason 对应固定的状态码。创建 Agent 在文件改名之前失败回 500 `creation-failed` 并带 `agentId`，客户端用它重做。暂停 Agent 时若本地 runtime 已关闭并记为暂停、但无法确认节点上的运行中命令已停止，则回 503 `stop-unconfirmed`，管理员可在连接恢复后重试暂停以完成远端确认。
 
 ## 事件流
 

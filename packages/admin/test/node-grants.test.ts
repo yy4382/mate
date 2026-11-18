@@ -31,8 +31,8 @@ describe("workspace node access", () => {
       .step("before grant", (request) => {
         request.call([
           { name: "node_list", arguments: {} },
-          { name: "bash", arguments: { node: "laptop", command: "pwd" } },
-          { name: "bash", arguments: { node: "unknown", command: "pwd" } },
+          { name: "exec_command", arguments: { node: "laptop", command: "pwd" } },
+          { name: "exec_command", arguments: { node: "unknown", command: "pwd" } },
         ]);
       })
       .step("grant", async (request) => {
@@ -48,9 +48,9 @@ describe("workspace node access", () => {
         expect(laptop.prepared).toContainEqual({ agentId, access: "visit" });
         request.call([
           { name: "node_list", arguments: {} },
-          { name: "bash", arguments: { command: "default home" } },
-          { name: "bash", arguments: { node: "server", command: "named home" } },
-          { name: "bash", arguments: { node: "laptop", command: "visit" } },
+          { name: "exec_command", arguments: { command: "default home" } },
+          { name: "exec_command", arguments: { node: "server", command: "named home" } },
+          { name: "exec_command", arguments: { node: "laptop", command: "visit" } },
         ]);
       })
       .step("visited", (request) => {
@@ -97,13 +97,15 @@ describe("workspace node access", () => {
     };
     env.provider
       .step("running", (request) => {
-        request.call([{ name: "bash", arguments: { node: "laptop", command: "long job" } }]);
+        request.call([
+          { name: "exec_command", arguments: { node: "laptop", command: "long job" } },
+        ]);
       })
       .step("after revoke", (request) => {
         expect(request.toolOutput("running:0")).toContain("finished after revocation");
         request.call([
           { name: "node_list", arguments: {} },
-          { name: "bash", arguments: { node: "laptop", command: "another job" } },
+          { name: "exec_command", arguments: { node: "laptop", command: "another job" } },
         ]);
       })
       .step("refused", (request) => {
@@ -134,8 +136,8 @@ describe("workspace node access", () => {
       .step("visit", (request) => {
         request.call([
           { name: "node_list", arguments: {} },
-          { name: "bash", arguments: { node: "laptop", command: "pwd" } },
-          { name: "bash", arguments: { command: "pwd" } },
+          { name: "exec_command", arguments: { node: "laptop", command: "pwd" } },
+          { name: "exec_command", arguments: { command: "pwd" } },
         ]);
       })
       .step("done", (request) => {
@@ -163,7 +165,7 @@ describe("workspace node access", () => {
     await vi.waitFor(() => expect(env.gateway.status(laptop.nodeId).online).toBe(false));
     env.provider
       .step("visit", (request) => {
-        request.call([{ name: "bash", arguments: { node: "laptop", command: "pwd" } }]);
+        request.call([{ name: "exec_command", arguments: { node: "laptop", command: "pwd" } }]);
       })
       .step("failed", (request) => {
         expect(request.toolOutput("visit:0")).toContain("laptop");
@@ -175,7 +177,7 @@ describe("workspace node access", () => {
     expect(laptop.calls).toHaveLength(0);
     expect(events.filter((event) => event.type === "tool_execution_end")).toEqual([
       expect.objectContaining({
-        toolName: "bash",
+        toolName: "exec_command",
         entry: expect.objectContaining({
           model: [expect.objectContaining({ role: "toolResult", isError: true })],
         }),
@@ -222,7 +224,7 @@ describe("managing node grants", () => {
     await laptop.node.connect();
     env.provider
       .step("visit after reconnect", (request) => {
-        request.call([{ name: "bash", arguments: { node: "laptop", command: "pwd" } }]);
+        request.call([{ name: "exec_command", arguments: { node: "laptop", command: "pwd" } }]);
       })
       .step("done", (request) => {
         expect(request.toolOutput("visit after reconnect:0")).toContain("ok");

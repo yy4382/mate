@@ -16,107 +16,150 @@ export type JsonValue = z.infer<ReturnType<typeof z.json>>;
 // ── Tool calls ───────────────────────────────────────────────────────────────
 
 /**
- * The workspace tools a node runs. `read`, `write` and `edit` are Durable's own tools of those names, executed on the
- * node's filesystem; `bash` is the node's own, defined below.
+ * The workspace tools a node runs. `read`, `write` and `edit` are Durable's own file tools executed on the node's
+ * filesystem; `terminal_*` and `memory_read` are the node's own primitives.
  */
-export const ToolNameSchema = z.enum(["bash", "read", "write", "edit"]);
+export const ToolNameSchema = z.enum([
+  "terminal_exec",
+  "terminal_write",
+  "terminal_wait",
+  "read",
+  "write",
+  "edit",
+  "memory_read",
+]);
 export type ToolName = z.infer<typeof ToolNameSchema>;
+
+/** Tools supported by pre-capability-handshake nodes, assumed when `tools` is absent on connect. */
+export const LEGACY_NODE_TOOLS: readonly ToolName[] = ["read", "write", "edit"];
 
 export const NodeAccessSchema = z.enum(["home", "visit"]);
 export type NodeAccess = z.infer<typeof NodeAccessSchema>;
 
-// ── The bash tool ────────────────────────────────────────────────────────────
+// ── Terminal & memory primitives ──────────────────────────────────────────────
 
-/** Bytes of a command's combined output its result keeps: the tail. Earlier output is dropped and the result says so. */
-export const BASH_KEPT_OUTPUT_BYTES = 50 * 1024;
+/** Bytes of unread terminal output kept per drain: the tail. Earlier unread output is dropped and counted. */
+export const TERMINAL_KEPT_OUTPUT_BYTES = 50 * 1024;
 
-/**
- * A command's timeout in seconds, by how it runs: the one it gets when the call names none, and the most it may ask
- * for. A foreground command holds up its conversation, so it always has a limit.
- */
-export const BASH_TIMEOUT_SECONDS = {
-  foreground: { default: 10 * 60, max: 60 * 60 },
-  background: { default: undefined, max: 24 * 60 * 60 },
-} as const;
+export const EXEC_YIELD_MS = { default: 10_000, min: 0, max: 120_000 } as const;
+export const WRITE_YIELD_MS = { default: 5_000, min: 0, max: 120_000 } as const;
+export const TERMINAL_TIMEOUT_MS = { max: 24 * 60 * 60 * 1000 } as const;
+export const MEMORY_MAX_BYTES = 64 * 1024;
 
-const { foreground, background } = BASH_TIMEOUT_SECONDS;
+export const TerminalExecArgsSchema = z.object({
+  sessionId: z.string().min(1).max(128),
+  command: z.string(),
+  workdir: z.string().min(1).max(4096).optional(),
+  yieldTimeMs: z
+    .number()
+    .int()
+    .min(EXEC_YIELD_MS.min)
+    .max(EXEC_YIELD_MS.max)
+    .default(EXEC_YIELD_MS.default),
+  timeoutMs: z.number().int().positive().max(TERMINAL_TIMEOUT_MS.max).optional(),
+});
+export type TerminalExecArgs = z.output<typeof TerminalExecArgsSchema>;
 
-/**
- * The arguments of the node's `bash` tool. The runtime shows the model this schema and parses calls with it, and the
- * node parses them again with it, so what the model is promised, the defaults, and what the node does come from one
- * place. Parsing applies the mode's default timeout; parsing the result again changes nothing.
- */
-const BashArgumentsSchema = z
-  .object({
-    command: z.string().describe("The command, run by the node's system shell"),
-    timeout: z
-      .number()
-      .positive()
-      .max(background.max)
-      .optional()
-      .describe(
-        `Timeout in seconds. In the foreground ${foreground.default} when omitted and at most ${foreground.max}; in ` +
-          `the background none when omitted and at most ${background.max}. On timeout every process the command ` +
-          "started is killed",
-      ),
-    background: z
-      .boolean()
-      .optional()
-      .describe(
-        "Run the command in the background: bash returns a command ID at once and you keep working; the command's " +
-          "result arrives as a new input when it ends. Stop it with bash_stop",
-      ),
-  })
-  .refine(
-    (call) =>
-      call.background === true || call.timeout === undefined || call.timeout <= foreground.max,
-    {
-      message: `A foreground command's timeout is at most ${foreground.max} seconds`,
-      path: ["timeout"],
-    },
-  )
-  .transform(({ command, timeout, background: inBackground = false }) => {
-    const effective =
-      timeout ?? BASH_TIMEOUT_SECONDS[inBackground ? "background" : "foreground"].default;
-    return {
-      command,
-      background: inBackground,
-      ...(effective === undefined ? {} : { timeout: effective }),
-    };
-  });
-export type BashArguments = z.output<typeof BashArgumentsSchema>;
-
-/** A `bash` call's arguments with its mode's default timeout applied, or why they are invalid. */
-export function parseBashArguments(
+export function parseTerminalExecArgs(
   value: unknown,
-): { ok: true; arguments: BashArguments } | { ok: false; error: string } {
-  const parsed = BashArgumentsSchema.safeParse(value);
+): { ok: true; arguments: TerminalExecArgs } | { ok: false; error: string } {
+  const parsed = TerminalExecArgsSchema.safeParse(value);
   return parsed.success
     ? { ok: true, arguments: parsed.data }
-    : { ok: false, error: `Invalid bash arguments: ${z.prettifyError(parsed.error)}` };
+    : { ok: false, error: `Invalid terminal_exec arguments: ${z.prettifyError(parsed.error)}` };
 }
 
-const { $schema: _, ...bashParameters } = z.toJSONSchema(BashArgumentsSchema, { io: "input" });
+export const TerminalWriteArgsSchema = z.object({
+  sessionId: z.string().min(1).max(128),
+  chars: z.string().optional(),
+  eof: z.boolean().optional(),
+  kill: z.boolean().optional(),
+  yieldTimeMs: z
+    .number()
+    .int()
+    .min(WRITE_YIELD_MS.min)
+    .max(WRITE_YIELD_MS.max)
+    .default(WRITE_YIELD_MS.default),
+});
+export type TerminalWriteArgs = z.output<typeof TerminalWriteArgsSchema>;
 
-/** The `bash` tool as the model sees it: its name, what it does, and its parameters as JSON Schema. */
-export const bashTool = {
-  name: "bash",
-  description:
-    "Run a command in a fresh process. On Linux and macOS the shell is the node account's Bash or zsh, with the " +
-    "aliases, functions, variables and options its interactive startup files set, read once per node start; HOME is " +
-    "the account's home. A command starts where this conversation's last foreground command on that node ended, at " +
-    "first your workspace, and the result names the new directory when a foreground command changes it. Background " +
-    "commands never change it, and other shell changes such as exports last only for the call. File-tool paths stay " +
-    "rooted in the workspace. On Windows, PowerShell 5.1 runs without profiles in your workspace, which is also HOME, " +
-    "every time. Returns " +
-    `the combined stdout and stderr; only the last ${BASH_KEPT_OUTPUT_BYTES / 1024}KB are kept, and the result says ` +
-    "how much was dropped before them. A nonzero exit, a kill by signal, and a timeout are errors. When the command " +
-    "returns while processes it started in the background still run, the result says so; if they still hold the " +
-    "output, it returns about a second after the command and says the output may be incomplete. You wait for a " +
-    `foreground command, ${foreground.default / 60} minutes at most unless you give a timeout; run a long command ` +
-    "with background: true instead and keep working.",
-  parameters: bashParameters,
-} as const;
+export function parseTerminalWriteArgs(
+  value: unknown,
+): { ok: true; arguments: TerminalWriteArgs } | { ok: false; error: string } {
+  const parsed = TerminalWriteArgsSchema.safeParse(value);
+  return parsed.success
+    ? { ok: true, arguments: parsed.data }
+    : { ok: false, error: `Invalid terminal_write arguments: ${z.prettifyError(parsed.error)}` };
+}
+
+export const TerminalWaitArgsSchema = z.object({
+  sessionId: z.string().min(1).max(128),
+  observeOnly: z.boolean().optional(),
+});
+export type TerminalWaitArgs = z.output<typeof TerminalWaitArgsSchema>;
+
+export function parseTerminalWaitArgs(
+  value: unknown,
+): { ok: true; arguments: TerminalWaitArgs } | { ok: false; error: string } {
+  const parsed = TerminalWaitArgsSchema.safeParse(value);
+  return parsed.success
+    ? { ok: true, arguments: parsed.data }
+    : { ok: false, error: `Invalid terminal_wait arguments: ${z.prettifyError(parsed.error)}` };
+}
+
+export const TerminalEndingSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("exited"), code: z.number().int() }),
+  z.object({ kind: z.literal("signaled"), signal: z.string() }),
+  z.object({ kind: z.literal("timed-out"), timeoutMs: z.number().int().positive() }),
+  z.object({ kind: z.literal("killed") }),
+  z.object({ kind: z.literal("stopped") }),
+  z.object({ kind: z.literal("stop-failed"), reason: z.string() }),
+  z.object({ kind: z.literal("not-started"), reason: z.string() }),
+]);
+export type TerminalEnding = z.infer<typeof TerminalEndingSchema>;
+
+export const TerminalRunningOutcomeSchema = z.object({
+  running: z.literal(true),
+  sessionId: z.string(),
+  output: z.string(),
+  droppedBytes: z.number().int().nonnegative(),
+  wallTimeMs: z.number().nonnegative(),
+  notes: z.array(z.string()).optional(),
+});
+export type TerminalRunningOutcome = z.infer<typeof TerminalRunningOutcomeSchema>;
+
+export const TerminalSettledOutcomeSchema = z.object({
+  running: z.literal(false),
+  sessionId: z.string(),
+  output: z.string(),
+  droppedBytes: z.number().int().nonnegative(),
+  wallTimeMs: z.number().nonnegative(),
+  ending: TerminalEndingSchema,
+  pipesHeld: z.boolean(),
+  backgroundRunning: z.boolean(),
+  workingDirectory: z.string().optional(),
+  notes: z.array(z.string()).optional(),
+});
+export type TerminalSettledOutcome = z.infer<typeof TerminalSettledOutcomeSchema>;
+
+export const TerminalOutcomeSchema = z.discriminatedUnion("running", [
+  TerminalRunningOutcomeSchema,
+  TerminalSettledOutcomeSchema,
+]);
+export type TerminalOutcome = z.infer<typeof TerminalOutcomeSchema>;
+
+export const TerminalWaitOutcomeSchema = z.discriminatedUnion("consumed", [
+  z.object({ consumed: z.literal(true) }),
+  z.object({ consumed: z.literal(false), outcome: TerminalSettledOutcomeSchema }),
+]);
+export type TerminalWaitOutcome = z.infer<typeof TerminalWaitOutcomeSchema>;
+
+export const MemoryReadOutcomeSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("ok"), content: z.string(), truncated: z.boolean() }),
+  z.object({ status: z.literal("missing") }),
+  z.object({ status: z.literal("unreadable"), message: z.string() }),
+]);
+export type MemoryReadOutcome = z.infer<typeof MemoryReadOutcomeSchema>;
 
 /** What a tool call ends in, as the gateway hands it to its caller. */
 export const ToolResultSchema = z.object({
@@ -124,6 +167,120 @@ export const ToolResultSchema = z.object({
   isError: z.boolean(),
 });
 export type ToolResult = z.infer<typeof ToolResultSchema>;
+
+export function encodeTerminalOutcome(outcome: TerminalOutcome): ToolResult {
+  const isError =
+    !outcome.running &&
+    outcome.ending.kind !== "killed" &&
+    !(outcome.ending.kind === "exited" && outcome.ending.code === 0);
+  return { content: [{ type: "text", text: JSON.stringify(outcome) }], isError };
+}
+
+export function decodeTerminalOutcome(
+  result: ToolResult,
+): { ok: true; outcome: TerminalOutcome } | { ok: false; error: string } {
+  const text = result.content.map((part) => part.text).join("");
+  try {
+    const parsed = TerminalOutcomeSchema.safeParse(JSON.parse(text));
+    if (parsed.success) return { ok: true, outcome: parsed.data };
+  } catch {
+    // Non-JSON text comes from gateway/node refusal or pre-flight validation errors.
+  }
+  return { ok: false, error: text };
+}
+
+export function encodeTerminalWaitOutcome(outcome: TerminalWaitOutcome): ToolResult {
+  return { content: [{ type: "text", text: JSON.stringify(outcome) }], isError: false };
+}
+
+export function decodeTerminalWaitOutcome(
+  result: ToolResult,
+): { ok: true; outcome: TerminalWaitOutcome } | { ok: false; error: string } {
+  const text = result.content.map((part) => part.text).join("");
+  try {
+    const parsed = TerminalWaitOutcomeSchema.safeParse(JSON.parse(text));
+    if (parsed.success) return { ok: true, outcome: parsed.data };
+  } catch {
+    // Non-JSON text comes from gateway/node refusal or abort errors.
+  }
+  return { ok: false, error: text };
+}
+
+export function encodeMemoryReadOutcome(outcome: MemoryReadOutcome): ToolResult {
+  return { content: [{ type: "text", text: JSON.stringify(outcome) }], isError: false };
+}
+
+export function decodeMemoryReadOutcome(
+  result: ToolResult,
+): { ok: true; outcome: MemoryReadOutcome } | { ok: false; error: string } {
+  const text = result.content.map((part) => part.text).join("");
+  try {
+    const parsed = MemoryReadOutcomeSchema.safeParse(JSON.parse(text));
+    if (parsed.success) return { ok: true, outcome: parsed.data };
+  } catch {
+    // Non-JSON text comes from gateway/node offline errors.
+  }
+  return { ok: false, error: text };
+}
+
+export function formatTerminalOutcome(outcome: TerminalOutcome): {
+  text: string;
+  isError: boolean;
+} {
+  const parts: string[] = [];
+  if (outcome.output !== "") parts.push(outcome.output);
+  if (outcome.droppedBytes > 0) {
+    parts.push(
+      `[Output truncated: the first ${outcome.droppedBytes} bytes were dropped; the last ${TERMINAL_KEPT_OUTPUT_BYTES} bytes are kept]`,
+    );
+  }
+  if (outcome.notes !== undefined) {
+    for (const note of outcome.notes) parts.push(note);
+  }
+  if (outcome.running) {
+    parts.push(
+      `[Command still running after ${outcome.wallTimeMs} ms; session_id: ${outcome.sessionId}]`,
+    );
+    return { text: parts.join("\n"), isError: false };
+  }
+  if (outcome.pipesHeld && outcome.ending.kind !== "stop-failed") {
+    parts.push(
+      "[Output may be incomplete: a background process still holds the output after the command exited]",
+    );
+  }
+  if (outcome.backgroundRunning) {
+    parts.push("[Background processes started by this command are still running]");
+  }
+  if (outcome.workingDirectory !== undefined) {
+    parts.push(`[Working directory: ${outcome.workingDirectory}]`);
+  }
+  const ending = describeEnding(outcome.ending, outcome.sessionId);
+  if (ending !== undefined) parts.push(ending);
+  const text = parts.filter((part) => part !== "").join("\n");
+  const isError =
+    outcome.ending.kind !== "killed" &&
+    !(outcome.ending.kind === "exited" && outcome.ending.code === 0);
+  return { text: text === "" ? "(no output)" : text, isError };
+}
+
+function describeEnding(ending: TerminalEnding, sessionId: string): string | undefined {
+  switch (ending.kind) {
+    case "exited":
+      return ending.code === 0 ? undefined : `Command exited with code ${ending.code}`;
+    case "signaled":
+      return `Command was killed by signal ${ending.signal}`;
+    case "timed-out":
+      return `Command timed out after ${ending.timeoutMs} ms and was killed`;
+    case "killed":
+      return "Command was killed";
+    case "stopped":
+      return "Command was stopped: its caller stopped it or the connection to the node dropped";
+    case "stop-failed":
+      return `Command could not be stopped; processes may still be running: ${ending.reason}\n[Retry with write_stdin, kill: true, session_id: ${sessionId}]`;
+    case "not-started":
+      return `Command could not start: ${ending.reason}`;
+  }
+}
 
 // ── Workspace browsing ───────────────────────────────────────────────────────
 
@@ -202,6 +359,7 @@ export const NodeAuthenticateSchema = z.object({
   signature: z.string().min(1),
   system: NodeSystemSchema,
   workspaceVisits: z.literal(true).optional(),
+  tools: z.array(z.string().min(1).max(64)).max(64).optional(),
 });
 
 export const NodePairSchema = z.object({
@@ -215,6 +373,7 @@ export const NodePairSchema = z.object({
   pairingToken: z.string().min(1),
   system: NodeSystemSchema,
   workspaceVisits: z.literal(true).optional(),
+  tools: z.array(z.string().min(1).max(64)).max(64).optional(),
 });
 
 export const NodePingSchema = z.object({

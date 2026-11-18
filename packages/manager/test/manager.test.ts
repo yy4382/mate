@@ -1,10 +1,11 @@
-import { AgentRuntime, createAgentStore, readAgentState } from "@palace/runtime";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { AgentRuntime, createAgentStore, readAgentFile } from "@palace/runtime";
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { AgentCreationFailed, AgentIdInUse } from "../src/index.ts";
+import { AgentCreationFailed, AgentIdInUse, ManagerAgentStateDoc } from "../src/index.ts";
 import { environment, nodeId, notices, settings, settle, text } from "./support.ts";
 
 const agentFiles = (directory: string) =>
@@ -135,7 +136,13 @@ describe("creating an Agent", () => {
     });
     // A complete store under the temporary name: the process died just before the rename.
     const staged = join(env.directory, `${agentId}.sqlite`);
-    await createAgentStore(staged, { nodeId, settings });
+    await createAgentStore(staged, {
+      settings,
+      init: async (tx) => {
+        const doc = await tx.doc(ManagerAgentStateDoc);
+        doc.nodeId = nodeId;
+      },
+    });
     renameSync(staged, `${staged}.creating`);
 
     const manager = await env.open();
@@ -158,7 +165,7 @@ describe("the node an Agent is on", () => {
     env.provider
       .step(
         "build",
-        (request) => void request.call([{ name: "bash", arguments: { command: "make" } }]),
+        (request) => void request.call([{ name: "exec_command", arguments: { command: "make" } }]),
       )
       .step("done", (request) => {
         expect(request.toolOutputs().join(), "the chosen node answered").toContain("built");
@@ -352,7 +359,7 @@ describe("pausing and resuming", () => {
         );
         // Answer once the connector caught up, so the accumulated notice is surely queued behind this round.
         await resumed.promise;
-        request.call([{ name: "bash", arguments: { command: "true" } }]);
+        request.call([{ name: "exec_command", arguments: { command: "true" } }]);
       })
       .step("accumulated", (request) => {
         const seen = notices(request.userTexts());
@@ -394,7 +401,7 @@ describe("pausing and resuming", () => {
     const { agentId, account } = await env.hire(manager);
     env.provider.step(
       "build",
-      (request) => void request.call([{ name: "bash", arguments: { command: "make" } }]),
+      (request) => void request.call([{ name: "exec_command", arguments: { command: "make" } }]),
     );
     env.post("Build it, @richard.", { mentions: [account] });
     const call = await env.workspaces.workspace(agentId).nextCall();
@@ -454,9 +461,10 @@ describe("pausing and resuming", () => {
     expect(alive, "one alive at the end").toBe(1);
     expect(manager.list(), "open at the end").toEqual([{ agentId, open: true }]);
     await manager.close();
-    expect(await readAgentState(join(env.directory, `${agentId}.sqlite`))).toMatchObject({
-      paused: false,
-    });
+    const saved = await readAgentFile(join(env.directory, `${agentId}.sqlite`), (session) =>
+      session.snapshot(ManagerAgentStateDoc, BACKGROUND_CONTEXT),
+    );
+    expect(saved.extra).toMatchObject({ paused: false });
   });
 
   it("resuming an open Agent changes nothing, and it keeps working", async () => {

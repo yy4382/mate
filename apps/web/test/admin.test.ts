@@ -37,6 +37,39 @@ describe("providers and nodes", () => {
 });
 
 describe("Agents", () => {
+  it("can retry stopping commands from a freshly opened page while the Agent stays paused", async () => {
+    const site = await startSite();
+    const { agentId } = await site.agent("sam");
+    const pause = `/api/admin/agents/${agentId}/pause`;
+    await site.owner.post(pause);
+    const { page } = await openApp(site, "/app/admin/agents");
+    const card = page.locator('[data-agent="sam"]');
+    await card.getByText("已暂停").waitFor();
+    await page.route(
+      "**/api/admin/agents",
+      async (route) => {
+        const response = await route.fetch();
+        const [agent] = await response.json();
+        await route.fulfill({ response, json: [{ ...agent, pendingTerminalStops: true }] });
+      },
+      { times: 1 },
+    );
+    await page.reload();
+    await card.getByText("已暂停").waitFor();
+    await card.getByRole("button", { name: /^更多/ }).click();
+    await page.getByRole("menuitem", { name: "恢复" }).waitFor();
+    const retry = page.getByRole("menuitem", { name: "重试停止命令" });
+    expect(await retry.count()).toBe(1);
+    const confirmed = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === pause && res.request().method() === "POST",
+    );
+    await retry.click();
+    expect((await confirmed).status()).toBe(204);
+    await card.getByRole("button", { name: /^更多/ }).click();
+    await page.getByRole("menuitem", { name: "恢复" }).waitFor();
+    await retry.waitFor({ state: "hidden" });
+  });
+
   it("the owner creates an Agent from the page, talks to it and watches it work; pausing ends the watch", async () => {
     const site = await startSite();
     const scripted = await site.provider();

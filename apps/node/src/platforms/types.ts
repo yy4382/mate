@@ -1,5 +1,5 @@
 import type { ChildProcessByStdio } from "node:child_process";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 
 export type PlatformId = "linux" | "darwin" | "win32";
 export type Ownership = "absent" | "mate" | "foreign";
@@ -23,7 +23,7 @@ export type BundleLayout = {
 export type Background = "running" | "finished";
 
 export type CommandProcess = {
-  child: ChildProcessByStdio<null, Readable, Readable>;
+  child: ChildProcessByStdio<Writable, Readable, Readable>;
   metadata?: Readable;
   kill(): { ok: true } | { ok: false; reason: string };
   background(): Background;

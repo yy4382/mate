@@ -58,7 +58,9 @@ describe("the owner talks to an Agent in a channel", () => {
       })
       .step("start the long command", (request) => {
         expect(output(request, first[0])).toContain("Start the migration.");
-        command = request.call([{ name: "bash", arguments: { command: longCommand() } }]);
+        command = request.call([
+          { name: "exec_command", arguments: { command: longCommand(), yield_time_ms: 30_000 } },
+        ]);
       })
       .step("notice of the later messages", (request) => {
         expect(output(request, command[0]), "the command ran to its end").toContain("finished");

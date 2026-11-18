@@ -48,7 +48,8 @@ describe("watching an Agent", () => {
     env.provider
       .step(
         "build",
-        (request) => void request.call([{ name: "bash", arguments: { command: "make all" } }]),
+        (request) =>
+          void request.call([{ name: "exec_command", arguments: { command: "make all" } }]),
       )
       .step("done", (request) => request.text("Built."));
 
@@ -60,7 +61,7 @@ describe("watching an Agent", () => {
         "the call is visible while it runs",
       ).toEqual([
         expect.objectContaining({
-          toolName: "bash",
+          toolName: "exec_command",
           args: expect.objectContaining({ command: "make all" }),
         }),
       ]);
@@ -132,7 +133,9 @@ describe("watching an Agent", () => {
       request.userTexts().includes("count the files"),
     );
     const hold = Promise.withResolvers<void>();
+    let helperTools: string[] = [];
     helper.step("helping", async (request) => {
+      helperTools = request.toolNames();
       await hold.promise;
       request.text("Three files.");
     });
@@ -140,21 +143,30 @@ describe("watching an Agent", () => {
       .step("delegate", (request) => {
         request.call([
           {
-            name: "assistant",
-            arguments: { action: "spawn", name: "counter", message: "count the files" },
+            name: "subagent",
+            arguments: {
+              prompt: "count the files",
+              description: "counter",
+              run_in_background: true,
+            },
           },
         ]);
       })
       .step("delegated", (request) => request.text("Asked counter."))
-      .step("reported", (request) => request.text("Counter says three."));
+      .step("reported", (request) => {
+        expect(request.userTexts().at(-1)).toContain(
+          '<subagent_result agent_id="sub-1" status="completed">',
+        );
+        request.text("Counter says three.");
+      });
 
     env.post("Count them, @richard.", [account]);
-    await vi.waitFor(async () => expect(await admin.assistants(agentId)).toEqual(["counter"]));
+    await vi.waitFor(async () => expect(await admin.assistants(agentId)).toEqual(["sub-1"]));
     const events: AgentEvent[] = [];
     const watch = await admin.watchAgent(agentId, (batch) => void events.push(...batch), {
-      assistant: "counter",
+      assistant: "sub-1",
     });
-    expect(rendered(events), "the assistant's own conversation").toContain("count the files");
+    expect(rendered(events), "the subagent's own conversation").toContain("count the files");
     hold.resolve();
     await vi.waitFor(() => expect(rendered(events)).toContain("Three files."));
     await watch.stop();
@@ -162,6 +174,12 @@ describe("watching an Agent", () => {
       admin.watchAgent(agentId, () => undefined, { assistant: "nobody" }),
     ).rejects.toMatchObject({ reason: "unknown-assistant" });
     await env.provider.received(4);
+    expect(helperTools).toContain("exec_command");
+    expect(helperTools).toContain("read");
+    expect(helperTools).toContain("palace_docs");
+    expect(helperTools).not.toContain("chat_send");
+    expect(helperTools).not.toContain("subagent");
+    expect(helperTools).not.toContain("reminder");
     env.provider.assertComplete();
   });
 

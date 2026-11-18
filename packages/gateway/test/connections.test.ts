@@ -29,7 +29,11 @@ describe("node gateway connections (TESTS)", () => {
     const callOnOld = under.gateway.runTool(
       old.nodeId,
       "agent-1",
-      { access: "home", tool: "bash", arguments: { command: "sleep 60" } },
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: "s1", command: "sleep 60" },
+      },
       (chunk) => onOld.push(chunk),
       never,
     );
@@ -57,7 +61,11 @@ describe("node gateway connections (TESTS)", () => {
     const callOnNew = under.gateway.runTool(
       old.nodeId,
       "agent-1",
-      { access: "home", tool: "bash", arguments: { command: "echo new" } },
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: "s2", command: "echo new" },
+      },
       (chunk) => onNew.push(chunk),
       never,
     );
@@ -88,7 +96,11 @@ describe("node gateway connections (TESTS)", () => {
     const call = under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { access: "home", tool: "bash", arguments: { command: "sleep 60" } },
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: "s1", command: "sleep 60" },
+      },
       () => {},
       never,
     );
@@ -116,7 +128,7 @@ describe("node gateway connections (TESTS)", () => {
     const after = await under.gateway.runTool(
       node.nodeId,
       "agent-1",
-      { access: "home", tool: "bash", arguments: { command: "echo hi" } },
+      { access: "home", tool: "terminal_exec", arguments: { sessionId: "s2", command: "echo hi" } },
       () => {},
       never,
     );

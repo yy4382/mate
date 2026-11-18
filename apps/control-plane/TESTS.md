@@ -23,7 +23,7 @@
 - `PUT /api/admin/nodes/:id { name }` 改名成功回 204，名字冲突回 409 `name-taken`。
 - 观察 Agent 的事件流同样只活在登录会话期间：会话过期，或退出登录后的下一次心跳，发出 `login` 并关闭。
 - 同一个 requestId 重发消息只产生一条消息；聊天 app 和管理模块的拒绝按 reason 对应固定的状态码，带着 reason 返回。
-- 组装起来的控制面：经 HTTP 配对的 node 上创建的 Agent 能回复管理员的私信，这条回复推送到管理员经 HTTP 订阅的浏览器，并出现在事件流里；观察 Agent 的事件流第一批是快照，Agent 暂停时以"已结束"关闭。
+- 组装起来的控制面：经 HTTP 配对的 node 上创建的 Agent 能回复管理员的私信，这条回复推送到管理员经 HTTP 订阅的浏览器，并出现在事件流里；观察 Agent 的事件流第一批是快照，Agent 暂停时以"已结束"关闭。当后台命令运行期间节点连接进入黑洞模式（连接不断但丢弃帧）时，`POST /api/admin/agents/:id/pause` 将 Agent 标为已暂停并回 503 `stop-unconfirmed`；恢复转发后重发 `pause` 可确认终止并返回 204。
 - VAPID 公钥、Agent、node 和 API key 跨重启保留。
 - 前端目录里的文件不需要登录，`/app` 下的页面需要；其他页面路径回前端的入口页；路径逃不出前端目录。没有前端时页面回 404，API 照常。node 的 WebSocket 只在 `/api/nodes/connect` 上接受。
 - 控制面在**存储夹具**（整个数据目录的副本）上启动：原来的所有者成为管理员，用 handle `owner` 和 `facts.json` 里的密码登录（别的密码被拒，也没有多出别的人类），名字不变，看到夹具里的会话和未读摘要，并能发消息；alpha.2 签发的登录会话 cookie 升级后仍然有效；这个账号能改名、改 handle、添加别的人类；夹具里的 Provider 凭据还在，夹具里的配对令牌仍能配对一个 node。

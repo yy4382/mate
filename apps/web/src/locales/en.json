@@ -10,6 +10,7 @@
     "contactAnAdministratorToManageAgentsProvidersNodes": "Contact an administrator to manage Agents, providers, nodes, and other humans."
   },
   "AgentActions": {
+    "retryStop": "Retry stopping commands",
     "pause": "Pause",
     "resume": "Resume",
     "deleteAgent": "Delete Agent",
@@ -89,7 +90,7 @@
     "updating": "Updating…",
     "revokeAccess": "Revoke access",
     "grantAccess": "Grant access",
-    "theWorkspaceAndMemorymdAreHereAccessIs": "The workspace and MEMORY.md are here. Access is always allowed.",
+    "theWorkspaceAndMemorymdAreHereAccessIs": "The workspace and memory/MEMORY.md are here. Access is always allowed.",
     "accessGrantedForSubsequentCalls": "Access granted for subsequent calls.",
     "accessRevokedCommandsAlreadyStartedWillContinueRunning": "Access revoked. Commands already started will continue running.",
     "nodeAccess": "Node access",
@@ -379,6 +380,7 @@
     "unknown-model": "Model not found.",
     "unsupported-thinking-level": "This model does not support the selected thinking level.",
     "agent-closed": "The Agent is paused or closed and cannot be observed.",
+    "stop-unconfirmed": "Agent was paused, but stopping its running commands on the node could not be confirmed.",
     "unknown-assistant": "Work assistant not found.",
     "node-offline": "Node is offline. Try again when it reconnects.",
     "outside-workspace": "Paths outside the workspace cannot be accessed.",

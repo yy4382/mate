@@ -1,7 +1,6 @@
-import { bashTool } from "@palace/node-protocol";
 import { ScriptedProvider } from "@palace/testkit";
 import { describe, expect, it, onTestFinished } from "vitest";
-import { defaultSettings, testAgent, text } from "./support.ts";
+import { defaultSettings, testAgent } from "./support.ts";
 
 describe("agent loop", () => {
   it("answers an input through the model", async () => {
@@ -15,7 +14,7 @@ describe("agent loop", () => {
     const input = await runtime.submit("hello there", { requestId: "m1" });
 
     expect(await input.settled()).toBe("done");
-    expect(agent.workspace.calls).toEqual([]);
+    expect(agent.tools.calls).toEqual([]);
     agent.provider.assertComplete();
   });
 
@@ -33,13 +32,13 @@ describe("agent loop", () => {
     agent.provider.assertComplete();
   });
 
-  it("forwards a tool call to the workspace and returns its result to the model", async () => {
+  it("executes a tool call and returns its result to the model", async () => {
     const agent = await testAgent();
-    agent.workspace.answerAll(() => text("a.txt\nb.txt"));
+    agent.tools.answerAll(() => "a.txt\nb.txt");
     let callIds: string[] = [];
     agent.provider
       .step("list", (request) => {
-        callIds = request.call([{ name: "bash", arguments: { command: "ls" } }]);
+        callIds = request.call([{ name: "run_action", arguments: { input: "ls" } }]);
       })
       .step("answer", (request) => {
         expect(request.toolOutput(callIds[0] ?? "")).toContain("b.txt");
@@ -49,36 +48,7 @@ describe("agent loop", () => {
 
     await (await runtime.submit("what is here?", { requestId: "m1" })).settled();
 
-    expect(agent.workspace.calls).toEqual([
-      {
-        tool: "bash",
-        arguments: expect.objectContaining({ command: "ls" }),
-        conversationId: expect.any(Number),
-      },
-    ]);
-    agent.provider.assertComplete();
-  });
-
-  it("offers the node's bash definition with an optional execution target", async () => {
-    const agent = await testAgent();
-    let offered: Record<string, unknown> | undefined;
-    agent.provider.step("look", (request) => {
-      offered = request.body.tools?.find((tool) => tool.name === "bash");
-      request.text("ok");
-    });
-    const { runtime } = await agent.open();
-    await (await runtime.submit("hi", { requestId: "m1" })).settled();
-
-    expect(offered?.["description"], "what bash promises is what the node does").toBe(
-      bashTool.description,
-    );
-    expect(offered?.["parameters"], "the node still receives its original arguments").toEqual({
-      ...bashTool.parameters,
-      properties: {
-        ...bashTool.parameters.properties,
-        node: expect.objectContaining({ type: "string" }),
-      },
-    });
+    expect(agent.tools.calls).toEqual([{ tool: "run_action", args: { input: "ls" } }]);
     agent.provider.assertComplete();
   });
 
@@ -87,7 +57,7 @@ describe("agent loop", () => {
     agent.provider
       .step(
         "start",
-        (request) => void request.call([{ name: "bash", arguments: { command: "make" } }]),
+        (request) => void request.call([{ name: "run_action", arguments: { input: "make" } }]),
       )
       .step("continue", (request) => {
         expect(request.userTexts()).toEqual(["build it", "also run the tests"]);
@@ -97,9 +67,9 @@ describe("agent loop", () => {
     const { runtime } = await agent.open();
 
     const input = await runtime.submit("build it", { requestId: "m1" });
-    const call = await agent.workspace.nextCall();
+    const call = await agent.tools.nextCall();
     await runtime.submit("also run the tests", { requestId: "m2", whenBusy: "steer" });
-    call.resolve(text("built"));
+    call.resolve("built");
 
     expect(await input.settled()).toBe("done");
     await runtime.idle();
@@ -112,7 +82,7 @@ describe("agent loop", () => {
     agent.provider
       .step(
         "start",
-        (request) => void request.call([{ name: "bash", arguments: { command: "make" } }]),
+        (request) => void request.call([{ name: "run_action", arguments: { input: "make" } }]),
       )
       .step("finish", (request) => {
         expect(request.userTexts()).toEqual(["build it"]);
@@ -121,10 +91,10 @@ describe("agent loop", () => {
     const { runtime } = await agent.open();
 
     await runtime.submit("build it", { requestId: "m1" });
-    const call = await agent.workspace.nextCall();
+    const call = await agent.tools.nextCall();
     await runtime.submit("stale notice", { requestId: "m2", whenBusy: "steer" });
     expect(await runtime.withdraw("m2")).toBe("withdrawn");
-    call.resolve(text("built"));
+    call.resolve("built");
     await runtime.idle();
 
     expect(await runtime.withdraw("m2")).toBe("settled");
@@ -137,15 +107,15 @@ describe("agent loop", () => {
     agent.provider
       .step(
         "start",
-        (request) => void request.call([{ name: "bash", arguments: { command: "make" } }]),
+        (request) => void request.call([{ name: "run_action", arguments: { input: "make" } }]),
       )
       .step("finish", (request) => request.text("done"));
     const { runtime } = await agent.open();
 
     await runtime.submit("build it", { requestId: "m1" });
-    const call = await agent.workspace.nextCall();
+    const call = await agent.tools.nextCall();
     const steered = await runtime.submit("note", { requestId: "m2", whenBusy: "steer" });
-    call.resolve(text("built"));
+    call.resolve("built");
     await agent.provider.received(2);
 
     expect(await runtime.withdraw("m2")).not.toBe("withdrawn");
@@ -159,15 +129,15 @@ describe("agent loop", () => {
     onTestFinished(() => provider.close());
     const alice = await testAgent(defaultSettings, { provider });
     const bob = await testAgent(defaultSettings, { provider });
-    alice.workspace.answerAll(() => text("alice-output"));
-    bob.workspace.answerAll(() => text("bob-output"));
+    alice.tools.answerAll(() => "alice-output");
+    bob.tools.answerAll(() => "bob-output");
     const asks = (who: string) => (request: { userTexts(): string[] }) =>
       request.userTexts()[0]?.startsWith(who) ?? false;
     const script = (lane: ReturnType<ScriptedProvider["lane"]>, who: string) =>
       lane
         .step(
           `${who} lists`,
-          (request) => void request.call([{ name: "bash", arguments: { command: "ls" } }]),
+          (request) => void request.call([{ name: "run_action", arguments: { input: "ls" } }]),
         )
         .step(`${who} answers`, (request) => request.text(`${who} is done`))
         .step(`${who} answers again`, (request) => request.text(`${who} again`));

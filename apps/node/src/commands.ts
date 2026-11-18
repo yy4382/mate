@@ -1,12 +1,12 @@
 import type { Clock } from "@palace/clock";
-import { BASH_KEPT_OUTPUT_BYTES, type ToolResult } from "@palace/node-protocol";
+import { TERMINAL_KEPT_OUTPUT_BYTES, type ToolResult } from "@palace/node-protocol";
 import { currentPlatform } from "./platforms/index.ts";
 import type { Background, CommandProcess, ShellRequest } from "./platforms/types.ts";
 
 /** Bytes streamed to the gateway per call; past this only the result's tail is sent, so `yes` cannot flood the link. */
-const STREAMED_OUTPUT_BYTES = 1024 * 1024;
+export const STREAMED_OUTPUT_BYTES = 1024 * 1024;
 /** How long a command whose shell exited may keep the output open or its group running before the node returns. */
-const EXIT_GRACE_MS = 1000;
+export const EXIT_GRACE_MS = 1000;
 const POLL_MS = 20;
 
 export type CommandRequest = {
@@ -19,7 +19,7 @@ export type CommandRequest = {
 };
 
 /** How a command ended, as the shell process reports it, or why it never ran. */
-type Ending =
+export type Ending =
   | { kind: "exited"; code: number }
   | { kind: "signaled"; signal: string }
   | { kind: "timed-out" }
@@ -38,13 +38,22 @@ export class Commands {
     this.#clock = clock;
   }
 
-  /** Run one command until it ends, is timed out, or `signal` stops it, streaming output as it arrives. */
+  track(group: CommandProcess): void {
+    this.#groups.add(group);
+  }
+
+  untrack(group: CommandProcess): void {
+    this.#groups.delete(group);
+  }
+
+  /** Run one one-shot internal command (e.g. startup shell snapshot) to completion. */
   async run(
     request: CommandRequest,
     onOutput: (chunk: string) => void,
     signal: AbortSignal,
   ): Promise<{ result: ToolResult; ending: Ending; metadata?: Buffer }> {
-    const output = new Output(onOutput);
+    const output = new OutputBuffer();
+    output.attach(onOutput);
     const { ending, pipesHeld, background, metadata } = await this.#execute(
       request,
       output,
@@ -66,6 +75,7 @@ export class Commands {
         this.#groups.delete(group);
       } else {
         failures.push(stopped.reason);
+        group.child.stdin.destroy();
         group.child.stdout.destroy();
         group.child.stderr.destroy();
         group.metadata?.destroy();
@@ -79,7 +89,11 @@ export class Commands {
     }
   }
 
-  async #execute(request: CommandRequest, output: Output, signal: AbortSignal): Promise<Execution> {
+  async #execute(
+    request: CommandRequest,
+    output: OutputBuffer,
+    signal: AbortSignal,
+  ): Promise<Execution> {
     let group: CommandProcess;
     try {
       group = currentPlatform().commands.start({
@@ -93,6 +107,8 @@ export class Commands {
       return { ending: { kind: "not-started", reason }, pipesHeld: false, background: "finished" };
     }
     const shell = group.child;
+    // Close stdin at once so one-shot startup capture in an interactive shell never waits for input.
+    shell.stdin.end();
     const metadata =
       request.launch === undefined ? undefined : new FramedMetadata(request.launch.metadata);
     group.metadata?.on("data", (chunk: Buffer) => metadata?.push(chunk));
@@ -121,7 +137,6 @@ export class Commands {
     }
     this.#groups.add(group);
 
-    // Whichever comes first: the shell exits, the timeout passes, or the caller stops the call.
     let interruption: "timed-out" | "stopped" | undefined;
     const interrupted = new AbortController();
     const settled = new AbortController();
@@ -160,33 +175,58 @@ export class Commands {
       ending = exited;
     }
 
-    const killed = ending.kind === "timed-out" || ending.kind === "stopped";
-    const waitSignal = killed ? new AbortController().signal : signal;
-    const deadline = this.#clock.now() + EXIT_GRACE_MS;
-    while (
-      (open > 0 || group.background() === "running" || metadata?.pending === true) &&
-      this.#clock.now() < deadline &&
-      !waitSignal.aborted
-    ) {
-      await this.#clock.sleep(POLL_MS, waitSignal);
-    }
-    // A stop that arrives while waiting ends the background of a command that itself already finished.
-    if (signal.aborted && !killed && ending.kind !== "stop-failed") {
-      const stopped = group.kill();
-      if (!stopped.ok) ending = { kind: "stop-failed", reason: stopped.reason };
-    }
-    const pipesHeld = open > 0;
-    shell.stdout.destroy();
-    shell.stderr.destroy();
-    group.metadata?.destroy();
-    const background = group.background();
+    const alreadyKilled =
+      ending.kind === "timed-out" || ending.kind === "stopped" || ending.kind === "stop-failed";
+    const { pipesHeld, background } = await drainExitGrace({
+      clock: this.#clock,
+      group,
+      openPipes: () => open,
+      metadataPending: () => metadata?.pending === true,
+      alreadyKilled,
+      signal,
+      onStopFailed: (reason) => {
+        ending = { kind: "stop-failed", reason };
+      },
+    });
     if (background !== "running") this.#groups.delete(group);
     const record = metadata?.record;
     return { ending, pipesHeld, background, ...(record === undefined ? {} : { metadata: record }) };
   }
 }
 
-class FramedMetadata {
+export async function drainExitGrace(options: {
+  clock: Clock;
+  group: CommandProcess;
+  openPipes: () => number;
+  metadataPending: () => boolean;
+  alreadyKilled: boolean;
+  signal: AbortSignal;
+  onStopFailed: (reason: string) => void;
+}): Promise<{ pipesHeld: boolean; background: Background }> {
+  const { clock, group, openPipes, metadataPending, alreadyKilled, signal, onStopFailed } = options;
+  const waitSignal = alreadyKilled ? new AbortController().signal : signal;
+  const deadline = clock.now() + EXIT_GRACE_MS;
+  while (
+    (openPipes() > 0 || group.background() === "running" || metadataPending()) &&
+    clock.now() < deadline &&
+    !waitSignal.aborted
+  ) {
+    await clock.sleep(POLL_MS, waitSignal);
+  }
+  if (signal.aborted && !alreadyKilled) {
+    const stopped = group.kill();
+    if (!stopped.ok) onStopFailed(stopped.reason);
+  }
+  const pipesHeld = openPipes() > 0;
+  group.child.stdin.destroy();
+  group.child.stdout.destroy();
+  group.child.stderr.destroy();
+  group.metadata?.destroy();
+  const background = group.background();
+  return { pipesHeld, background };
+}
+
+export class FramedMetadata {
   readonly #limit: { frames: number; maxBytes: number };
   #bytes = Buffer.alloc(0);
   #frames = 0;
@@ -220,24 +260,27 @@ class FramedMetadata {
   }
 }
 
-/** The tail of a command's combined output, and whether anything before it was dropped. */
-class Output {
-  readonly #onOutput: (chunk: string) => void;
+/** Rolling tail of unread combined output plus optional live streaming to the active caller. */
+export class OutputBuffer {
+  #stream: { onOutput: (chunk: string) => void; streamed: number } | undefined;
   #text = "";
   #dropped = 0;
-  #streamed = 0;
 
-  constructor(onOutput: (chunk: string) => void) {
-    this.#onOutput = onOutput;
+  attach(onOutput: (chunk: string) => void): () => void {
+    const target = { onOutput, streamed: 0 };
+    this.#stream = target;
+    return () => {
+      if (this.#stream === target) this.#stream = undefined;
+    };
   }
 
   push(chunk: string): void {
-    if (this.#streamed < STREAMED_OUTPUT_BYTES) {
-      this.#streamed += Buffer.byteLength(chunk);
-      this.#onOutput(chunk);
+    if (this.#stream !== undefined && this.#stream.streamed < STREAMED_OUTPUT_BYTES) {
+      this.#stream.streamed += Buffer.byteLength(chunk);
+      this.#stream.onOutput(chunk);
     }
     this.#text += chunk;
-    const excess = Buffer.byteLength(this.#text) - BASH_KEPT_OUTPUT_BYTES;
+    const excess = Buffer.byteLength(this.#text) - TERMINAL_KEPT_OUTPUT_BYTES;
     if (excess > 0) {
       const bytes = Buffer.from(this.#text);
       let offset = excess;
@@ -245,6 +288,14 @@ class Output {
       this.#dropped += offset;
       this.#text = bytes.subarray(offset).toString("utf8");
     }
+  }
+
+  drain(): { text: string; droppedBytes: number } {
+    const text = this.#text;
+    const droppedBytes = this.#dropped;
+    this.#text = "";
+    this.#dropped = 0;
+    return { text, droppedBytes };
   }
 
   get text(): string {
@@ -258,7 +309,7 @@ class Output {
 
 function render(
   ending: Ending,
-  output: Output,
+  output: OutputBuffer,
   pipesHeld: boolean,
   background: Background,
   timeoutSeconds: number | undefined,
@@ -266,7 +317,7 @@ function render(
   const remarks: string[] = [];
   if (output.droppedBytes > 0) {
     remarks.push(
-      `[Output truncated: the first ${output.droppedBytes} bytes were dropped; the last ${BASH_KEPT_OUTPUT_BYTES} bytes are kept]`,
+      `[Output truncated: the first ${output.droppedBytes} bytes were dropped; the last ${TERMINAL_KEPT_OUTPUT_BYTES} bytes are kept]`,
     );
   }
   if (pipesHeld && ending.kind !== "stop-failed") {

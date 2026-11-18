@@ -1,10 +1,12 @@
 import { Type, type Static, type TSchema } from "@earendil-works/pi-ai";
 import {
+  defineExtension,
   defineTool,
+  section,
+  type Extension,
   type ToolExecutionResult,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
-import { definePlugin, type Plugin } from "@palace/agent-plugin";
 import type { AccountChat, UnreadSummary } from "@palace/chat";
 
 const Id = (description: string) => Type.Integer({ minimum: 1, description });
@@ -201,19 +203,19 @@ export function renderNotice(summary: UnreadSummary, at: number): string {
 }
 
 /**
- * The chat tools and the prompt section that says how the Agent speaks. Primary conversation only: an assistant has no
- * chat tools. Every tool is a read or is idempotent on its requestId, the Durable tool task's ID, so all of them rerun
- * safely after a crash and get the chat app's stored result.
+ * The chat tools and the prompt section that says how the Agent speaks. Primary conversation only unless explicitly
+ * included in a child allowlist. Every tool is a read or is idempotent on its requestId, the Durable tool task's ID,
+ * so all of them rerun safely after a crash and get the chat app's stored result.
  */
-export function chatPlugin(account: AccountChat): Plugin {
-  return definePlugin({
+export function chatExtension(account: AccountChat): Extension {
+  const instructions =
+    "You talk with people only through the chat tools. Your plain text output goes nowhere: nobody reads it. " +
+    "To say anything to anyone, call chat_send. " +
+    "Inputs that report unread chat are only hints and may be out of date; " +
+    `read with ${CHAT_READ_UNREAD} when you decide to.`;
+  return defineExtension({
     name: "chat",
-    scope: "primary",
-    prompt:
-      "You talk with people only through the chat tools. Your plain text output goes nowhere: nobody reads it. " +
-      "To say anything to anyone, call chat_send. " +
-      "Inputs that report unread chat are only hints and may be out of date; " +
-      `read with ${CHAT_READ_UNREAD} when you decide to.`,
+    sections: [section("chat", () => instructions)],
     tools: tools.map((tool) => tool(account)),
   });
 }

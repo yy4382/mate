@@ -1,6 +1,8 @@
+import { Type } from "@earendil-works/pi-ai";
+import { configure, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import type { AccountChat } from "@palace/chat";
 import { describe, expect, it } from "vitest";
-import { agentAccount, environment, realRuntime } from "./support.ts";
+import { agentAccount, environment, realRuntime, settings } from "./support.ts";
 
 const send = (conversation: number, body: string) => ({
   name: "chat_send",
@@ -202,33 +204,54 @@ describe("chat tools", () => {
     agent.provider.assertComplete();
   });
 
-  it("refuses a chat tool an assistant calls anyway, and the chat app receives nothing", async () => {
+  it("refuses a chat tool a child conversation calls anyway, and the chat app receives nothing", async () => {
     const { agent, port, general, messages } = await chatAgent();
+    const spawnChildExtension = defineExtension({
+      name: "test-child-spawn",
+      tools: [
+        defineTool({
+          name: "spawn_child",
+          description: "Create a scoped child conversation without chat tools",
+          parameters: Type.Object({ message: Type.String() }),
+          replay: "safe",
+          execute: async (args, api, context) => {
+            const childId = await api.commit(async (tx) => {
+              const child = await tx.createConversation({ ownership: { kind: "ownerless" } });
+              await configure(tx, child.id, { model: settings.model, extensions: [] });
+              return child.id;
+            }, context);
+            const child = await api.conversation(childId, context);
+            const submission = await child!.submit(
+              { type: "input", content: args.message, whenBusy: "followUp" },
+              context,
+            );
+            await submission.wait(context);
+            return { content: [{ type: "text", text: "child settled" }] };
+          },
+        }),
+      ],
+    });
     const finished = Promise.withResolvers<void>();
     agent.provider
       .step(
         "primary spawns",
-        (request) =>
-          void request.call([
-            { name: "assistant", arguments: { action: "spawn", name: "poster", message: "post" } },
-          ]),
+        (request) => void request.call([{ name: "spawn_child", arguments: { message: "post" } }]),
       )
-      .step("primary acknowledges", (request) => request.text("ok"))
-      .step("primary reads the report", (request) => {
+      .step("primary finishes", (request) => {
         request.text("noted");
         finished.resolve();
       });
     let forced: string[] = [];
     agent.provider
       .lane("poster", (request) => request.userTexts()[0] === "post")
-      .step("assistant forces a chat tool", (request) => {
-        forced = request.call([send(general, "Hi from the assistant.")]);
+      .step("child forces a chat tool", (request) => {
+        forced = request.call([send(general, "Hi from the child.")]);
       })
-      .step("assistant reads the failure", (request) => {
+      .step("child reads the failure", (request) => {
         expect(request.toolOutput(forced[0] ?? "")).toMatch(/not available/);
         request.text("I cannot post");
       });
-    const { runtime } = await agent.open({ chat: port });
+    const { runtime } = await agent.open({ chat: port, extensions: [spawnChildExtension] });
 
     await runtime.submit("have someone post", { requestId: "m1" });
     await finished.promise;

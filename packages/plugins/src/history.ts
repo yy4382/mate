@@ -9,6 +9,7 @@ import {
   section,
   type Cursor,
   type EntryRecord,
+  type Extension,
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
 
@@ -130,11 +131,10 @@ const tools = [
 const historyTools: ReadonlySet<string> = new Set(tools.map(({ name }) => name));
 
 /**
- * The history tools: search and read every record of the calling conversation, including those compacted out of the
- * model's context. Installed for every conversation, each reading only its own records. Both only read, so both rerun
- * safely after a crash.
+ * Search and read every record of the calling conversation, including those compacted out of the model's context.
+ * Both tools are read-only and replay-safe.
  */
-export const historyExtension = defineExtension({
+export const historyExtension: Extension = defineExtension({
   name: "history",
   tools,
   sections: [
@@ -150,7 +150,6 @@ export const historyExtension = defineExtension({
 /** Every record of the calling conversation, numbered, and where the model's current context begins among them. */
 async function readHistory(api: ToolExecutionApi, context: Context): Promise<History> {
   return api.commit(async (tx) => {
-    // A conversation never compacted or reset has its whole history in context.
     const head = (await tx.latestHeadMarker(api.conversationId))?.head ?? Number.NEGATIVE_INFINITY;
     const records: HistoryRecord[] = [];
     let inContextFrom: number | undefined;
@@ -208,14 +207,12 @@ function textOf(content: UserMessage["content"]): string {
   return content.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
 }
 
-/** About `EXCERPT` characters of `text` around the match at `at`. */
 function excerpt(text: string, at: number): string {
   const start = Math.max(0, at - EXCERPT / 4);
   const end = Math.min(text.length, start + EXCERPT);
   return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
 }
 
-/** `record` with its text cut so the serialized record takes at most `room` bytes, and says how much was cut. */
 function cut(record: HistoryRecord, room: number): HistoryRecord {
   const cutAt = (kept: number): HistoryRecord => ({
     ...record,

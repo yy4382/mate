@@ -42,6 +42,17 @@ CREATE TABLE webhooks (
 CREATE INDEX webhooks_by_agent ON webhooks (agent_id);
 `,
     },
+    {
+      version: 4,
+      sql: `
+CREATE TABLE pending_terminal_stops (
+  agent_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  node_id TEXT NOT NULL,
+  PRIMARY KEY (agent_id, session_id)
+) STRICT;
+`,
+    },
   ]),
 };
 
@@ -136,6 +147,42 @@ export class AdminStore {
 
   deleteNodeGrants(agentId: string): void {
     this.#db.prepare("DELETE FROM node_grants WHERE agent_id = ?").run(agentId);
+  }
+
+  pendingStops(agentId: string): Map<string, string> {
+    const rows = this.#db
+      .prepare("SELECT session_id, node_id FROM pending_terminal_stops WHERE agent_id = ?")
+      .all(agentId);
+    return new Map(
+      rows.map((row) => [z.string().parse(row.session_id), z.string().parse(row.node_id)]),
+    );
+  }
+
+  hasPendingStops(agentId: string): boolean {
+    return (
+      this.#db
+        .prepare("SELECT 1 FROM pending_terminal_stops WHERE agent_id = ? LIMIT 1")
+        .get(agentId) !== undefined
+    );
+  }
+
+  recordPendingStop(agentId: string, sessionId: string, nodeId: string): void {
+    this.#db
+      .prepare(
+        `INSERT INTO pending_terminal_stops (agent_id, session_id, node_id) VALUES (?, ?, ?)
+         ON CONFLICT (agent_id, session_id) DO NOTHING`,
+      )
+      .run(agentId, sessionId, nodeId);
+  }
+
+  confirmStop(agentId: string, sessionId: string): void {
+    this.#db
+      .prepare("DELETE FROM pending_terminal_stops WHERE agent_id = ? AND session_id = ?")
+      .run(agentId, sessionId);
+  }
+
+  deletePendingStops(agentId: string): void {
+    this.#db.prepare("DELETE FROM pending_terminal_stops WHERE agent_id = ?").run(agentId);
   }
 
   webhook(id: string): WebhookRecord | undefined {

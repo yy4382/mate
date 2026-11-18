@@ -1,15 +1,12 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
-import {
-  defineDoc,
-  defineExtension,
-  defineTool,
-  type Conversation,
-  type Harness,
-} from "@earendil-works/pi-durable";
-import type { Clock } from "@palace/clock";
+import { defineDoc, defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
+import { systemClock, type Clock } from "@palace/clock";
+import type { RuntimeBackgroundTask } from "@palace/runtime";
 
 type Reminder = { id: string; at: number; note: string };
+
+const MAX_PENDING_REMINDERS = 100;
 
 /** Pending reminders of the primary conversation. A fired reminder is removed after its input is admitted. */
 const RemindersDoc = defineDoc<{ pending: Reminder[] }>({
@@ -21,14 +18,20 @@ const RemindersDoc = defineDoc<{ pending: Reminder[] }>({
   initial: () => ({ pending: [] }),
 });
 
-const reply = (text: string) => ({ content: [{ type: "text" as const, text }] });
+const reply = (text: string, isError = false) => ({
+  content: [{ type: "text" as const, text }],
+  isError,
+});
 
 /**
- * The `reminder` tool, and the scheduler that turns a due reminder into an input. A reminder's ID derives from the
- * tool call that set it, and its input's request ID from the reminder, so every step is safe to repeat after a crash:
- * re-setting finds the reminder already there, and re-firing is deduplicated by Durable.
+ * Self-reminders for the primary conversation. Returns the `reminder` tool extension and the background wakeup loop to
+ * pass to `openAgentRuntime`.
  */
-export function reminders(clock: Clock, closing: AbortSignal) {
+export function reminders(clock?: Clock): {
+  readonly extension: Extension;
+  readonly background: RuntimeBackgroundTask;
+} {
+  let activeClock = clock ?? systemClock;
   let wake = new AbortController();
   const reschedule = () => wake.abort();
 
@@ -36,7 +39,7 @@ export function reminders(clock: Clock, closing: AbortSignal) {
     name: "reminder",
     description:
       "Set, list, or cancel reminders to yourself. A due reminder arrives as a new input, even if you are idle. " +
-      "Actions: set (note, and either at as an ISO 8601 time or inMinutes), list, cancel (id).",
+      "Actions: set (note, and either at as an ISO 8601 time with timezone or inMinutes), list, cancel (id).",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("set"), Type.Literal("list"), Type.Literal("cancel")]),
       note: Type.Optional(Type.String()),
@@ -58,7 +61,7 @@ export function reminders(clock: Clock, closing: AbortSignal) {
         );
       }
       if (args.action === "cancel") {
-        if (args.id === undefined) return reply("cancel needs an id.");
+        if (args.id === undefined) return reply("cancel needs an id.", true);
         const { id } = args;
         const removed = await api.commit(async (tx) => {
           const state = await tx.doc(RemindersDoc, api.conversationId);
@@ -69,31 +72,53 @@ export function reminders(clock: Clock, closing: AbortSignal) {
         reschedule();
         return reply(removed ? `Cancelled ${id}.` : `No pending reminder ${id}.`);
       }
-      if (args.note === undefined) return reply("set needs a note.");
-      const at = dueTime(args.at, args.inMinutes, clock.now());
-      if (at === undefined) return reply("set needs at (an ISO 8601 time) or inMinutes.");
+      if (args.note === undefined || args.note.trim() === "") {
+        return reply("set needs a note.", true);
+      }
+      const at = dueTime(args.at, args.inMinutes, activeClock.now());
+      if (at === undefined) {
+        return reply("set needs at (ISO 8601 timestamp with timezone or Z) or inMinutes.", true);
+      }
       const reminder = { id: `r${api.taskId}`, at, note: args.note };
-      await api.commit(async (tx) => {
+      const outcome = await api.commit(async (tx) => {
         const state = await tx.doc(RemindersDoc, api.conversationId);
-        if (!state.pending.some((item) => item.id === reminder.id)) state.pending.push(reminder);
+        if (state.pending.some((item) => item.id === reminder.id)) return "existing" as const;
+        if (state.pending.length >= MAX_PENDING_REMINDERS) return "full" as const;
+        state.pending.push(reminder);
+        return "added" as const;
       }, context);
+      if (outcome === "full") {
+        return reply(
+          `Too many pending reminders (limit ${MAX_PENDING_REMINDERS}); cancel old ones first.`,
+          true,
+        );
+      }
       reschedule();
       return reply(`Set ${reminder.id} for ${new Date(at).toISOString()}.`);
     },
   });
 
-  /** Fire due reminders until the runtime closes, sleeping until the next one is due. */
-  async function run(harness: Harness, root: Conversation): Promise<void> {
+  const background: RuntimeBackgroundTask = async ({
+    harness,
+    root,
+    lifetime,
+    clock: runtimeClock,
+  }) => {
+    activeClock = runtimeClock;
+    const closing = lifetime.signal;
     while (!closing.aborted) {
       wake = new AbortController();
       try {
         const pending =
           (await harness.snapshot(RemindersDoc, root.id, BACKGROUND_CONTEXT))?.pending ?? [];
-        for (const due of pending.filter((item) => item.at <= clock.now() && !closing.aborted)) {
+        for (const due of pending.filter(
+          (item) => item.at <= runtimeClock.now() && !closing.aborted,
+        )) {
+          const iso = new Date(due.at).toISOString();
           await root.submit(
             {
               type: "input",
-              content: `Reminder you set for ${new Date(due.at).toISOString()}: ${due.note}`,
+              content: `<reminder id="${due.id}" scheduled_for="${iso}">\n${due.note}\n</reminder>`,
               requestId: `reminder:${due.id}`,
               whenBusy: "steer",
             },
@@ -104,30 +129,32 @@ export function reminders(clock: Clock, closing: AbortSignal) {
             state.pending = state.pending.filter((item) => item.id !== due.id);
           }, BACKGROUND_CONTEXT);
         }
-        const next = pending.filter((item) => item.at > clock.now()).map((item) => item.at);
-        // A reschedule since this pass began has aborted `wake` already, and then the sleep returns at once.
-        await clock.sleep(
-          next.length === 0 ? undefined : Math.min(...next) - clock.now(),
+        const next = pending.filter((item) => item.at > runtimeClock.now()).map((item) => item.at);
+        await runtimeClock.sleep(
+          next.length === 0 ? undefined : Math.min(...next) - runtimeClock.now(),
           AbortSignal.any([closing, wake.signal]),
         );
       } catch (error) {
-        // The runtime closed or its storage failed while this pass was working. Either way, this loop is done.
         if (closing.aborted) return;
         throw error;
       }
     }
-  }
+  };
 
-  return { extension: defineExtension({ name: "reminders", tools: [tool] }), run };
+  return { extension: defineExtension({ name: "reminders", tools: [tool] }), background };
 }
+
+const ISO_WITH_TZ = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 function dueTime(
   at: string | undefined,
   inMinutes: number | undefined,
   now: number,
 ): number | undefined {
-  if (inMinutes !== undefined) return now + inMinutes * 60_000;
-  if (at === undefined) return undefined;
-  const parsed = Date.parse(at);
+  if (inMinutes !== undefined) {
+    return Number.isFinite(inMinutes) && inMinutes >= 0 ? now + inMinutes * 60_000 : undefined;
+  }
+  if (at === undefined || !ISO_WITH_TZ.test(at.trim())) return undefined;
+  const parsed = Date.parse(at.trim());
   return Number.isNaN(parsed) ? undefined : parsed;
 }
