@@ -13,8 +13,8 @@
 ### 1.1 命令
 
 - 命令交给所在平台的 shell：Linux/macOS 为账号配置的 Bash/zsh（不看可变的 SHELL），Windows 为 PowerShell 5.1。首次命令在该 Agent 的工作目录；HOME 在 Linux/macOS 是账号主目录，在 Windows 是工作目录。Windows 也验证 `$HOME`、原生程序的退出码和后续成功命令不沿用旧失败码。
-- `visit` 准备 Agent 的工作区，不初始化 MEMORY.md，`home` 使用已有主工作区；两者共用上面的初始目录和 HOME 规则。Windows 在 node 没有 HOME 时也设置 PowerShell 的 `$HOME`。
-- 启动文件设置的变量、数组、只读值、导出、别名、函数（含 zsh 的 fpath 自动加载和模块）和选项在每条命令里可用；终端和启动文件相关的选项不恢复。启动文件的输出不混进命令输出，每个 node 进程只执行一次，之后的修改和命令里的改动都不影响快照；BASH_ENV/ENV 不会被执行。超过 4 MiB 的快照失败且不执行命令；失败保留到 node 重启。
+- `visit` 准备 Agent 的工作区，不初始化 `memory/` 或 `MEMORY.md`，`home` 使用已有主工作区并在初始化时创建 `memory/` 目录且注入 `PALACE_MEMORY_DIR`；两者共用上面的初始目录和 HOME 规则。Windows 在 node 没有 HOME 时也设置 PowerShell 的 `$HOME`。
+- 启动文件设置的变量、数组、只读值、导出、别名、函数（含 zsh 的 fpath 自动加载和模块）和选项在每条命令里可用，并完整保留 `PALACE_*`（例如 `PALACE_MEMORY_DIR`）；终端和启动文件相关的选项不恢复。启动文件的输出不混进命令输出，每个 node 进程只执行一次，之后的修改和命令里的改动都不影响快照；BASH_ENV/ENV 不会被执行。超过 4 MiB 的快照失败且不执行命令；失败保留到 node 重启。
 - 停止等待捕获的调用不影响其他调用，也不让捕获失败；之后的调用照常使用快照。
 - 前台命令的 cd 对同一对话的下一条命令生效，非零退出也算；路径里的空白和换行保留，输出重定向和占着描述符的后台进程不妨碍记录。exit、exec、信号让目录保持不变，结果不变。同时进行的前台命令中最后结束的决定目录。后台命令从记住的目录开始但不改它；不同对话、不同 Agent 互不影响；node 重连保留，重启从工作区开始。记住的目录被删时从工作区开始并说明；缺少工作区时仍要求重新准备。
 - POSIX 上 Agent 自己写的 `sudo` 原样执行，成败由宿主决定；node 从不自己加提权命令。
@@ -41,8 +41,10 @@
 - POSIX 命令已经返回、后台进程还占着输出时收到停止，后台进程也被杀掉。Windows 只保证 shell 仍存活时的进程树。
 - 通过真实网关：调用方中止调用后，node 上这次调用的进程组消失，调用方得到"已停止"；另一个 Agent 的并发调用不受影响，拿到自己的结果。
 - 三个平台都证明 node 正常关闭时清理仍在运行的命令。POSIX 还检查命令已经返回的后台进程组。
-- 修改或删除工作目录里的 `MEMORY.md`，不影响之后的命令执行。
-- 主工作目录不存在时，所有工具报错且不重建。显式准备主工作区会创建缺失的空 MEMORY.md，已有文件不覆盖。访问工作区在显式准备和执行前准备时均不初始化 MEMORY.md。工作区路径是普通文件时访问工具失败，移除冲突后重试成功。重复准备及重连保留已有文件；远端用户自行创建再删除的 MEMORY.md 不会补写。
+- 终端会话（`terminal_exec`、`terminal_write`、`terminal_wait`）：长命令超过 `yieldTimeMs` 返回 `running: true`，`terminal_write` 可写入标准输入、传 `eof: true` 或 `kill: true`；`terminal_wait` 与 `terminal_write` 遵循单消费者规则（已由 `write` 消费的退出结果让 `wait` 得到 `{ consumed: true }`）；WebSocket 断线触发 `connectionClosed()` 清理活跃会话。
+- 记忆读取（`memory_read`）：不存在返回 `missing`；超过 64 KiB 截断在完整字符处并标明 `truncated`；符号链接或越界目标按工作区安全规则拒绝。
+- 修改或删除工作目录里的 `memory/MEMORY.md` 或 `memory/`，不影响之后的命令执行。
+- 主工作目录不存在时，所有工具报错且不重建。显式准备主工作区会创建 `memory/` 目录（不创建根 `MEMORY.md`），已有文件不覆盖。访问工作区在显式准备和执行前准备时均不初始化 `memory/` 或 `MEMORY.md`。工作区路径是普通文件时访问工具失败，移除冲突后重试成功。重复准备及重连保留已有文件；远端用户自行创建再删除的文件不会补写。
 - 运行中的 node 握手成功后，`palace node status`（假服务管理器报告这个真实子进程的身份）显示 `Link: connected since <时间>`；网关消失后显示 `Link: disconnected since <时间>`。网关连不上时从启动起就是 `disconnected`。
 - 身份被拒绝时，node 退出，退出码是用户服务不会重启的那个（§2），不会无限重试；网络失败或网关以协议错误（例如握手超时）结束连接时，按退避重连。
 

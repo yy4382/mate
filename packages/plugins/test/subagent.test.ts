@@ -1,0 +1,298 @@
+import { defineExtension, defineTool } from "@earendil-works/pi-durable";
+import { Type } from "@earendil-works/pi-ai";
+import {
+  encodeTerminalOutcome,
+  encodeTerminalWaitOutcome,
+  type ToolResult,
+} from "@palace/node-protocol";
+import { describe, expect, it } from "vitest";
+import { filesExtension, type FilesPort } from "../src/files.ts";
+import { listSubagents, subagentConversationId, subagentExtension } from "../src/subagent.ts";
+import { terminalExtension, type TerminalPort } from "../src/terminal.ts";
+import { testAgent, within } from "./support.ts";
+
+describe("subagent extension", () => {
+  it("runs foreground and background subagents, supports resume, and exposes subagent helpers", async () => {
+    const dummyExt = defineExtension({ name: "helper-ext" });
+    const primaryOnlyTool = defineTool({
+      name: "primary_only",
+      description: "Primary-only tool.",
+      parameters: Type.Object({}),
+      replay: "safe",
+      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    });
+    const primaryExt = defineExtension({ name: "primary-only", tools: [primaryOnlyTool] });
+    const subagent = subagentExtension({ extensions: [dummyExt] });
+
+    const agent = await testAgent();
+    const seenWorkerTools: string[][] = [];
+    let firstAgentId = "";
+    let fgResult = "";
+    const bgDelivered = Promise.withResolvers<string>();
+
+    agent.provider
+      .step("root foreground", (request) => {
+        request.call([
+          { name: "subagent", arguments: { prompt: "count one", description: "fg task" } },
+        ]);
+      })
+      .step("root reads fg and starts bg", (request) => {
+        fgResult = request.toolOutputs().at(-1) ?? "";
+        firstAgentId = /Subagent (sub-\d+):/.exec(fgResult)?.[1] ?? "";
+        expect(firstAgentId).toMatch(/^sub-\d+$/);
+        request.call([
+          {
+            name: "subagent",
+            arguments: { prompt: "slow two", run_in_background: true, resume: firstAgentId },
+          },
+        ]);
+      })
+      .step("root answers while bg runs", (request) => {
+        const out = JSON.parse(request.toolOutputs().at(-1) ?? "null");
+        expect(out).toEqual({ status: "running", agent_id: firstAgentId });
+        request.text("Delegated to background.");
+      })
+      .step("root receives subagent_result", (request) => {
+        const text = request.userTexts().at(-1) ?? "";
+        bgDelivered.resolve(text);
+        request.text("Got final result.");
+      });
+
+    const holdBg = Promise.withResolvers<void>();
+    agent.provider
+      .lane("worker", (request) => request.userTexts()[0] === "count one")
+      .step("worker fg", (request) => {
+        seenWorkerTools.push(request.toolNames());
+        request.text("Count is 1.");
+      })
+      .step("worker bg resumed", async (request) => {
+        expect(request.userTexts()).toEqual(["count one", "slow two"]);
+        await holdBg.promise;
+        request.text("Background done (resumed).");
+      });
+
+    const { runtime } = await agent.open({ extensions: [primaryExt, dummyExt, subagent] });
+    await (await runtime.submit("start", { requestId: "m1" })).settled();
+    expect(fgResult).toContain("Count is 1.");
+    expect(seenWorkerTools[0]).not.toContain("primary_only");
+    expect(seenWorkerTools[0]).not.toContain("subagent");
+    expect(seenWorkerTools[0]).not.toContain("subagent_stop");
+    expect(await listSubagents(runtime)).toEqual([firstAgentId]);
+    expect(await subagentConversationId(runtime, firstAgentId)).toBeTypeOf("number");
+
+    // Parent can settle while background subagent is waiting on holdBg.
+    await runtime.idle();
+    holdBg.resolve();
+
+    const delivery = await within(2000, "background subagent_result", bgDelivered.promise);
+    expect(delivery).toContain(`<subagent_result agent_id="${firstAgentId}" status="completed">`);
+    expect(delivery).toContain("Background done (resumed).");
+    await runtime.idle();
+    agent.provider.assertComplete();
+  });
+
+  it("stops a running background subagent cleanly with subagent_stop and leaves it resumable", async () => {
+    const subagent = subagentExtension({ extensions: [] });
+    const agent = await testAgent();
+    const stopGate = Promise.withResolvers<void>();
+    let cancelledSeen = false;
+    let agentId = "";
+
+    agent.provider
+      .step("start bg", (request) => {
+        request.call([
+          { name: "subagent", arguments: { prompt: "hang forever", run_in_background: true } },
+        ]);
+      })
+      .step("ack bg", (request) => {
+        agentId = JSON.parse(request.toolOutputs().at(-1) ?? "null").agent_id;
+        request.text("started");
+      })
+      .step("stop it", (request) => {
+        request.call([{ name: "subagent_stop", arguments: { agent_id: agentId } }]);
+      })
+      .step("after stop", (request) => {
+        expect(request.toolOutputs().at(-1)).toContain(`Stopped subagent ${agentId}`);
+        request.text("stopped");
+      })
+      .step("resume after stop", (request) => {
+        request.call([{ name: "subagent", arguments: { prompt: "try again", resume: agentId } }]);
+      })
+      .step("done", (request) => {
+        expect(request.toolOutputs().at(-1)).toContain("recovered ok");
+        request.text("all done");
+      });
+
+    agent.provider
+      .lane("worker", (request) => request.userTexts()[0] === "hang forever")
+      .step("hanging", (request) => {
+        stopGate.resolve();
+        return request.hang().then(() => {
+          cancelledSeen = true;
+        });
+      })
+      .step("resumed", (request) => request.text("recovered ok"));
+
+    const { runtime } = await agent.open({ extensions: [subagent] });
+    await (await runtime.submit("start", { requestId: "m1" })).settled();
+    await within(2000, "worker request started", stopGate.promise);
+
+    await (await runtime.submit("stop", { requestId: "m2" })).settled();
+    expect(cancelledSeen).toBe(true);
+
+    await (await runtime.submit("resume", { requestId: "m3" })).settled();
+    await runtime.idle();
+    agent.provider.assertComplete();
+  });
+
+  it("waits for a background subagent's notify_on_exit command to complete before delivering subagent_result", async () => {
+    const waitCallReady = Promise.withResolvers<() => void>();
+    const termPort: TerminalPort = {
+      exec: async (call) =>
+        encodeTerminalOutcome({
+          running: true,
+          sessionId: call.sessionId,
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 10,
+        }),
+      write: async (call) =>
+        encodeTerminalOutcome({
+          running: false,
+          sessionId: call.sessionId,
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 10,
+          ending: { kind: "exited", code: 0 },
+          pipesHeld: false,
+          backgroundRunning: false,
+        }),
+      wait: (call) =>
+        new Promise((resolve) => {
+          waitCallReady.resolve(() =>
+            resolve(
+              encodeTerminalWaitOutcome({
+                consumed: false,
+                outcome: {
+                  running: false,
+                  sessionId: call.sessionId,
+                  output: "42 tests passed\n",
+                  droppedBytes: 0,
+                  wallTimeMs: 200,
+                  ending: { kind: "exited", code: 0 },
+                  pipesHeld: false,
+                  backgroundRunning: false,
+                },
+              }),
+            ),
+          );
+        }),
+    };
+    const terminal = terminalExtension(termPort);
+    const subagent = subagentExtension({ extensions: [terminal] });
+    const agent = await testAgent();
+    const resultDelivered = Promise.withResolvers<string>();
+
+    agent.provider
+      .step("delegate", (request) => {
+        request.call([
+          { name: "subagent", arguments: { prompt: "run slow suite", run_in_background: true } },
+        ]);
+      })
+      .step("ack", (request) => request.text("Subagent started."))
+      .step("receives subagent_result", (request) => {
+        const text = request.userTexts().at(-1) ?? "";
+        resultDelivered.resolve(text);
+        request.text("Reported final answer.");
+      });
+
+    agent.provider
+      .lane("worker", (request) => request.userTexts()[0] === "run slow suite")
+      .step("worker starts cmd", (request) => {
+        request.call([
+          {
+            name: "exec_command",
+            arguments: { command: "pnpm test", yield_time_ms: 10, notify_on_exit: true },
+          },
+        ]);
+      })
+      .step("worker ends turn 1", (request) => {
+        request.text("Started test run, waiting for notification.");
+      })
+      .step("worker receives command notification", (request) => {
+        expect(request.userTexts().at(-1)).toContain("42 tests passed");
+        request.text("Suite complete: 42 tests passed.");
+      });
+
+    const { runtime } = await agent.open({ extensions: [terminal, subagent] });
+    await (await runtime.submit("go", { requestId: "m1" })).settled();
+    const finishCommand = await within(2000, "command wait started", waitCallReady.promise);
+    // Worker ended turn 1 already; root must NOT have received subagent_result yet!
+    await runtime.idle();
+    expect(agent.provider.requests.some((r) => r.step === "receives subagent_result")).toBe(false);
+
+    finishCommand();
+    const delivered = await within(2000, "final subagent_result", resultDelivered.promise);
+    expect(delivered).toContain("Suite complete: 42 tests passed.");
+    expect(delivered).not.toContain("Started test run");
+    await runtime.idle();
+    agent.provider.assertComplete();
+  });
+
+  it("propagates runtime.configure model updates to subagents without widening allowed extensions and rejects self-nesting", async () => {
+    expect(() =>
+      subagentExtension({ extensions: [defineExtension({ name: "subagent" })] }),
+    ).toThrow(/subagent/);
+
+    const files = filesExtension({
+      run: async () => ({ content: [{ type: "text", text: "ok" }], isError: false }),
+      nodes: async () => [],
+    } satisfies FilesPort);
+    const hiddenPrimary = defineExtension({
+      name: "secret-primary",
+      tools: [
+        defineTool({
+          name: "secret_tool",
+          description: "Not for subagents.",
+          parameters: Type.Object({}),
+          replay: "safe",
+          execute: async () => ({ content: [{ type: "text", text: "secret" }] }),
+        }),
+      ],
+    });
+    const subagent = subagentExtension({ extensions: [files] });
+    const agent = await testAgent();
+    let secondChildModel = "";
+    let secondChildTools: string[] = [];
+
+    agent.provider
+      .step("spawn", (request) => {
+        request.call([{ name: "subagent", arguments: { prompt: "first task" } }]);
+      })
+      .step("re-ack", (request) => request.text("done1"))
+      .step("spawn2", (request) => {
+        const id = /Subagent (sub-\d+):/.exec(request.toolOutputs()[0] ?? "")?.[1] ?? "";
+        request.call([{ name: "subagent", arguments: { prompt: "second task", resume: id } }]);
+      })
+      .step("done2", (request) => request.text("done2"));
+
+    agent.provider
+      .lane("worker", (request) => request.userTexts()[0] === "first task")
+      .step("child1", (request) => request.text("child1 ok"))
+      .step("child2", (request) => {
+        secondChildModel = request.body.model;
+        secondChildTools = request.toolNames();
+        request.text("child2 ok");
+      });
+
+    const { runtime } = await agent.open({ extensions: [hiddenPrimary, files, subagent] });
+    await (await runtime.submit("turn 1", { requestId: "m1" })).settled();
+    await runtime.configure({ model: { provider: "openai", modelId: "gpt-4o" } });
+    await (await runtime.submit("turn 2", { requestId: "m2" })).settled();
+
+    expect(secondChildModel).toBe("gpt-4o");
+    expect(secondChildTools).toContain("read");
+    expect(secondChildTools).not.toContain("secret_tool");
+    expect(secondChildTools).not.toContain("subagent");
+  });
+});

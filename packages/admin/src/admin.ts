@@ -19,12 +19,24 @@ import {
   type CatalogModel,
   type EventWatch,
 } from "@palace/runtime";
+import {
+  docsExtension,
+  filesExtension,
+  historyExtension,
+  idleCompaction,
+  listSubagents,
+  memoryExtension,
+  reminders,
+  subagentConversationId,
+  subagentExtension,
+  terminalExtension,
+} from "@palace/plugins";
 import { WorkspacePathSchema, type WorkspaceListing } from "@palace/node-protocol";
 import { z } from "zod";
 import { AdminError, parseInput } from "./admin-error.ts";
 import { AdminStore } from "./store.ts";
-import { renderWebhookContent, webhookPlugin } from "./webhook-plugin.ts";
-import { gatewayWorkspaces } from "./workspaces.ts";
+import { renderWebhookContent, webhookDocsDirectory, webhookExtension } from "./webhook-plugin.ts";
+import { gatewayAgentPorts, prepareGatewayWorkspace } from "./workspaces.ts";
 
 /** The providers Palace offers. Their models come from pi-ai's catalog. */
 const Provider = z.enum(["openai", "deepseek"]);
@@ -126,13 +138,41 @@ export type WebhookView = {
 export async function openAdmin(options: AdminOptions): Promise<Admin> {
   const store = new AdminStore(options.dataDirectory);
   try {
+    const clock = options.clock ?? systemClock;
     const manager = await openAgentManager({
       directory: join(options.dataDirectory, "agents"),
       chat: options.chat,
-      workspaces: gatewayWorkspaces(options.gateway, store),
+      prepareWorkspace: (nodeId, agentId) =>
+        prepareGatewayWorkspace(options.gateway, nodeId, agentId),
+      buildAgent: ({ agentId, nodeId, clock: agentClock, closing }) => {
+        const ports = gatewayAgentPorts(options.gateway, store, nodeId, agentId);
+        const terminal = terminalExtension(ports.terminal, { closing });
+        const files = filesExtension(ports.files, { closing });
+        const memory = memoryExtension(ports.memory, { closing });
+        const docs = docsExtension([webhookDocsDirectory]);
+        const compact = idleCompaction();
+        const reminder = reminders(agentClock);
+        const subagent = subagentExtension({
+          extensions: [terminal, files, memory, historyExtension, docs, compact.extension],
+        });
+        return {
+          extensions: [
+            terminal,
+            files,
+            memory,
+            subagent,
+            reminder.extension,
+            historyExtension,
+            compact.extension,
+            docs,
+            webhookExtension,
+          ],
+          background: [reminder.background, compact.background],
+          close: () => ports.close(),
+        };
+      },
       credentials: (provider) => store.credentials(provider),
-      plugins: [webhookPlugin],
-      ...(options.clock === undefined ? {} : { clock: options.clock }),
+      clock,
       ...(options.report === undefined ? {} : { report: options.report }),
     });
     return new Admin(options, store, manager);
@@ -280,13 +320,13 @@ export class Admin {
     );
   }
 
-  /** The names of the open Agent's work assistants, each of which `watchAgent` can watch. */
+  /** The names of the open Agent's subagents, each of which `watchAgent` can watch. */
   async assistants(agentId: string): Promise<string[]> {
-    return this.#whileOpen(agentId, (runtime) => runtime.assistants());
+    return this.#whileOpen(agentId, (runtime) => listSubagents(runtime));
   }
 
   /**
-   * Watch the open Agent's primary conversation, or one of its assistants, live: the first batch is a snapshot, then
+   * Watch the open Agent's primary conversation, or one of its subagents, live: the first batch is a snapshot, then
    * streamed text, tool calls and their output as they happen. Watching changes nothing. The watch ends when stopped,
    * or when the Agent closes (paused, deleted, the control plane stopping).
    */
@@ -297,9 +337,14 @@ export class Admin {
   ): Promise<EventWatch> {
     const { assistant } = options;
     return this.#whileOpen(agentId, async (runtime) => {
-      if (assistant !== undefined && !(await runtime.assistants()).includes(assistant))
+      if (assistant === undefined) {
+        return runtime.watchEvents(listener);
+      }
+      const conversationId = await subagentConversationId(runtime, assistant);
+      if (conversationId === undefined) {
         throw new AdminError("unknown-assistant", `Agent ${agentId} has no assistant ${assistant}`);
-      return runtime.watchEvents(listener, options);
+      }
+      return runtime.watchEvents(listener, { conversationId });
     });
   }
 

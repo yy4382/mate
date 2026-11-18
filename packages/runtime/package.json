@@ -17,10 +17,7 @@
     "@earendil-works/chord": "1.1.0",
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-durable": "1.1.0",
-    "@palace/agent-plugin": "workspace:*",
-    "@palace/clock": "workspace:*",
-    "@palace/node-protocol": "workspace:*",
-    "zod": "4.6.5"
+    "@palace/clock": "workspace:*"
   },
   "devDependencies": {
     "@palace/testkit": "workspace:*"

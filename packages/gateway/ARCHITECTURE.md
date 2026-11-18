@@ -1,6 +1,6 @@
 # Node 网关（`@palace/gateway`）
 
-> 总览见 [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)。node 一侧见 [apps/node/ARCHITECTURE.md](../../apps/node/ARCHITECTURE.md)。线路消息格式和 `bash` 工具定义在 `@palace/node-protocol`。测试见 [TESTS.md](TESTS.md)。
+> 总览见 [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)。node 一侧见 [apps/node/ARCHITECTURE.md](../../apps/node/ARCHITECTURE.md)。线路消息格式与工具契约（`terminal_exec`、`terminal_write`、`terminal_wait`、`memory_read`、`read`、`write`、`edit`）定义在 `@palace/node-protocol`。测试见 [TESTS.md](TESTS.md)。
 
 ## 职责
 
@@ -23,13 +23,13 @@ runtime 把一次完整的工具调用（工具名、参数、可选 node 名字
 给管理模块用，签名在 `src/index.ts`。
 
 - `runTool(nodeId, agentId, { access, conversationId?, tool, arguments }, onOutput, signal)` 转发一次调用。从不重发，也没有自己的期限，在 node 回答、连接断开或 signal 中止时结束。
-- `prepareWorkspace(nodeId, agentId, access)`：`home` 创建工作区和缺失的 `MEMORY.md`，`visit` 只创建工作区。可重复，离线返回错误。
+- `prepareWorkspace(nodeId, agentId, access)`：`home` 创建工作区与缺失的 `memory/` 目录（不创建根 `MEMORY.md`），`visit` 只创建工作区。可重复，离线返回错误。
 - `browse(nodeId, agentId, path)` 只读地看工作区里的一个路径，给管理界面用。
 - `status`、`nodes`、`renameNode`、`createPairingToken`（一次性）、`handleUpgrade`（挂到外壳的 HTTP upgrade）、`close`。
 
 ## 规则
 
-1. **控制面从不重发工具调用，也不给调用设期限。** 连接是否活着由心跳判断，命令跑多久由 `bash` 自己的 `timeout` 决定。连接断了，进行中的调用立即以"结果未知：节点连接中断，命令可能执行了也可能没有，不会重试"交给模型，迟到的结果丢弃。所以没有回执对账，node 不需要操作账本，控制面也不需要定期核对。
+1. **控制面从不重发工具调用，也不给调用设期限。** 连接是否活着由心跳判断，命令跑多久由 `terminal_exec` 自己的 `timeoutMs` 与 `yieldTimeMs` 决定。连接断了，进行中的调用立即以"结果未知：节点连接中断，命令可能执行了也可能没有，不会重试"交给模型，迟到的结果丢弃。所以没有回执对账，node 不需要操作账本，控制面也不需要定期核对。
 
 2. **node 离线时 Agent 照常运行。** 需要该 node 的工具返回"节点离线"，管理模块在错误里标出目标名字。一个 node 离线不影响访问其他 node。
 

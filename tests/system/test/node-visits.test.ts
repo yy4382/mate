@@ -12,7 +12,10 @@ it("9. an authorized visit uses its Agent workspace for commands and file tools"
   const workspace = join(laptop.node.workspacesRoot, ada.agentId);
   writeFileSync(join(ada.workspace, "origin.txt"), "server workspace\n");
   writeFileSync(join(laptop.node.home, "origin.txt"), "laptop home\n");
-  const visit = { name: "bash", arguments: { node: "laptop", command: "pwd -P; cat origin.txt" } };
+  const visit = {
+    name: "exec_command",
+    arguments: { node: "laptop", command: "pwd -P; cat origin.txt" },
+  };
   const grantPath = `/api/admin/agents/${ada.agentId}/nodes/${laptop.nodeId}`;
   let calls: string[] = [];
   let refusal = "";
@@ -32,7 +35,10 @@ it("9. an authorized visit uses its Agent workspace for commands and file tools"
       expect(existsSync(workspace)).toBe(false);
       await system.api("PUT", grantPath, undefined, 204);
       expect(existsSync(workspace)).toBe(true);
+      expect(existsSync(join(workspace, "memory"))).toBe(false);
       expect(existsSync(join(workspace, "MEMORY.md"))).toBe(false);
+      expect(existsSync(join(ada.workspace, "memory"))).toBe(true);
+      expect(existsSync(join(ada.workspace, "MEMORY.md"))).toBe(false);
       calls = request.call([
         {
           name: "write",
@@ -57,7 +63,7 @@ it("9. an authorized visit uses its Agent workspace for commands and file tools"
       calls = request.call([
         visit,
         { name: "read", arguments: { node: "laptop", path: "origin.txt" } },
-        { name: "bash", arguments: { command: "pwd -P; cat origin.txt" } },
+        { name: "exec_command", arguments: { command: "pwd -P; cat origin.txt" } },
       ]);
     })
     .step("revoke access and try again", async (request) => {
@@ -110,11 +116,11 @@ it("9. an offline grant prepares its workspace on first use and preserves files 
       expect(output(request, calls[0])).toContain("Write laptop notes.");
       calls = request.call([
         {
-          name: "bash",
+          name: "exec_command",
           arguments: {
             node: "laptop",
             command:
-              "pwd -P; test ! -e MEMORY.md || exit 1; printf 'remember me' > MEMORY.md; printf 'kept notes' > notes.txt",
+              "pwd -P; test ! -e memory && test ! -e MEMORY.md || exit 1; printf 'remember me' > MEMORY.md; printf 'kept notes' > notes.txt",
           },
         },
       ]);
@@ -142,6 +148,68 @@ it("9. an offline grant prepares its workspace on first use and preserves files 
     });
   await system.post(general, "@ada Write laptop notes.", [ada.account]);
   await system.messageFrom(general, ada.account, "The laptop files survived reconnection.");
+  await system.provider.received(5);
+  system.provider.assertComplete();
+});
+
+it("9. routes follow-up write_stdin automatically to the node bound to session_id", async () => {
+  const system = await startSystem();
+  await system.api("PUT", `/api/admin/nodes/${system.nodeId}`, { name: "server" }, 204);
+  const laptop = await system.addNode("laptop");
+  const ada = await system.hire("ada", "Ada");
+  const general = await system.channel("general", [ada.account]);
+  await system.api(
+    "PUT",
+    `/api/admin/agents/${ada.agentId}/nodes/${laptop.nodeId}`,
+    undefined,
+    204,
+  );
+  const workspace = join(laptop.node.workspacesRoot, ada.agentId);
+  let calls: string[] = [];
+
+  system.provider
+    .step("read request", (request) => {
+      calls = request.call([readUnread(general)]);
+    })
+    .step("start session on laptop", (request) => {
+      expect(output(request, calls[0])).toContain("Stream on laptop.");
+      calls = request.call([
+        {
+          name: "exec_command",
+          arguments: {
+            node: "laptop",
+            command: 'read line; printf \'%s:%s\\n\' "$line" "$(pwd -P)"',
+            yield_time_ms: 50,
+          },
+        },
+      ]);
+    })
+    .step("write_stdin without node", (request) => {
+      const sessionId = /session_id: ([^\]]+)/.exec(output(request, calls[0]))?.[1];
+      expect(sessionId).toBeTruthy();
+      calls = request.call([
+        {
+          name: "write_stdin",
+          arguments: {
+            session_id: sessionId,
+            chars: "routed\n",
+            eof: true,
+            yield_time_ms: 5000,
+          },
+        },
+      ]);
+    })
+    .step("report", (request) => {
+      expect(output(request, calls[0]).trim()).toBe(`routed:${realpathSync(workspace)}`);
+      calls = request.call([chatSend(general, "Routed stdin to laptop.")]);
+    })
+    .step("done", (request) => {
+      expect(output(request, calls[0])).toContain('"status":"sent"');
+      request.text("done");
+    });
+
+  await system.post(general, "@ada Stream on laptop.", [ada.account]);
+  await system.messageFrom(general, ada.account, "Routed stdin to laptop.");
   await system.provider.received(5);
   system.provider.assertComplete();
 });

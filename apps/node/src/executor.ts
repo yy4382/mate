@@ -1,29 +1,34 @@
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Clock } from "@palace/clock";
 import {
-  parseBashArguments,
+  parseTerminalExecArgs,
+  parseTerminalWaitArgs,
+  parseTerminalWriteArgs,
   type GatewayBrowse,
   type GatewayRunTool,
-  type NodeBrowseOutcome,
   type NodeAccess,
+  type NodeBrowseOutcome,
   type ToolResult,
 } from "@palace/node-protocol";
 import { browseWorkspace } from "./browse.ts";
 import { Commands } from "./commands.ts";
 import { runFileTool } from "./files.ts";
+import { readWorkspaceMemory } from "./memory.ts";
 import { Shells } from "./shells.ts";
+import { TerminalSessions } from "./terminal-sessions.ts";
 
-/** Executes tools and retains command handles for stopping and shutdown. */
+/** Executes tools and retains command handles for stopping, session multiplexing, and shutdown. */
 export class Executor {
   readonly #root: string;
   readonly #commands: Commands;
-  readonly #shells: Shells;
+  readonly #sessions: TerminalSessions;
 
   constructor(workspacesRoot: string, dataDirectory: string, clock: Clock) {
     this.#root = workspacesRoot;
     this.#commands = new Commands(clock);
-    this.#shells = new Shells(this.#commands, dataDirectory);
+    const shells = new Shells(this.#commands, dataDirectory);
+    this.#sessions = new TerminalSessions(this.#commands, shells, clock);
   }
 
   /** Run one tool call to its end. `signal` stops it: the Agent was stopped or nobody waits for the result any more. */
@@ -41,31 +46,43 @@ export class Executor {
         `The workspace ${directory} does not exist. The node does not recreate it; prepare the workspace again.`,
       );
     }
-    if (call.tool !== "bash") return runFileTool(call.tool, call.arguments, directory, signal);
-    const args = parseBashArguments(call.arguments);
-    if (!args.ok) return failure(args.error);
-    if (process.platform !== "win32")
-      return this.#shells.run(
-        {
-          session: `${call.agentId}/${call.conversationId ?? ""}`,
-          workspace: directory,
-          arguments: args.arguments,
-        },
-        onOutput,
-        signal,
-      );
-    const env = { ...process.env, PWD: directory, HOME: directory };
-    const outcome = await this.#commands.run(
-      {
-        command: args.arguments.command,
-        directory,
-        env,
-        timeoutSeconds: args.arguments.timeout,
-      },
-      onOutput,
-      signal,
-    );
-    return outcome.result;
+
+    switch (call.tool) {
+      case "terminal_exec": {
+        const parsed = parseTerminalExecArgs(call.arguments);
+        if (!parsed.ok) return failure(parsed.error);
+        return this.#sessions.exec(
+          {
+            agentId: call.agentId,
+            conversationId: call.conversationId,
+            workspace: directory,
+            arguments: parsed.arguments,
+          },
+          onOutput,
+          signal,
+        );
+      }
+      case "terminal_write": {
+        const parsed = parseTerminalWriteArgs(call.arguments);
+        if (!parsed.ok) return failure(parsed.error);
+        return this.#sessions.write(
+          { agentId: call.agentId, arguments: parsed.arguments },
+          onOutput,
+          signal,
+        );
+      }
+      case "terminal_wait": {
+        const parsed = parseTerminalWaitArgs(call.arguments);
+        if (!parsed.ok) return failure(parsed.error);
+        return this.#sessions.wait({ agentId: call.agentId, arguments: parsed.arguments }, signal);
+      }
+      case "memory_read":
+        return readWorkspaceMemory(directory);
+      case "read":
+      case "write":
+      case "edit":
+        return runFileTool(call.tool, call.arguments, directory, signal);
+    }
   }
 
   /** Read a path in the Agent's workspace for an admin, changing nothing. */
@@ -81,20 +98,24 @@ export class Executor {
     return browseWorkspace(workspace, call.path);
   }
 
-  /** Prepare a workspace, initializing MEMORY.md only for home access. Existing files are preserved. */
+  /** Prepare a workspace, initializing `memory/` only for home access. Existing files are preserved. */
   prepareWorkspace(agentId: string, access: NodeAccess = "home"): ToolResult {
     const workspace = join(this.#root, agentId);
     try {
       mkdirSync(workspace, { recursive: true });
       if (access === "home") {
-        const memory = join(workspace, "MEMORY.md");
-        if (!existsSync(memory)) writeFileSync(memory, "", { flag: "wx" });
+        mkdirSync(join(workspace, "memory"), { recursive: true });
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return failure(`Failed to prepare workspace: ${reason}`);
     }
     return { content: [{ type: "text", text: "Workspace prepared." }], isError: false };
+  }
+
+  /** Clean up active terminal sessions when a WebSocket connection closes. */
+  connectionClosed(): void {
+    this.#sessions.connectionClosed();
   }
 
   /** Kill every process group the node started. */

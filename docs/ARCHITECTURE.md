@@ -17,7 +17,7 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palac
 每个 Agent 有一个 **runtime**，它只做两件事：
 
 1. 维持 agent loop：调用模型、执行工具、把结果交回模型，一直跑下去。上下文太长时自动压缩。
-2. 把模型的工具调用送到该执行的地方：聊天工具送到聊天 app，命令和文件工具送到 node，等等。聊天工具由 Manager 以插件交给 runtime，runtime 自己不认识聊天。
+2. 直接托管由各能力包交来的原生 `pi-durable` `Extension` 与后台循环：聊天扩展由 Manager 注入，终端、文件、记忆、子 Agent、提醒、历史、空闲压缩和按需文档由 `@palace/plugins` 提供。runtime 自己不认识具体能力。
 
 其余一切都属于**环境**：聊天 app、node、提醒、管理界面。环境和 runtime 之间只通过事先定义好的接口相连。聊天 app 不知道 runtime 存在；在聊天 app 眼里，Agent 就是一个普通账号。
 
@@ -73,15 +73,15 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palac
 | 包 | 内容 |
 |---|---|
 | `packages/chat`（`@palace/chat`） | 聊天 app |
-| `packages/agent-plugin`（`@palace/agent-plugin`） | Agent 插件契约。一个能力的工具、系统提示和文档在拥有它的包里用插件交给 runtime |
-| `packages/runtime`（`@palace/runtime`） | Agent runtime：内置扩展，并装入各包交来的插件 |
-| `packages/manager`（`@palace/manager`） | Agent Manager、连接器和聊天插件 |
+| `packages/runtime`（`@palace/runtime`） | Agent runtime：原生 `pi-durable` Harness 封装、SQLite 存储、模型凭据与事件观察 |
+| `packages/plugins`（`@palace/plugins`） | 模块化的原生 `pi-durable` 扩展集：终端（`exec_command`/`write_stdin`/`notify_on_exit`）、文件、记忆、子 Agent（`subagent`/`subagent_stop`）、提醒、历史、空闲压缩、文档 |
+| `packages/manager`（`@palace/manager`） | Agent Manager、连接器与聊天扩展（`chatExtension`） |
 | `packages/node-protocol`（`@palace/node-protocol`） | 网关与 node 之间的消息格式，包括工具名和工具结果的形状 |
 | `packages/clock`（`@palace/clock`） | 时钟：`now` 和可中止的 `sleep`，各模块共用，测试里换成可控时钟 |
 | `packages/gateway`（`@palace/gateway`） | node 网关 |
 | `packages/migrations`（`@palace/migrations`） | 迁移：一个存储的结构就是一串按版本递增的迁移（`Migrations`），聊天库和控制库都用它建表和升级 |
 | `packages/control-store`（`@palace/control-store`） | 控制库：几个模块共用 `control.sqlite` 时，各自打开自己的表并按模块迁移结构版本 |
-| `packages/admin`（`@palace/admin`） | 管理模块：Agent 的生命周期和设置、提供商的 API key、模型目录、node 配对、观察 Agent；它打开 Agent Manager，并把 node 网关接成工作区宿主 |
+| `packages/admin`（`@palace/admin`） | 管理模块：Agent 的生命周期和设置、提供商的 API key、模型目录、node 配对、观察 Agent；它打开 Agent Manager，组合 `@palace/plugins` 并把 node 网关接成执行端口 |
 | `packages/testkit`（`@palace/testkit`） | 测试替身和工具，只给测试用 |
 | `apps/control-plane`（`@palace/control-plane`） | Web 外壳后端和组装入口：登录、HTTP 路由、事件流、推送发送器、前端静态文件，`main.ts` 从环境变量启动 |
 | `apps/web`（`@palace/web`） | Vite 网页客户端 |
@@ -96,12 +96,12 @@ Agent 自己决定读什么、做什么、和谁协作、要不要发言。Palac
 | 模块 | 管什么 | 文档 |
 | --- | --- | --- |
 | 聊天 app | 账号、会话、时间线、已读位置、任务、收件事件、实时事件和推送队列。不知道 runtime 存在，Agent 在它眼里只是一种账号 | [packages/chat](../packages/chat/ARCHITECTURE.md) |
-| Agent 插件契约 | 插件：一个能力在拥有它的包里增删，不改 runtime | [packages/agent-plugin](../packages/agent-plugin/ARCHITECTURE.md) |
-| Agent runtime | 一个 Agent 的 Durable Harness 和内置扩展：工作区、提醒、助手、历史，以及后台命令；装入插件，按插件的文档提供按需文档 | [packages/runtime](../packages/runtime/ARCHITECTURE.md) |
-| Agent Manager 和连接器 | 唯一能打开 runtime 的地方，每个 Agent 一条串行队列；聊天插件（聊天工具、聊天系统提示、未读通知）；连接器把收件事件变成通知交给 runtime | [packages/manager](../packages/manager/ARCHITECTURE.md) |
+| Agent runtime | Durable Harness 封装：模型请求与凭据、SQLite 存储生命周期、文件级读写与事件观察 | [packages/runtime](../packages/runtime/ARCHITECTURE.md) |
+| Agent 能力扩展 | 以原生 `pi-durable` `Extension` 实现的模块能力：终端会话、文件、记忆、子 Agent、提醒、历史、空闲压缩、文档 | [packages/plugins](../packages/plugins/ARCHITECTURE.md) |
+| Agent Manager 和连接器 | 唯一能打开 runtime 的地方，每个 Agent 一条串行队列；聊天扩展（聊天工具、聊天系统提示、未读通知）；连接器把收件事件变成通知交给 runtime | [packages/manager](../packages/manager/ARCHITECTURE.md) |
 | Node 网关 | node 的配对、认证、心跳，把整个工具调用转发给 node | [packages/gateway](../packages/gateway/ARCHITECTURE.md) |
-| Node | 宿主账号下的进程，在 Agent 的工作区里执行命令和文件工具；`palace node` CLI | [apps/node](../apps/node/ARCHITECTURE.md) |
-| 管理模块 | 拥有 Agent Manager，管理 Agent、提供商凭据、node 授权、webhook（含 webhook 插件和它的按需文档）、观察和工作区浏览 | [packages/admin](../packages/admin/ARCHITECTURE.md) |
+| Node | 宿主账号下的进程，管理 Agent 工作区的终端会话、`memory_read` 和文件工具；`palace node` CLI | [apps/node](../apps/node/ARCHITECTURE.md) |
+| 管理模块 | 拥有 Agent Manager，组合 `@palace/plugins` 与网关端口，管理 Agent、提供商凭据、node 授权、webhook（含 `webhookExtension` 和文档）、观察和工作区浏览 | [packages/admin](../packages/admin/ARCHITECTURE.md) |
 | 控制面外壳 | 组装各模块，人类登录与管理、HTTP 路由、SSE、Web Push 和 APNs 发送器 | [apps/control-plane](../apps/control-plane/ARCHITECTURE.md) |
 | 网页客户端 | 聊天和管理两个互不 import 的前端模块，共享外壳 | [apps/web](../apps/web/ARCHITECTURE.md) |
 | 移动客户端 | Expo iOS app，覆盖聊天、管理、观察和原生通知 | [apps/mobile](../apps/mobile/ARCHITECTURE.md) |
@@ -208,7 +208,7 @@ Palace 不创建用户、不切换身份、不安装系统软件、不配置 lin
 | 读取推进了已读位置，但工具结果没提交就崩溃，导致丢一页 | 读取和"已展示"写在同一事务里 | 按工具调用 ID 存读取回执，重做时原样返回 |
 | 改配置后要用配置哈希作废已准备的请求 | 哈希、全部中止、重新配置 | 不追溯，下一次请求起生效 |
 | 用量统计反复重写 | 从原始 SSE 里抠数字 | 只读 Durable 的 `pi.usage`，只做观察 |
-| Agent 改了 `MEMORY.md` 的权限，自己的命令就全部失败 | 每次执行前检查 Agent 能改的文件 | 只检查工作目录是否存在 |
+| Agent 改了 `memory/MEMORY.md` 的权限，自己的命令就全部失败 | 每次执行前检查 Agent 能改的文件 | 只检查工作目录是否存在，记忆读取失败时提示降级并复用缓存 |
 | 人类重发消息会产生重复消息 | 没有幂等键 | 浏览器生成 `requestId` |
 | 浏览器的事件游标超前于服务端时检测不到 | 只检查游标是否太旧 | 事件流带一个"纪元"ID，数据重置后纪元改变，客户端重新拉快照 |
 | 提醒是否已处理靠两个时间戳相等来判断 | `completed_at = handled_at` | 提醒存在 Agent 的 Durable 文档里，触发时按 `reminder:<id>` 去重 |

@@ -170,7 +170,10 @@ if ($node.ExitCode -ne 1) { throw "Expected node exit 1, got $($node.ExitCode)" 
     const agentId = randomUUID();
     expect((await gateway.prepareWorkspace(randomUUID(), agentId)).isError).toBe(false);
     const command = gateway
-      .runTool(randomUUID(), agentId, "bash", { command: longCommand("native-service") })
+      .runTool(randomUUID(), agentId, "terminal_exec", {
+        sessionId: randomUUID(),
+        command: longCommand("native-service"),
+      })
       .catch(() => undefined);
     const descendants = await pidsOf(join(workspaces, agentId), "native-service");
     expect(descendants).toHaveLength(3);

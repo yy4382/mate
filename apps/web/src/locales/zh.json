@@ -89,7 +89,7 @@
     "updating": "更新中…",
     "revokeAccess": "收回授权",
     "grantAccess": "授权访问",
-    "theWorkspaceAndMemorymdAreHereAccessIs": "工作区和 MEMORY.md 在这里，始终可以访问。",
+    "theWorkspaceAndMemorymdAreHereAccessIs": "工作区和 memory/MEMORY.md 在这里，始终可以访问。",
     "accessGrantedForSubsequentCalls": "已授权，从下一次调用起可以访问。",
     "accessRevokedCommandsAlreadyStartedWillContinueRunning": "已收回授权，已启动的命令继续运行。",
     "nodeAccess": "Node 访问",

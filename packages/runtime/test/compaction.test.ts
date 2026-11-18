@@ -1,42 +1,23 @@
 import type { ScriptedRequest, ScriptedRequestBody } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
-import { defaultSettings, testAgent, text, within } from "./support.ts";
+import { defaultSettings, testAgent, within } from "./support.ts";
 
-/**
- * A 100k-token window. Palace compacts before a request that would leave less than 16384 tokens of it, and the summary
- * keeps about the newest 20000 tokens verbatim, so the two logs hold more than that: there is something to compact.
- */
 const contextWindow = 100_000;
 const log = (first: string) => [first, ...Array<string>(450).fill("-".repeat(99))].join("\n");
 const logs: Record<string, string> = {
   "cat build.log": log("ERROR: disk quota exceeded on /var/build"),
   "cat test.log": log("PASS: 212 tests"),
 };
-const bash = (command: string) => ({ name: "bash", arguments: { command } });
+const runAction = (input: string) => ({ name: "run_action", arguments: { input } });
 
-/** The summary request asks the model for text alone, so it offers no tools; every conversation request does. */
 const summarizing = (request: ScriptedRequestBody) => request.toolNames().length === 0;
 
-/** What a history tool returns, as far as the model needs it to find and read a record. */
-const HistoryPage = z.object({
-  inContextFrom: z.number(),
-  matched: z.number().optional(),
-  records: z.array(z.object({ n: z.number(), text: z.string() })),
-});
-const page = (request: ScriptedRequest, callId: string) =>
-  HistoryPage.parse(JSON.parse(request.toolOutput(callId) ?? "null"));
-
-/**
- * An Agent that was asked to check the build and read two long logs to answer. Its model reports `reportedTokens` of
- * context with the answer. Its summary requests go to `summaries`.
- */
 async function agentWithLongLogs(reportedTokens?: number) {
   const agent = await testAgent(defaultSettings, { contextWindow });
-  agent.workspace.answerAll((request) => text(logs[String(request.arguments["command"])] ?? ""));
+  agent.tools.answerAll((_tool, args) => logs[String(args["input"])] ?? "");
   agent.provider
-    .step("reads the build log", (request) => void request.call([bash("cat build.log")]))
-    .step("reads the test log", (request) => void request.call([bash("cat test.log")]))
+    .step("reads the build log", (request) => void request.call([runAction("cat build.log")]))
+    .step("reads the test log", (request) => void request.call([runAction("cat test.log")]))
     .step("answers", (request) =>
       request.text(
         "The build failed.",
@@ -50,7 +31,7 @@ async function agentWithLongLogs(reportedTokens?: number) {
 }
 
 describe("compaction", () => {
-  it("compacts a context that outgrew the model's window, works on from the summary, and still reads the compacted records with the history tools", async () => {
+  it("compacts a context that outgrew the model's window and works on from the summary", async () => {
     const { agent, summaries, first } = await agentWithLongLogs(90_000);
     summaries.step("summary", (request) => {
       expect(request.body.model, "the conversation's own model writes the summary").toBe(
@@ -61,62 +42,17 @@ describe("compaction", () => {
       );
       request.text("SUMMARY: the build failed; both logs were read.");
     });
-    let searched = "";
-    let read = "";
-    let found = 0;
-    agent.provider
-      .step("works from the summary", (request) => {
-        expect(request.userTexts(), "the model sees the summary, then the new input").toEqual([
-          expect.stringContaining("SUMMARY: the build failed"),
-          "what exactly failed?",
-        ]);
-        expect(
-          JSON.stringify(request.body.input),
-          "the compacted build log is out of the context",
-        ).not.toContain("disk quota");
-        expect(
-          request.systemTexts().join(),
-          "the Agent is told the older records can be looked up",
-        ).toContain("history_search");
-        [searched = ""] = request.call([
-          { name: "history_search", arguments: { query: "DISK QUOTA" } },
-        ]);
-      })
-      .step("reads the record it found", (request) => {
-        const result = page(request, searched);
-        const [hit] = result.records;
-        expect(hit?.text, "the search finds the compacted record").toContain(
-          "ERROR: disk quota exceeded on /var/build",
-        );
-        expect(result.matched, "the only match: the search's own call is no record").toBe(1);
-        found = hit?.n ?? 0;
-        expect(found, "which is older than the context").toBeLessThan(result.inContextFrom);
-        [read = ""] = request.call([{ name: "history_read", arguments: { from: found } }]);
-      })
-      .step("searches again", (request) => {
-        const result = page(request, read);
-        expect(
-          result.records.map(({ n }) => n),
-          "the read starts at the record, which alone fills it",
-        ).toEqual([found]);
-        const [record] = result.records;
-        expect(record?.text, "from its start").toMatch(
-          /^ERROR: disk quota exceeded on \/var\/build/,
-        );
-        expect(record?.text.length, "cut to the read budget").toBeLessThan(
-          logs["cat build.log"]?.length ?? 0,
-        );
-        [searched = ""] = request.call([
-          { name: "history_search", arguments: { query: "disk quota" } },
-        ]);
-      })
-      .step("answers", (request) => {
-        expect(
-          page(request, searched).records.map(({ n }) => n),
-          "looking the record up added no matches",
-        ).toEqual([found]);
-        request.text("The disk quota on /var/build was exceeded.");
-      });
+    agent.provider.step("works from the summary", (request) => {
+      expect(request.userTexts(), "the model sees the summary, then the new input").toEqual([
+        expect.stringContaining("SUMMARY: the build failed"),
+        "what exactly failed?",
+      ]);
+      expect(
+        JSON.stringify(request.body.input),
+        "the compacted build log is out of the context",
+      ).not.toContain("disk quota");
+      request.text("The disk quota on /var/build was exceeded.");
+    });
 
     const input = await first.runtime.submit("what exactly failed?", { requestId: "m2" });
 

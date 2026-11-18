@@ -67,7 +67,7 @@ export interface NodeGateway {
     signal: AbortSignal,
   ): Promise<ToolResult>;
 
-  /** Prepare a workspace, initializing MEMORY.md only for home access. Repeating preserves existing files. */
+  /** Prepare a workspace, initializing the `memory` directory only for home access. Repeating preserves existing files. */
   prepareWorkspace(nodeId: string, agentId: string, access?: NodeAccess): Promise<ToolResult>;
 
   /**

@@ -89,7 +89,7 @@
     "updating": "Updating…",
     "revokeAccess": "Revoke access",
     "grantAccess": "Grant access",
-    "theWorkspaceAndMemorymdAreHereAccessIs": "The workspace and MEMORY.md are here. Access is always allowed.",
+    "theWorkspaceAndMemorymdAreHereAccessIs": "The workspace and memory/MEMORY.md are here. Access is always allowed.",
     "accessGrantedForSubsequentCalls": "Access granted for subsequent calls.",
     "accessRevokedCommandsAlreadyStartedWillContinueRunning": "Access revoked. Commands already started will continue running.",
     "nodeAccess": "Node access",

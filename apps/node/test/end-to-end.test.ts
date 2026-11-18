@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -6,6 +7,7 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import { createNodeGateway, type NodeGateway } from "@palace/gateway";
 import { loadOrCreateNodeIdentity, startNode } from "@palace/node";
 import {
+  displayTerminalResult,
   eventually,
   longCommand,
   pidsOf,
@@ -66,11 +68,12 @@ async function gatewayWithNode(): Promise<{
  * together; the specific edge cases live in their own module tests.
  */
 describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
-  it("pairs, prepares a workspace, and runs a bash command that writes a real file", async () => {
+  it("pairs, prepares a workspace, and runs a terminal command that writes a real file", async () => {
     const { gateway, nodeId, workspacesRoot } = await gatewayWithNode();
     const agentId = "agent-e2e";
     await gateway.prepareWorkspace(nodeId, agentId);
-    expect(existsSync(join(workspacesRoot, agentId, "MEMORY.md"))).toBe(true);
+    expect(existsSync(join(workspacesRoot, agentId, "memory"))).toBe(true);
+    expect(existsSync(join(workspacesRoot, agentId, "MEMORY.md"))).toBe(false);
 
     // The command runs in the workspace directory, writes a real file there, and streams what it prints.
     const chunks: string[] = [];
@@ -79,8 +82,9 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
       agentId,
       {
         access: "home",
-        tool: "bash",
+        tool: "terminal_exec",
         arguments: {
+          sessionId: randomUUID(),
           command: scriptCommand(
             join(workspacesRoot, agentId),
             'import { writeFileSync } from "node:fs"; writeFileSync("marker.txt", "e2e-marker"); console.log("e2e-streamed");',
@@ -92,7 +96,7 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     );
 
     expect(result.isError).toBe(false);
-    expect(chunks.join(""), "bash output streams to the caller").toContain("e2e-streamed");
+    expect(chunks.join(""), "terminal output streams to the caller").toContain("e2e-streamed");
     const markerPath = join(workspacesRoot, agentId, "marker.txt");
     expect(readFileSync(markerPath, "utf8").trim()).toBe("e2e-marker");
 
@@ -118,14 +122,14 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     const callA = gateway.runTool(
       nodeId,
       "agent-a",
-      { access: "home", tool: "bash", arguments: { command } },
+      { access: "home", tool: "terminal_exec", arguments: { sessionId: randomUUID(), command } },
       (chunk) => outputs["agent-a"].push(chunk),
       abortA.signal,
     );
     const callB = gateway.runTool(
       nodeId,
       "agent-b",
-      { access: "home", tool: "bash", arguments: { command } },
+      { access: "home", tool: "terminal_exec", arguments: { sessionId: randomUUID(), command } },
       (chunk) => outputs["agent-b"].push(chunk),
       never,
     );
@@ -144,7 +148,7 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     expect(pidsB.every(running), "agent-b's command still runs").toBe(true);
 
     writeFileSync(join(workspacesRoot, "agent-b", "running.go"), "");
-    const resultB = await callB;
+    const resultB = displayTerminalResult(await callB);
     expect(textOf(resultB), "agent-b gets its own result").toContain("done in agent-b");
     expect(outputs["agent-b"].join("")).toContain("done in agent-b");
     expect(outputs["agent-a"].join(""), "nothing of agent-b's reached agent-a").not.toContain(
@@ -168,7 +172,7 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
         kind: "directory",
         path: ".",
         entries: [
-          { name: "MEMORY.md", kind: "file", size: 0 },
+          { name: "memory", kind: "directory" },
           { name: "out", kind: "symlink" },
           { name: "plan.md", kind: "file", size: 7 },
         ],
@@ -200,7 +204,11 @@ describe("End-to-end: gateway ↔ node over a real WebSocket", () => {
     const result = await gateway.runTool(
       nodeId,
       "agent-e2e",
-      { access: "home", tool: "bash", arguments: { command: "echo hi" } },
+      {
+        access: "home",
+        tool: "terminal_exec",
+        arguments: { sessionId: randomUUID(), command: "echo hi" },
+      },
       () => {},
       never,
     );

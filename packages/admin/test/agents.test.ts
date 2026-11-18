@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { encodeMemoryReadOutcome } from "@palace/node-protocol";
 import { describe, expect, it, vi } from "vitest";
 import { AdminError } from "../src/index.ts";
 import { environment, ok, settings } from "./support.ts";
@@ -18,7 +19,7 @@ describe("creating an Agent on a node", () => {
     env.provider
       .step(
         "build",
-        (request) => void request.call([{ name: "bash", arguments: { command: "make" } }]),
+        (request) => void request.call([{ name: "exec_command", arguments: { command: "make" } }]),
       )
       .step("done", (request) => {
         expect(request.toolOutputs().join(), "the chosen node answered").toContain("built");
@@ -64,7 +65,10 @@ describe("creating an Agent on a node", () => {
 
     const second = await env.open();
     env.provider
-      .step("ls", (request) => void request.call([{ name: "bash", arguments: { command: "ls" } }]))
+      .step(
+        "ls",
+        (request) => void request.call([{ name: "exec_command", arguments: { command: "ls" } }]),
+      )
       .step("done", (request) => request.text("listed"));
     env.post("What is there, @richard?", [account]);
     await env.provider.received(2);
@@ -158,7 +162,7 @@ describe("pausing, resuming and deleting", () => {
     const { agentId, account } = await env.hire(admin, node.nodeId);
     env.provider.step(
       "build",
-      (request) => void request.call([{ name: "bash", arguments: { command: "make" } }]),
+      (request) => void request.call([{ name: "exec_command", arguments: { command: "make" } }]),
     );
     env.post("Build it, @richard.", [account]);
     await vi.waitFor(() => expect(node.calls, "the command is running").toHaveLength(1));
@@ -207,5 +211,34 @@ describe("pausing, resuming and deleting", () => {
     expect(env.chat.liveSnapshot(env.owner).accounts).toContainEqual(
       expect.objectContaining({ accountId: account, active: false }),
     );
+  });
+
+  it("loads memory/MEMORY.md from the home node into the system prompt before turns", async () => {
+    const env = await environment();
+    const admin = await env.open();
+    env.useScriptedProvider(admin);
+    const node = await env.pairNode(admin);
+    node.answerMemory = async () => ({
+      outputs: [],
+      result: encodeMemoryReadOutcome({
+        status: "ok",
+        content: "- keep deploy logs concise",
+        truncated: false,
+      }),
+    });
+    const { agentId, account } = await env.hire(admin, node.nodeId);
+    env.provider.step("check memory", (request) => {
+      const system = request.systemTexts().join("\n");
+      expect(system).toContain('<memory_index path="memory/MEMORY.md">');
+      expect(system).toContain("- keep deploy logs concise");
+      request.text("checked");
+    });
+
+    env.post("Check memory, @richard.", [account]);
+    await env.provider.received(1);
+    expect(node.memoryReads).toContainEqual(
+      expect.objectContaining({ agentId, tool: "memory_read", access: "home" }),
+    );
+    env.provider.assertComplete();
   });
 });

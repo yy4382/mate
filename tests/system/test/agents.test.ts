@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { chatSend, notices, output, readUnread, startSystem, until } from "./support.ts";
@@ -68,7 +68,7 @@ describe("Agents work together", () => {
       })
       .step("work", (request) => {
         calls.work = request.call([
-          { name: "bash", arguments: { command: "echo the report > report.txt" } },
+          { name: "exec_command", arguments: { command: "echo the report > report.txt" } },
         ]);
       })
       .step("complete", (request) => {
@@ -101,7 +101,7 @@ describe("Agents work together", () => {
     });
   });
 
-  it("8. an Agent has a work assistant run a command, and passes the assistant's report on to the channel", async () => {
+  it("8. an Agent has a subagent run a command, and passes the subagent's report on to the channel", async () => {
     const system = await startSystem();
     const richard = await system.hire("richard", "Richard");
     const general = await system.channel("general", [richard.account]);
@@ -116,7 +116,10 @@ describe("Agents work together", () => {
       .step("work", async (request) => {
         await delegated.promise;
         work = request.call([
-          { name: "bash", arguments: { command: "echo built > artifact.txt; cat artifact.txt" } },
+          {
+            name: "exec_command",
+            arguments: { command: "echo built > artifact.txt; cat artifact.txt" },
+          },
         ]);
       })
       .step("answer", (request) => {
@@ -128,19 +131,27 @@ describe("Agents work together", () => {
       .step("spawn", (request) => {
         expect(output(request, read[0])).toContain("Get the artifact built.");
         spawn = request.call([
-          { name: "assistant", arguments: { action: "spawn", name: "worker", message: task } },
+          {
+            name: "subagent",
+            arguments: { prompt: task, description: "worker", run_in_background: true },
+          },
         ]);
       })
       .step("wait", (request) => {
-        expect(output(request, spawn[0])).toContain("Started worker.");
+        expect(JSON.parse(output(request, spawn[0]))).toEqual({
+          status: "running",
+          agent_id: "sub-1",
+          description: "worker",
+        });
         delegated.resolve();
         request.text("delegated");
       })
       .step("report", (request) => {
-        expect(
-          request.userTexts(),
-          "the assistant's answer reaches the Agent as an input",
-        ).toContainEqual("[assistant worker answered] artifact.txt says: built");
+        const latest = request.userTexts().at(-1) ?? "";
+        expect(latest, "the subagent's answer reaches the Agent as an input").toContain(
+          '<subagent_result agent_id="sub-1" status="completed">',
+        );
+        expect(latest).toContain("artifact.txt says: built");
         sent = request.call([chatSend(general, "The worker built it: artifact.txt says built.")]);
       })
       .step("done", (request) => {
@@ -158,5 +169,99 @@ describe("Agents work together", () => {
     await system.provider.received(7);
     system.provider.assertComplete();
     expect(readFileSync(join(richard.workspace, "artifact.txt"), "utf8")).toBe("built\n");
+  });
+
+  it("10. writes $PALACE_MEMORY_DIR/MEMORY.md for auto-loading and wakes on notify_on_exit", async () => {
+    const system = await startSystem();
+    const ada = await system.hire("ada", "Ada");
+    const general = await system.channel("general", [ada.account]);
+    expect(existsSync(join(ada.workspace, "memory"))).toBe(true);
+    expect(existsSync(join(ada.workspace, "MEMORY.md"))).toBe(false);
+    const bgTurnEnded = Promise.withResolvers<void>();
+    let calls: string[] = [];
+
+    system.provider
+      .step("notice", (request) => {
+        expect(request.systemTexts().join("\n")).toContain("memory/MEMORY.md does not exist yet.");
+        calls = request.call([readUnread(general)]);
+      })
+      .step("write memory", (request) => {
+        expect(output(request, calls[0])).toContain("Configure memory and run jobs.");
+        calls = request.call([
+          {
+            name: "exec_command",
+            arguments: {
+              command: `printf '%s\\n' '- prefer staging' > "$PALACE_MEMORY_DIR/MEMORY.md"`,
+            },
+          },
+        ]);
+      })
+      .step("interactive stdin", (request) => {
+        const systemPrompt = request.systemTexts().join("\n");
+        expect(systemPrompt).toContain('<memory_index path="memory/MEMORY.md">');
+        expect(systemPrompt).toContain("- prefer staging");
+        calls = request.call([
+          {
+            name: "exec_command",
+            arguments: {
+              command: "read line; printf 'got:%s\\n' \"$line\"",
+              yield_time_ms: 50,
+            },
+          },
+        ]);
+      })
+      .step("send stdin", (request) => {
+        const sessionId = /session_id: ([^\]]+)/.exec(output(request, calls[0]))?.[1];
+        expect(sessionId).toBeTruthy();
+        calls = request.call([
+          {
+            name: "write_stdin",
+            arguments: {
+              session_id: sessionId,
+              chars: "hello-pipe\n",
+              eof: true,
+              yield_time_ms: 5000,
+            },
+          },
+        ]);
+      })
+      .step("start notify_on_exit job", (request) => {
+        expect(output(request, calls[0])).toContain("got:hello-pipe");
+        calls = request.call([
+          {
+            name: "exec_command",
+            arguments: {
+              command: "touch bg.started; until [ -f bg.go ]; do sleep 0.05; done; echo bg-done",
+              yield_time_ms: 50,
+              notify_on_exit: true,
+            },
+          },
+        ]);
+      })
+      .step("end turn before job exits", (request) => {
+        expect(output(request, calls[0])).toContain("[Exit notification armed:");
+        bgTurnEnded.resolve();
+        request.text("Waiting for background job.");
+      })
+      .step("notified on exit", (request) => {
+        const notification = request.userTexts().at(-1) ?? "";
+        expect(notification).toContain("<command_notification");
+        expect(notification).toContain('status="completed"');
+        expect(notification).toContain("bg-done");
+        calls = request.call([chatSend(general, "Memory loaded and job notified.")]);
+      })
+      .step("done", (request) => {
+        expect(output(request, calls[0])).toContain('"status":"sent"');
+        request.text("done");
+      });
+
+    await system.post(general, "@ada Configure memory and run jobs.", [ada.account]);
+    await bgTurnEnded.promise;
+    await system.fileExists(join(ada.workspace, "bg.started"));
+    writeFileSync(join(ada.workspace, "bg.go"), "");
+
+    await system.messageFrom(general, ada.account, "Memory loaded and job notified.");
+    await system.provider.received(8);
+    system.provider.assertComplete();
   });
 });

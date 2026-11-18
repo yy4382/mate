@@ -4,6 +4,9 @@ export {
   openAgentRuntime,
   type AgentRuntimeOptions,
   type EventWatch,
+  type RuntimeBackgroundContext,
+  type RuntimeBackgroundTask,
+  type RuntimeLifetime,
   type SubmittedInput,
   type WhenBusy,
   type WithdrawResult,
@@ -12,9 +15,9 @@ export type { AgentSettings } from "./settings.ts";
 export { AgentStoreMissing } from "./storage.ts";
 export {
   configureAgentFile,
-  readAgentState,
-  setAgentPaused,
-  type AgentState,
+  readAgentFile,
+  withAgentFileSession,
+  type AgentFileState,
   type AgentUsage,
 } from "./agent-state.ts";
 export type { Clock } from "@palace/clock";
@@ -28,10 +31,3 @@ export {
   type ModelResolver,
   type ProviderCredentials,
 } from "./models.ts";
-export type {
-  WorkspaceNode,
-  WorkspacePort,
-  WorkspaceToolName,
-  WorkspaceToolRequest,
-  WorkspaceToolResult,
-} from "./workspace-tools.ts";

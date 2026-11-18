@@ -1,21 +1,21 @@
 import type { ScriptedRequest } from "@palace/testkit";
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "../src/index.ts";
-import { testAgent, text, within } from "./support.ts";
+import { testAgent, within } from "./support.ts";
 
 describe("crash and reopen", () => {
-  it("does not rerun a command interrupted by a crash, and tells the model it was interrupted", async () => {
+  it("does not rerun an unsafe tool interrupted by a crash, and tells the model it was interrupted", async () => {
     const agent = await testAgent();
     agent.provider.step(
       "start",
-      (request) => void request.call([{ name: "bash", arguments: { command: "deploy" } }]),
+      (request) => void request.call([{ name: "run_action", arguments: { input: "deploy" } }]),
     );
     const first = await agent.open();
     await first.runtime.submit("deploy it", { requestId: "m1" });
-    const call = await agent.workspace.nextCall();
+    const call = await agent.tools.nextCall();
 
     first.database().freeze();
-    call.resolve(text("deployed"));
+    call.resolve("deployed");
 
     agent.provider.step("after restart", (request) => {
       expect(request.toolOutputs().join()).toMatch(/interrupt/i);
@@ -24,22 +24,22 @@ describe("crash and reopen", () => {
     const second = await agent.open();
     await second.runtime.idle();
 
-    expect(agent.workspace.calls).toHaveLength(1);
+    expect(agent.tools.calls).toHaveLength(1);
     agent.provider.assertComplete();
   });
 
-  it("reruns an interrupted read after a crash", async () => {
+  it("reruns an interrupted replay-safe tool after a crash", async () => {
     const agent = await testAgent();
     agent.provider.step(
       "start",
-      (request) => void request.call([{ name: "read", arguments: { path: "MEMORY.md" } }]),
+      (request) => void request.call([{ name: "read_item", arguments: { key: "notes" } }]),
     );
     const first = await agent.open();
     await first.runtime.submit("recall", { requestId: "m1" });
-    const call = await agent.workspace.nextCall();
+    const call = await agent.tools.nextCall();
     first.database().freeze();
 
-    agent.workspace.answerAll(() => text("notes"));
+    agent.tools.answerAll(() => "notes");
     agent.provider.step("after restart", (request) => {
       expect(request.toolOutputs().join()).toContain("notes");
       request.text("recalled");
@@ -47,9 +47,9 @@ describe("crash and reopen", () => {
     const second = await agent.open();
     await second.runtime.idle();
 
-    expect(agent.workspace.calls, "the same read, sent again").toEqual([
-      call.request,
-      call.request,
+    expect(agent.tools.calls, "the same read, sent again").toEqual([
+      { tool: call.tool, args: call.args },
+      { tool: call.tool, args: call.args },
     ]);
     agent.provider.assertComplete();
   });
@@ -58,7 +58,7 @@ describe("crash and reopen", () => {
     const agent = await testAgent();
     agent.provider.step(
       "partial",
-      (request) => void request.partialCall("bash", '{"command":"rm -'),
+      (request) => void request.partialCall("run_action", '{"input":"rm -'),
     );
     const first = await agent.open();
     await first.runtime.submit("clean up", { requestId: "m1" });
@@ -70,7 +70,7 @@ describe("crash and reopen", () => {
     const second = await agent.open();
     await second.runtime.idle();
 
-    expect(agent.workspace.calls).toEqual([]);
+    expect(agent.tools.calls).toEqual([]);
     agent.provider.assertComplete();
   });
 
@@ -98,7 +98,6 @@ describe("closing", () => {
     const closeCalled = Promise.withResolvers<void>();
     let closing: Promise<void> | undefined;
     let runtime: AgentRuntime | undefined;
-    // The credentials are read as the request is prepared, so closing here is closing just before it is sent.
     const first = await agent.open({
       credentials: () => {
         if (runtime !== undefined) {
@@ -127,7 +126,7 @@ describe("closing", () => {
   const stages: [string, (request: ScriptedRequest) => Promise<void>][] = [
     ["waiting for the response headers", (request) => request.hang()],
     ["streaming the answer", (request) => request.partialText("Half of my ans")],
-    ["streaming a tool call", (request) => request.partialCall("bash", '{"command":"rm -')],
+    ["streaming a tool call", (request) => request.partialCall("run_action", '{"input":"rm -')],
   ];
   it.each(stages)(
     "aborts a model request %s, and nothing the closed runtime received reaches the reopened one",
@@ -150,24 +149,24 @@ describe("closing", () => {
         resumed?.body.input,
         "the resumed request is the aborted one again: no part of the aborted answer was kept",
       ).toEqual(aborted?.body.input);
-      expect(agent.workspace.calls, "the half-streamed tool call never ran").toEqual([]);
+      expect(agent.tools.calls, "the half-streamed tool call never ran").toEqual([]);
       agent.provider.assertComplete();
     },
   );
 
-  it("aborts an in-flight workspace call", async () => {
+  it("aborts an in-flight tool call", async () => {
     const agent = await testAgent();
     agent.provider.step(
       "start",
-      (request) => void request.call([{ name: "bash", arguments: { command: "sleep 100" } }]),
+      (request) => void request.call([{ name: "run_action", arguments: { input: "sleep 100" } }]),
     );
     const { runtime } = await agent.open();
     await runtime.submit("wait", { requestId: "m1" });
-    const call = await agent.workspace.nextCall();
+    const call = await agent.tools.nextCall();
 
     await runtime.close();
 
-    expect(call.signal.aborted).toBe(true);
+    expect(call.signal?.aborted).toBe(true);
   });
 
   it("closes itself instead of hanging when its storage fails, and reopens from what was stored", async () => {
@@ -191,15 +190,15 @@ describe("storage failure", () => {
     const agent = await testAgent();
     agent.provider.step(
       "start",
-      (request) => void request.call([{ name: "bash", arguments: { command: "make" } }]),
+      (request) => void request.call([{ name: "run_action", arguments: { input: "make" } }]),
     );
     const fatal = Promise.withResolvers<unknown>();
     const first = await agent.open({ onFatal: fatal.resolve });
     const input = await first.runtime.submit("build it", { requestId: "m1" });
-    const call = await agent.workspace.nextCall();
+    const call = await agent.tools.nextCall();
 
     first.database().failNextWrites(1);
-    call.resolve(text("built"));
+    call.resolve("built");
 
     await expect(within(2000, "onFatal", fatal.promise)).resolves.toBeInstanceOf(Error);
     const outcome = (promise: Promise<unknown>) =>
@@ -266,12 +265,12 @@ describe("settings", () => {
       model: { provider: "openai", modelId: "gpt-5-mini" },
       thinkingLevel: "low",
     });
-    agent.workspace.answerAll(() => text("a.txt"));
+    agent.tools.answerAll(() => "a.txt");
     const configured = Promise.withResolvers<void>();
     agent.provider
       .step("in flight during the change", async (request) => {
         await configured.promise;
-        request.call([{ name: "bash", arguments: { command: "ls" } }]);
+        request.call([{ name: "run_action", arguments: { input: "ls" } }]);
       })
       .step("after the change", (request) => {
         expect(request.toolOutputs().join(), "the in-flight answer was used").toContain("a.txt");

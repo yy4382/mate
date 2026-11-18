@@ -377,7 +377,7 @@
     "home_node": "主 Node",
     "granted": "已授权",
     "not_granted": "未授权",
-    "always_accessible_the_home_workspace_and_memorymd": "固定可访问，主工作区和 MEMORY.md 在这里。",
+    "always_accessible_the_home_workspace_and_memorymd": "固定可访问，主工作区和 memory/MEMORY.md 在这里。",
     "access_is_granted_the_workspace_will_be": "访问权已生效，工作区准备会在 Node 在线后进行。",
     "access_revoked_commands_already_running_continue_and": "已收回授权。已启动的命令继续运行，工作区保留。",
     "access_granted_it_applies_to_the_next": "访问权已生效，从下一次调用起可以访问。",

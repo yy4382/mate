@@ -4,13 +4,14 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { ChatApp } from "@palace/chat";
 import { createNodeGateway } from "@palace/gateway";
-import type {
-  GatewayBrowse,
-  GatewayRunTool,
-  NodeBrowseOutcome,
-  NodeAccess,
-  NodeSystem,
-  ToolResult,
+import {
+  encodeMemoryReadOutcome,
+  type GatewayBrowse,
+  type GatewayRunTool,
+  type NodeBrowseOutcome,
+  type NodeAccess,
+  type NodeSystem,
+  type ToolResult,
 } from "@palace/node-protocol";
 import { FakeClock, FakeNode, ScriptedProvider, temporaryDirectory } from "@palace/testkit";
 import { onTestFinished } from "vitest";
@@ -43,10 +44,14 @@ export type TestNode = {
   readonly prepared: { agentId: string; access: NodeAccess }[];
   answerPrepare: (agentId: string) => Promise<void>;
   readonly calls: GatewayRunTool[];
+  /** `memory_read` calls requested for the system prompt before turns. */
+  readonly memoryReads: GatewayRunTool[];
   /** Request IDs of the calls the gateway told it to stop. */
   readonly stopped: string[];
   /** How the next tool calls are answered; by default at once with "ok". */
   answer: (call: GatewayRunTool) => Promise<Answer>;
+  /** How `memory_read` calls are answered; by default with `{ status: "missing" }`. */
+  answerMemory: (call: GatewayRunTool) => Promise<Answer>;
   readonly browses: GatewayBrowse[];
   /** How the next browses are answered; by default with an empty directory. */
   answerBrowse: (browse: GatewayBrowse) => Promise<NodeBrowseOutcome>;
@@ -137,6 +142,7 @@ export async function environment(data = temporaryDirectory()) {
       const identity = newIdentity();
       const prepared: { agentId: string; access: NodeAccess }[] = [];
       const calls: GatewayRunTool[] = [];
+      const memoryReads: GatewayRunTool[] = [];
       const stopped: string[] = [];
       const browses: GatewayBrowse[] = [];
       const node = new FakeNode({
@@ -150,6 +156,10 @@ export async function environment(data = temporaryDirectory()) {
           await test.answerPrepare(agentId);
         },
         onRunTool: (call) => {
+          if (call.tool === "memory_read") {
+            memoryReads.push(call);
+            return test.answerMemory(call);
+          }
           calls.push(call);
           return test.answer(call);
         },
@@ -166,8 +176,13 @@ export async function environment(data = temporaryDirectory()) {
         prepared,
         answerPrepare: async () => {},
         calls,
+        memoryReads,
         stopped,
         answer: async () => ({ outputs: [], result: ok("ok") }),
+        answerMemory: async () => ({
+          outputs: [],
+          result: encodeMemoryReadOutcome({ status: "missing" }),
+        }),
         browses,
         answerBrowse: async ({ path }) => ({
           ok: true,

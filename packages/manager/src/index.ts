@@ -1,16 +1,19 @@
 export {
   AgentCreationFailed,
   AgentIdInUse,
+  ManagerAgentStateDoc,
   openAgentManager,
-  type AgentManager,
+  type AgentBuildContext,
   type AgentDescription,
+  type AgentManager,
   type AgentManagerOptions,
   type AgentSpec,
   type AgentSummary,
-  type WorkspaceHost,
+  type BuiltAgent,
 } from "./manager.ts";
-export { chatPlugin } from "./chat-plugin.ts";
+export { chatExtension } from "./chat-plugin.ts";
 export {
+  ChatCursorsDoc,
   connectInbox,
   type InboxConnector,
   type InboxConnectorOptions,

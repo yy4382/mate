@@ -82,6 +82,7 @@ export function connect(
     lifetime.signal.addEventListener("abort", () => {
       for (const stop of calls.values()) stop.abort();
       calls.clear();
+      executor.connectionClosed();
     });
 
     const send = (message: NodeRequest) => {

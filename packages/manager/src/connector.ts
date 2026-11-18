@@ -1,10 +1,18 @@
+import { defineDoc } from "@earendil-works/pi-durable";
 import type { ChatApp } from "@palace/chat";
 import type { Clock } from "@palace/clock";
 import type { AgentRuntime } from "@palace/runtime";
 import { renderNotice } from "./chat-plugin.ts";
 
+export const ChatCursorsDoc = defineDoc<{ positions: Record<string, number> }>({
+  kind: "mate.cursors",
+  version: 1,
+  scope: "session",
+  initial: () => ({ positions: {} }),
+});
+
 /** What the connector needs of a runtime: its inbox and its position in the chat inbox events. */
-export type NoticeTarget = Pick<AgentRuntime, "cursor" | "advanceCursor" | "submit">;
+export type NoticeTarget = Pick<AgentRuntime, "snapshot" | "commit" | "submit">;
 
 export type InboxConnectorOptions = {
   readonly chat: ChatApp;
@@ -41,7 +49,7 @@ export async function connectInbox(options: InboxConnectorOptions): Promise<Inbo
   let running: Promise<void> | undefined;
 
   const pass = async () => {
-    const from = await runtime.cursor(CURSOR);
+    const from = (await runtime.snapshot(ChatCursorsDoc))?.positions[CURSOR] ?? 0;
     let last = from;
     for (;;) {
       const page = chat.inboxEvents(account, { after: last, limit: PAGE });
@@ -57,7 +65,10 @@ export async function connectInbox(options: InboxConnectorOptions): Promise<Inbo
         whenBusy: "steer",
         replaces: "notice:",
       });
-    await runtime.advanceCursor(CURSOR, last);
+    await runtime.commit(async (tx) => {
+      const doc = await tx.doc(ChatCursorsDoc);
+      if (last > (doc.positions[CURSOR] ?? 0)) doc.positions[CURSOR] = last;
+    });
   };
 
   const signal = () => {

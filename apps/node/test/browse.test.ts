@@ -25,8 +25,8 @@ describe("node workspace browsing (TESTS 1.4)", () => {
         path: ".",
         entries: [
           { name: "..notes.md", kind: "file", size: 4 },
-          { name: "MEMORY.md", kind: "file", size: 0 },
           { name: "latest", kind: "symlink" },
+          { name: "memory", kind: "directory" },
           { name: "notes", kind: "directory" },
         ],
         truncated: false,
@@ -136,11 +136,12 @@ describe("node workspace browsing (TESTS 1.4)", () => {
     const node = await connectedNode();
     const { agentId, workspace } = await node.agent();
 
+    writeFileSync(join(workspace, "file.txt"), "x");
     expect(await browse(node, agentId, "absent.txt")).toMatchObject({
       ok: false,
       reason: "not-found",
     });
-    expect(await browse(node, agentId, "MEMORY.md/inside")).toMatchObject({
+    expect(await browse(node, agentId, "file.txt/inside")).toMatchObject({
       ok: false,
       reason: "not-found",
     });

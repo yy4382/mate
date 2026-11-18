@@ -1,4 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord";
+import type { Models } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
   Harness,
@@ -7,40 +9,58 @@ import {
   type AgentEvent,
   type CompactionPolicy,
   type Conversation,
+  type ConversationDocFamilyToken,
+  type ConversationDocToken,
+  type ConversationId,
   type Cursor,
-  defineDoc,
+  type Extension,
+  type JsonObject,
+  type SessionDocFamilyToken,
+  type SessionDocToken,
+  type Tx,
 } from "@earendil-works/pi-durable";
 import type { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { AgentStateDoc, type AgentUsage } from "./agent-state.ts";
-import { AssistantsDoc, IDENTITY_SECTION, assistants, reconcileAssistants } from "./assistants.ts";
-import type { Plugin } from "@palace/agent-plugin";
 import { systemClock, type Clock } from "@palace/clock";
-import { DOCS_EXTENSION, docsExtension } from "./docs.ts";
-import { historyExtension } from "./history.ts";
-import { idleCompaction } from "./idle-compaction.ts";
+import type { AgentUsage } from "./agent-state.ts";
 import { Lifetime, guardDatabase } from "./lifetime.ts";
 import { agentModels, type CredentialsLookup, type ModelResolver } from "./models.ts";
-import { installPlugins, type Capability } from "./plugins.ts";
-import { reminders } from "./reminders.ts";
 import { agentChange, configureConversations, settingsOf, type AgentSettings } from "./settings.ts";
 import { createAgentStorage, openAgentStorage, type DatabaseWrapper } from "./storage.ts";
-import { workspaceExtension, type WorkspacePort } from "./workspace-tools.ts";
+
+export type RuntimeLifetime = {
+  readonly signal: AbortSignal;
+  orFailure<T>(work: Promise<T>): Promise<T>;
+};
+
+export type RuntimeBackgroundContext = {
+  readonly harness: Harness;
+  readonly root: Conversation;
+  readonly models: Models;
+  readonly compaction: CompactionPolicy;
+  readonly lifetime: RuntimeLifetime;
+  readonly clock: Clock;
+};
+
+export type RuntimeBackgroundTask = (ctx: RuntimeBackgroundContext) => Promise<void>;
 
 export type AgentRuntimeOptions = {
   /** `data/agents/<agentId>.sqlite`. Opening fails with `AgentStoreMissing` when it does not exist. */
   readonly file: string;
   /** Each provider's credentials, read at every model request, so a changed key applies from the next request. */
   readonly credentials: CredentialsLookup;
-  readonly workspace: WorkspacePort;
   /**
-   * The capabilities owned outside the runtime, installed after its own in this order. A primary plugin is absent from
-   * assistants' conversations.
+   * Native `pi-durable` extensions installed into the registry and offered to the primary conversation via
+   * `settings.extensions`. Duplicate extension names fail opening.
    */
-  readonly plugins?: readonly Plugin[];
+  readonly extensions?: readonly Extension[];
+  /** Background loops started after `harness.resume()`, exiting when `ctx.lifetime.signal` aborts. */
+  readonly background?: readonly RuntimeBackgroundTask[];
   readonly resolveModel?: ModelResolver;
   readonly wrapDatabase?: DatabaseWrapper;
   /** Called once if the runtime's storage fails. The runtime is then dead and the Agent should be reopened. */
   readonly onFatal?: (error: unknown) => void;
+  /** Receives non-fatal extension or background failures. */
+  readonly onReport?: (error: unknown) => void;
   /** Defaults to the system clock. Override in tests. */
   readonly clock?: Clock;
 };
@@ -67,12 +87,12 @@ export type EventWatch = {
 };
 
 /**
- * Create a new Agent store for an Agent whose workspace is on `nodeId`. The node is recorded in the same commit as the
- * settings and never changes. The Agent exists once this resolves.
+ * Create a new Agent store. The settings and optional initial documents are written in the root creation commit.
+ * The Agent exists once this resolves.
  */
 export async function createAgentStore(
   file: string,
-  agent: { readonly nodeId: string; readonly settings: AgentSettings },
+  options: { readonly settings: AgentSettings; readonly init?: (tx: Tx) => void | Promise<void> },
 ): Promise<void> {
   await createAgentStorage(file, async (storage) => {
     const lifetime = new Lifetime();
@@ -87,10 +107,8 @@ export async function createAgentStore(
     );
     try {
       await harness.root(BACKGROUND_CONTEXT, {
-        agent: agentChange(agent.settings),
-        init: async (tx) => {
-          (await tx.doc(AgentStateDoc)).nodeId = agent.nodeId;
-        },
+        agent: agentChange(options.settings),
+        ...(options.init === undefined ? {} : { init: options.init }),
       });
     } finally {
       await harness.close(BACKGROUND_CONTEXT);
@@ -100,50 +118,17 @@ export async function createAgentStore(
 
 /** Open an existing Agent's runtime and resume whatever its last process left unfinished. */
 export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<AgentRuntime> {
+  const extensions = [...(options.extensions ?? [])];
+  const names = new Set<string>();
+  for (const extension of extensions) {
+    if (names.has(extension.name)) throw new Error(`duplicate extension name: ${extension.name}`);
+    names.add(extension.name);
+  }
   const lifetime = new Lifetime();
   const clock = options.clock ?? systemClock;
   const registry = createRegistry();
-  const primaryOnly = () =>
-    capabilities.filter(({ scope }) => scope === "primary").map(({ extension }) => extension);
-  const { primary: assistantsPrimary, identity: assistantsIdentity } = assistants(primaryOnly);
-  const { extension: remindersExtension, run: runReminders } = reminders(clock, lifetime.signal);
+  for (const extension of extensions) registry.install(extension);
   const models = agentModels(options.credentials, options.resolveModel, lifetime.signal);
-  const { extension: idleExtension, run: runIdleCompaction } = idleCompaction(
-    clock,
-    lifetime,
-    models,
-    compaction,
-  );
-  // `harness` exists by the time a tool runs: no task is scheduled before `resume()`.
-  const workspace = workspaceExtension(options.workspace, lifetime.signal, (id, context) =>
-    harness.abortTask(id, context),
-  );
-  const installed = installPlugins(
-    options.plugins ?? [],
-    [
-      workspace,
-      historyExtension,
-      assistantsPrimary,
-      remindersExtension,
-      idleExtension,
-      assistantsIdentity,
-    ]
-      .map(({ name }) => name)
-      // A plugin's name is also its section key, so it must not take the identity section's either.
-      .concat(DOCS_EXTENSION, IDENTITY_SECTION),
-  );
-  const docs = docsExtension(installed.topics);
-  // The install order is the order of the prompt's sections.
-  const capabilities: readonly Capability[] = [
-    { extension: workspace, scope: "every" },
-    { extension: historyExtension, scope: "every" },
-    ...(docs === undefined ? [] : [{ extension: docs, scope: "every" } as const]),
-    { extension: assistantsPrimary, scope: "primary" },
-    { extension: remindersExtension, scope: "primary" },
-    { extension: idleExtension, scope: "primary" },
-    ...installed.capabilities,
-    { extension: assistantsIdentity, scope: "every" },
-  ];
   const { storage, database } = await openAgentStorage(
     options.file,
     options.wrapDatabase,
@@ -153,20 +138,20 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
         options.onFatal?.(error);
       }),
   );
-  for (const { extension } of capabilities) registry.install(extension);
   const harness = await Harness.open(
     storage,
     {
       models,
       registry,
-      settings: { toolExecution: "sequential", compaction },
+      now: () => clock.now(),
+      settings: { extensions, toolExecution: "sequential", compaction },
+      ...(options.onReport === undefined ? {} : { onReport: options.onReport }),
     },
     BACKGROUND_CONTEXT,
   );
   let root: Conversation;
   try {
     root = await harness.root(BACKGROUND_CONTEXT);
-    await reconcileAssistants(harness, root, primaryOnly());
   } catch (error) {
     lifetime.end();
     await harness.close(BACKGROUND_CONTEXT).catch(() => undefined);
@@ -174,11 +159,19 @@ export async function openAgentRuntime(options: AgentRuntimeOptions): Promise<Ag
   }
   const runtime = new AgentRuntime(harness, storage, root, lifetime);
   harness.resume();
-  // Run the reminder and idle compaction loops in the background; they exit when the lifetime ends.
-  void runReminders(harness, root);
-  void runIdleCompaction(root, (requestId) =>
-    storage.submissionByRequest(root.id, requestId, BACKGROUND_CONTEXT),
-  );
+  const backgroundContext: RuntimeBackgroundContext = {
+    harness,
+    root,
+    models,
+    compaction,
+    lifetime,
+    clock,
+  };
+  for (const run of options.background ?? []) {
+    void run(backgroundContext).catch((error) => {
+      if (!lifetime.signal.aborted) options.onReport?.(error);
+    });
+  }
   return runtime;
 }
 
@@ -194,6 +187,10 @@ export class AgentRuntime {
     this.#storage = storage;
     this.#root = root;
     this.#lifetime = lifetime;
+  }
+
+  get rootConversationId(): ConversationId {
+    return this.#root.id;
   }
 
   /**
@@ -258,27 +255,80 @@ export class AgentRuntime {
     } while (cursor !== undefined);
   }
 
-  /** The position stored under `name`, 0 until first advanced. */
-  async cursor(name: string): Promise<number> {
-    return (await this.#harness.snapshot(CursorsDoc, BACKGROUND_CONTEXT))?.positions[name] ?? 0;
+  /** Read a committed Durable document snapshot on this runtime's store. */
+  snapshot<T extends JsonObject>(token: SessionDocToken<T>): Promise<Readonly<T> | undefined>;
+  snapshot<T extends JsonObject>(
+    token: ConversationDocToken<T>,
+    conversationId: ConversationId,
+  ): Promise<Readonly<T> | undefined>;
+  snapshot<T extends JsonObject, I extends JsonValue>(
+    token: SessionDocFamilyToken<T, I>,
+    key: string,
+  ): Promise<Readonly<T> | undefined>;
+  snapshot<T extends JsonObject, I extends JsonValue>(
+    token: ConversationDocFamilyToken<T, I>,
+    conversationId: ConversationId,
+    key: string,
+  ): Promise<Readonly<T> | undefined>;
+  snapshot(
+    token:
+      | SessionDocToken<JsonObject>
+      | ConversationDocToken<JsonObject>
+      | SessionDocFamilyToken<JsonObject, JsonValue>
+      | ConversationDocFamilyToken<JsonObject, JsonValue>,
+    arg1?: ConversationId | string,
+    arg2?: string,
+  ): Promise<Readonly<JsonObject> | undefined> {
+    if (this.#lifetime.failure !== undefined) return Promise.reject(this.#lifetime.failure.error);
+    if (arg1 === undefined) {
+      return this.#lifetime.orFailure(
+        this.#harness.snapshot(token as SessionDocToken<JsonObject>, BACKGROUND_CONTEXT),
+      );
+    }
+    if (arg2 !== undefined) {
+      return this.#lifetime.orFailure(
+        this.#harness.snapshot(
+          token as ConversationDocFamilyToken<JsonObject, JsonValue>,
+          arg1 as ConversationId,
+          arg2,
+          BACKGROUND_CONTEXT,
+        ),
+      );
+    }
+    if (typeof arg1 === "string") {
+      return this.#lifetime.orFailure(
+        this.#harness.snapshot(
+          token as SessionDocFamilyToken<JsonObject, JsonValue>,
+          arg1,
+          BACKGROUND_CONTEXT,
+        ),
+      );
+    }
+    return this.#lifetime.orFailure(
+      this.#harness.snapshot(token as ConversationDocToken<JsonObject>, arg1, BACKGROUND_CONTEXT),
+    );
   }
 
-  /** Move the position stored under `name` forward to `value`. A position never moves back. */
-  async advanceCursor(name: string, value: number): Promise<void> {
-    await this.#harness.commit(async (tx) => {
-      const state = await tx.doc(CursorsDoc);
-      if ((state.positions[name] ?? 0) < value) state.positions[name] = value;
-    }, BACKGROUND_CONTEXT);
+  /** Run an atomic transaction on this runtime's Durable session. */
+  commit<T>(change: (tx: Tx) => T | Promise<T>): Promise<T> {
+    if (this.#lifetime.failure !== undefined) return Promise.reject(this.#lifetime.failure.error);
+    return this.#lifetime.orFailure(this.#harness.commit(change, BACKGROUND_CONTEXT));
   }
 
   /** Change the model settings of every conversation of this Agent, effective from each one's next request. */
   async configure(settings: AgentSettings): Promise<void> {
-    await this.#root.commit((tx) => configureConversations(tx, settings), BACKGROUND_CONTEXT);
+    await this.#lifetime.orFailure(
+      this.#root.commit((tx) => configureConversations(tx, settings), BACKGROUND_CONTEXT),
+    );
   }
 
   /** The model settings the Agent's conversations share. */
   async settings(): Promise<AgentSettings> {
-    return settingsOf(await this.#harness.snapshot(AgentDoc, this.#root.id, BACKGROUND_CONTEXT));
+    return settingsOf(
+      await this.#lifetime.orFailure(
+        this.#harness.snapshot(AgentDoc, this.#root.id, BACKGROUND_CONTEXT),
+      ),
+    );
   }
 
   /** Resolves when no work is running or queued. Rejects once the runtime is closed or dead. */
@@ -287,35 +337,31 @@ export class AgentRuntime {
   }
 
   async usage(): Promise<AgentUsage> {
-    return this.#harness.usage(BACKGROUND_CONTEXT);
-  }
-
-  /** The names of the Agent's work assistants, whose conversations `watchEvents` can watch too. */
-  async assistants(): Promise<string[]> {
-    const state = await this.#harness.snapshot(AssistantsDoc, this.#root.id, BACKGROUND_CONTEXT);
-    return Object.keys(state?.assistants ?? {}).sort();
+    return this.#lifetime.orFailure(this.#harness.usage(BACKGROUND_CONTEXT));
   }
 
   /**
-   * Watch the primary conversation's agent events, or with `assistant` that assistant's: streamed text, tool calls and
-   * their output, inputs, usage. The first batch is a snapshot of the conversation as it is; a listener that falls far
-   * behind gets a fresh snapshot instead of the batches it missed. Watching writes nothing. The watch ends when it is
-   * stopped, the runtime closes, or the runtime dies from a storage failure; a runtime that has already died refuses
-   * the watch.
+   * Watch the primary conversation's agent events, or with `conversationId` that conversation's: streamed text, tool
+   * calls and their output, inputs, usage. The first batch is a snapshot of the conversation as it is; a listener that
+   * falls far behind gets a fresh snapshot instead of the batches it missed. Watching writes nothing. The watch ends
+   * when it is stopped, the runtime closes, or the runtime dies from a storage failure; a runtime that has already
+   * died refuses the watch.
    */
   async watchEvents(
     listener: (events: readonly AgentEvent[]) => void | Promise<void>,
-    options: { assistant?: string } = {},
+    options: { conversationId?: ConversationId } = {},
   ): Promise<EventWatch> {
-    const { assistant } = options;
-    let conversationId = this.#root.id;
-    if (assistant !== undefined) {
-      const state = await this.#harness.snapshot(AssistantsDoc, this.#root.id, BACKGROUND_CONTEXT);
-      const found = state?.assistants[assistant];
-      if (found === undefined) throw new Error(`no assistant named ${assistant}`);
-      conversationId = found.conversationId;
+    if (this.#lifetime.failure !== undefined) throw this.#lifetime.failure.error;
+    const conversationId = options.conversationId ?? this.#root.id;
+    if (options.conversationId !== undefined) {
+      const found = await this.#lifetime.orFailure(
+        this.#harness.conversation(conversationId, BACKGROUND_CONTEXT),
+      );
+      if (found === undefined) throw new Error(`no conversation ${conversationId}`);
     }
-    const stream = await watchEvents(this.#harness, conversationId, BACKGROUND_CONTEXT);
+    const stream = await this.#lifetime.orFailure(
+      watchEvents(this.#harness, conversationId, BACKGROUND_CONTEXT),
+    );
     try {
       await listener([stream.snapshot]);
     } catch (error) {
@@ -348,8 +394,8 @@ export class AgentRuntime {
 }
 
 /**
- * Durable's own defaults today, stated here so that the thresholds packages/runtime/ARCHITECTURE.md documents cannot move with a
- * Durable release.
+ * Durable's own defaults today, stated here so that the thresholds packages/runtime/ARCHITECTURE.md documents cannot
+ * move with a Durable release.
  */
 const compaction: CompactionPolicy = {
   enabled: true,
@@ -357,11 +403,3 @@ const compaction: CompactionPolicy = {
   keepRecentTokens: 20_000,
   backgroundTokens: 32_768,
 };
-
-/** Positions of the Agent's environment in its sources, such as the connector's in the chat inbox, by name. */
-const CursorsDoc = defineDoc<{ positions: Record<string, number> }>({
-  kind: "mate.cursors",
-  version: 1,
-  scope: "session",
-  initial: () => ({ positions: {} }),
-});

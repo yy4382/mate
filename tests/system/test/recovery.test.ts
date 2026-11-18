@@ -24,7 +24,9 @@ describe("the system survives losing a part of itself", { timeout: 60_000 }, () 
     system.provider
       .step("notice", (request) => void request.call([readUnread(general)]))
       .step("start the long command", (request) => {
-        command = request.call([{ name: "bash", arguments: { command: longCommand() } }]);
+        command = request.call([
+          { name: "exec_command", arguments: { command: longCommand(), yield_time_ms: 30_000 } },
+        ]);
       })
       .step("after the restart", async (request) => {
         expect(
@@ -32,7 +34,7 @@ describe("the system survives losing a part of itself", { timeout: 60_000 }, () 
           "the Agent is told the command was interrupted",
         ).toMatch(/interrupt/i);
         await system.nodeOnline();
-        check = request.call([{ name: "bash", arguments: { command: "cat runs.log" } }]);
+        check = request.call([{ name: "exec_command", arguments: { command: "cat runs.log" } }]);
       })
       .step("report", (request) => {
         expect(output(request, check[0]).trim(), "the command ran once").toBe("run");
@@ -69,7 +71,9 @@ describe("the system survives losing a part of itself", { timeout: 60_000 }, () 
     system.provider
       .step("notice", (request) => void request.call([readUnread(general)]))
       .step("start the long command", (request) => {
-        command = request.call([{ name: "bash", arguments: { command: longCommand() } }]);
+        command = request.call([
+          { name: "exec_command", arguments: { command: longCommand(), yield_time_ms: 30_000 } },
+        ]);
       })
       .step("after the cut", (request) => {
         expect(output(request, command[0]), "the result is unknown").toMatch(/unknown/i);
@@ -88,7 +92,7 @@ describe("the system survives losing a part of itself", { timeout: 60_000 }, () 
       .step("second notice", (request) => void (again = request.call([readUnread(general)])))
       .step("run on the restored node", (request) => {
         expect(output(request, again[0])).toContain("Try again.");
-        fresh = request.call([{ name: "bash", arguments: { command: "echo hello" } }]);
+        fresh = request.call([{ name: "exec_command", arguments: { command: "echo hello" } }]);
       })
       .step("report", (request) => {
         expect(output(request, fresh[0]).trim()).toBe("hello");
@@ -126,7 +130,9 @@ describe("the system survives losing a part of itself", { timeout: 60_000 }, () 
     system.provider
       .step("notice", (request) => void request.call([readUnread(general)]))
       .step("start the long command", (request) => {
-        command = request.call([{ name: "bash", arguments: { command: longCommand() } }]);
+        command = request.call([
+          { name: "exec_command", arguments: { command: longCommand(), yield_time_ms: 30_000 } },
+        ]);
       })
       .step("after the resume", async (request) => {
         expect(resumeRequested, "no model call happened while the Agent was paused").toBe(true);

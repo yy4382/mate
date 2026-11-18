@@ -21,7 +21,7 @@ Web 外壳记在 `humans` 表里的人类权限：`admin` 或 `member`。`member
 避免：用户、成员（成员指会话的成员）。
 
 **Agent**（agent）
-一个长期存在的 AI 同事。它有稳定的 Agent ID、一个聊天账号、各 node 上独立的工作区和一个 runtime。一次模型调用、一次 run 或一个工作助手，都不是新的 Agent。
+一个长期存在的 AI 同事。它有稳定的 Agent ID、一个聊天账号、各 node 上独立的工作区和一个 runtime。一次模型调用、一次 run 或一个子 Agent，都不是新的 Agent。
 
 **Agent ID**（agentId）
 创建 Agent 时生成的唯一标识，之后永不改变。它同时用作 Agent 存储文件的文件名，以及 Agent 聊天账号的 `externalId`。
@@ -88,7 +88,7 @@ Palace 内置的类 Slack 聊天系统。它不知道 runtime 和模型的存在
 避免：订阅、participant（只说了一半）。
 
 **账号视角**（AccountChat）
-`ChatApp.forAccount(account)` 返回的对象：一组绑定到这个账号的读写方法，参数与 `ChatApp` 相同、去掉 account。它是聊天插件（`chatPlugin`）的入参，聊天工具只通过它调用聊天 app。
+`ChatApp.forAccount(account)` 返回的对象：一组绑定到这个账号的读写方法，参数与 `ChatApp` 相同、去掉 account。它是聊天扩展（`chatExtension`）的入参，聊天工具只通过它调用聊天 app。
 
 **未读摘要**（unread summary）
 某个账号当前各条时间线的未读数量，以及其中有没有 @ 自己的消息。每条时间线还带上会话类型、显示名（频道名；私信为对方的 handle）、是否讨论串和最新一条未读的发送者，足够直接渲染一条通知。
@@ -135,39 +135,32 @@ Palace 内置的类 Slack 聊天系统。它不知道 runtime 和模型的存在
 **requestId**
 调用方为一次操作生成的稳定 ID。接收方按它去重：同一个 ID 只生效一次，重复调用返回第一次的结果。Agent 的聊天工具调用用 Durable 的工具调用 ID 作为 requestId；人类的网页请求由浏览器生成。node 工具调用没有调用方的 requestId：网关为每次调用生成自己的请求 ID，只用来对应输出、结果和停止。
 
-## Agent runtime
+## Agent runtime 与能力扩展
 
 **runtime**（agent runtime）
-运行一个 Agent 的组件。它包装一个 Durable Harness，加上 Palace 的内置扩展和装入的插件。每个 Agent 一个 runtime、一个存储文件。
+运行一个 Agent 的核心容器。它仅负责打开和管理一个 `@earendil-works/pi-durable` Harness、SQLite 存储、模型凭据查询及事件观察。具体业务能力由组装方以原生 `Extension` 与后台循环传入 `openAgentRuntime`。每个 Agent 一个 runtime、一个存储文件。
 
 **Durable**
-`@earendil-works/pi-durable` 库。它负责 agent loop、重试、对话记录、收件箱和上下文压缩。
+`@earendil-works/pi-durable` 库。它负责 agent loop、重试、对话记录、收件箱、扩展注册表、子对话配置和上下文压缩。
 
 **Harness**
 Durable 里"一个存储，加上在这个存储上运行 agent 的机制"。runtime 打开时打开它，关闭时关闭它。
 
 **主对话**（primary conversation）
-一个 Agent 的主上下文。它在所有频道、讨论串和私信之间延续，只有它能使用主对话专属插件的工具，如聊天工具。
+一个 Agent 的主上下文。它在所有频道、讨论串和私信之间延续，只有它拿到主对话专属扩展（如聊天、`subagent`、`reminders`）。
 避免：session（在聊天语境里有歧义）。
 
-**工作助手**（assistant）
-Agent 派生出来的另一个 Durable 对话，有自己的上下文。它和主对话共享模型设置、凭据和工作区，没有聊天工具，完成后向派生它的对话汇报。进入它的输入都经过投递，所以它的每个回答都汇报给主对话。它不是新的 Agent。
-
-**投递**（delivery）
-把一条输入交给这个 Agent 的某个对话的 Durable 后台任务，跑在主对话里。目标是工作助手时，它等助手回答，再把回答作为助手汇报提交给主对话，恰好一次。进入助手对话的输入只走这一条路：主对话发给助手的消息、助手自己的后台命令汇报都是投递。
+**子 Agent**（subagent）
+由 `subagent` 工具（`subagentExtension`）从主对话派生的隔离 Durable 子对话，通过正向白名单仅拥有安全扩展（终端、文件、记忆、历史、文档、空闲压缩），没有聊天或递归 `subagent` 工具。默认前台运行并等待返回结果；传 `run_in_background: true` 时立即返回 `agent_id`，并在子对话及其所有后台任务（含 `notify_on_exit`）均完成后以 `<subagent_result>` 向父对话汇报；支持 `resume` 继续同一上下文和 `subagent_stop` 中止运行。
 
 **收件箱**（inbox）
-Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入都提交到这里：通知、webhook、提醒、助手汇报。Agent 正在运行时，以 steer 方式提交的输入会插在当前这轮工具调用之后。
+Durable 为每个对话维护的输入队列。外界给 runtime 的所有输入都提交到这里：通知、webhook、提醒、`<command_notification>` 和 `<subagent_result>`。Agent 正在运行时，以 `steer` 方式提交的输入会插在当前这轮工具调用之后。
 
 **run**
 从一条输入开始，到模型给出最终回答为止的这段工作。run 只是 Durable 内部的概念，Palace 不记录它，也不检查它"是否仍然有效"。
 
 **扩展**（extension）
-装进 Durable 的一组工具和系统提示片段。runtime 的内置能力（工作区、提醒、助手、历史）是扩展；插件装入时也成为一个同名扩展。
-
-**插件**（plugin）
-一个 Agent 能力的纯数据描述，由拥有这个能力的包用 `definePlugin` 交给 runtime：名字、作用范围（只有主对话，或工作助手也有）、系统提示的一段、工具和按需文档。聊天是 manager 的插件，webhook 是 admin 的插件。增删一个能力只改这一处，不改 runtime。插件名存进助手对话的配置里，发布后不能改。runtime 自己的内置能力不是插件。
-避免：把内置扩展也叫插件。
+`@earendil-works/pi-durable` 原生的一组工具、提示段、文档和后台任务定义（`Extension`）。`@palace/plugins`、Manager 的 `chatExtension` 和 Admin 的 `webhookExtension` 直接定义原生扩展并交给 runtime 安装；子 Agent 的能力边界通过 `configure(tx, childId, { extensions })` 的显式白名单控制，不引入额外的抽象插件层。
 
 **可重做**（replay-safe）
 声明了 `replay: "safe"` 的工具，崩溃后会被重新执行。只有只读的工具，或者按 requestId 幂等的工具才能这样声明。
@@ -194,8 +187,8 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 **空闲压缩**（idle compaction）
 主对话空闲到提示缓存快过期、上一次请求的输入又很大时，runtime 不用 Durable 的摘要请求，而是提交一条普通输入，请 Agent 自己写**检查点摘要**（checkpoint summary）。这条请求延续对话的前缀，读热缓存。回答合格时，runtime 写一个以这条回答为起点的压缩标记，之后的上下文从它开始。所有模型用同一条规则：空闲到缓存寿命的 5/6 时压缩，阈值是 Durable 后台压缩线的 2/3 与 200k 中较小的一个；缓存寿命等参数按默认值、提供商、模型三层数据给出；只在主对话做。
 
-**后台命令**（background command）
-`bash` 带 `background: true` 启动的命令。工具调用立即返回一个命令 ID，也就是 runtime 为它在发起它的对话里建的 Durable 后台任务的 ID；命令在 node 上继续跑，对话照常工作、照常空闲。结束时它的结果经投递作为一条输入（`command:<ID>`）提交给发起它的对话，恰好一次。用 `bash_stop` 停止，停止后不再汇报。runtime 关闭时它和前台命令一样被停掉，重新打开后汇报一次"已中断"，不会重跑。
+**终端会话**（terminal session）
+`exec_command` 在 node 端 `TerminalSessions` 中建立的命令进程会话，由 UUID `session_id` 标识。`yield_time_ms` 到期未退出时返回 `running: true` 与 `session_id`，此后可通过 `write_stdin` 发送标准输入、传 `eof: true`、传 `kill: true` 或继续拉取增量输出，并由管理模块按 `session_id` 自动路由到当初启动该会话的 node。启用 `notify_on_exit: true` 时在当前对话创建 `palace.terminal.watch` 后台任务调用 `terminal_wait`：若命令退出前已被 `write_stdin` 观察消费，node 返回 `{ consumed: true }` 且不再唤醒；否则结束后以 `steer` 提交 `<command_notification>` 自动唤醒对话。
 避免：后台进程（命令自己放到后台的进程，比如 `cmd &`，仍归命令进程组管）；守护进程（Agent 用 `setsid` 等方式自己脱离进程组的进程，Palace 不跟踪）。
 
 ## 环境与控制面
@@ -281,13 +274,13 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 node 根据当前系统选择能力的唯一入口。Linux、macOS、Windows 各有一条记录，提供 shell、命令进程组、服务、布局、启动命令、身份权限检查和工作区路径规则。共同的安装流程、超时和输出处理不随平台复制。
 
 **主 node**（home node）
-Agent 创建时选定的 node，ID 记在 Agent 文件里且不变。缺省工具调用在这里执行，主工作区中的 MEMORY.md 是记忆入口约定；经授权的其他 node 也各有独立执行目录。
+Agent 创建时选定的 node，ID 记在 Agent 文件里且不变。缺省工具调用在这里执行，主工作区中的 `memory/MEMORY.md` 是记忆索引入口（`PALACE_MEMORY_DIR` 指向 `./memory/`）；经授权的其他 node 也各有独立执行目录。
 
 **访问**（visit）
 Agent 把一次工具调用送到已授权的非主 node，在该 node 上自己的工作区里执行。
 
 **访问方式**（NodeAccess）
-管理模块判断的主 node 或访问关系，主 node 为 `home`，获准访问的非主 node 为 `visit`，经网关交给 node。两者使用相同的 Agent 工作区路径，但主工作区只显式初始化，访问工作区的准备不初始化 MEMORY.md。
+管理模块判断的主 node 或访问关系，主 node 为 `home`，获准访问的非主 node 为 `visit`，经网关交给 node。两者使用相同的 Agent 工作区路径，但只有主工作区显式初始化 `memory/` 目录，访问工作区的准备不初始化 `memory/` 或 `MEMORY.md`。
 
 **Palace 文档**（Palace docs）
 拥有该功能的包里的 `docs/<topic>.md`（如 `packages/admin/docs/webhooks.md`），由它的插件交给 runtime：讲某个 Palace 功能怎么工作的、写给模型的英文文档，每个主题一个文件，front matter 的 `description` 是索引里的一行。Agent 用 `palace_docs({ topic })` 按需阅读，不进系统提示；工具描述就是索引。Agent 为读懂收到的东西而必须知道的（如 webhook 标签的含义）不在这里，留在插件的提示里。
@@ -324,8 +317,8 @@ node 的发布产物：一个 gzip 压缩的 ustar 归档，里面只有 `palace
 **程序目录**（program directory）
 POSIX 上是 `~/.local/lib/palace-node`，Windows 上是 `%LOCALAPPDATA%\Palace\program`，保存解开的发布包。只会被整个放入（暂存目录改名）或整个挪走，从不原地修改，所以要么是完整的某个版本，要么不存在。配置、node 身份和工作区都在它之外。
 
-**工作区宿主**（WorkspaceHost）
-Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准备工作区（`prepare(nodeId, agentId)`，可以重复调用），以及给出以这个主 node 为缺省目标的工作区端口（`port(nodeId, agentId)`）。Agent 的主 node 在创建时选定，记在它的文件里，之后不变；Manager 打开 Agent 时从文件读出它。node 网关本身不实现它（`NodeGateway` 没有 `port()`），由管理模块把网关适配成它：创建 Agent 时以 `home`、在线授权时以 `visit` 调 `prepareWorkspace`，端口按调用的可选 node 名字和最新授权选择目标，连同访问方式转给 `runTool` 并带上调用的 signal；`nodes()` 列出当前可访问的 node。Manager 的测试里用假的。
+**网关工作区端口**（gatewayAgentPorts）
+管理模块（`packages/admin/src/workspaces.ts`）为单个打开中的 Agent 构造的执行适配器，基于最新 `nodeAccess` 为 `@palace/plugins` 提供 `terminal`（维护有界 `sessionId -> nodeId` 路由映射并负责退出前清理）、`files` 和 `memory` 三个窄端口。
 
 **node 网关**（node gateway）
 控制面里负责 node 配对、认证、心跳，并把工具调用整个转发给 node 的模块。
@@ -334,16 +327,16 @@ Agent Manager 看到的"工作区在哪里"：在主 node 上为一个 Agent 准
 `@palace/gateway` 对 node 操作的拒绝异常，带 `reason`，与线路上的 `gateway.error` 消息不同（[packages/gateway/ARCHITECTURE.md](packages/gateway/ARCHITECTURE.md)）。
 
 **工作区**（workspace）
-Agent 在某个 node 上的工作目录，路径为该 node 的 `<工作区根>/<agentId>`。每个已授权 node 上各有独立工作区，文件不跨 node 同步。主工作区在创建 Agent 时初始化目录与 MEMORY.md，执行时缺少目录就报错；访问工作区在授权或首次在线调用时准备，不初始化 MEMORY.md，已有文件保持原样。
+Agent 在某个 node 上的工作目录，路径为该 node 的 `<工作区根>/<agentId>`。每个已授权 node 上各有独立工作区，文件不跨 node 同步。主工作区在创建 Agent 时初始化 `memory/` 目录，执行时缺少工作目录就报错；访问工作区在授权或首次在线调用时准备，不初始化 `memory/`，已有文件保持原样。
 
 **启动快照**（startup snapshot）
-Linux/macOS node 每个进程捕获一次的账号 Bash/zsh 交互启动结果（选项、变量、函数、别名），存在数据目录，每条命令先 `source` 它。见 [apps/node/ARCHITECTURE.md](apps/node/ARCHITECTURE.md)。
+Linux/macOS node 每个进程捕获一次的账号 Bash/zsh 交互启动结果（选项、变量、函数、别名），存在数据目录，每条命令先 `source` 它并保留 `PALACE_*` 环境变量。见 [apps/node/ARCHITECTURE.md](apps/node/ARCHITECTURE.md)。
 
 **命令目录**（command directory）
-node 在内存里按 Agent 和对话记住的目录：该对话下一条命令从这里开始，前台命令结束时更新，后台命令不更新。初始为工作区，node 重启清空。文件工具不受它影响。
+node 在内存里按 Agent 和对话记住的目录：该对话下一条命令从这里开始，`exec_command` 前台完成时更新，yield 转后台时不更新。初始为工作区，node 重启清空。文件工具不受它影响。
 
 **命令进程组**（command process group）
-node 对一条 `bash` 命令所启动进程的把手：POSIX 进程组或 Windows 活 shell 的进程树，追踪与停止的范围见 [apps/node/ARCHITECTURE.md](apps/node/ARCHITECTURE.md)。
+node 对一条终端命令所启动进程的把手：POSIX 进程组或 Windows 活 shell 的进程树，追踪与停止的范围见 [apps/node/ARCHITECTURE.md](apps/node/ARCHITECTURE.md)。
 
 **身份拒绝**（gateway.refused）
 网关对 node 说"你是谁"不被接受：身份不认识（`unknown_identity`）、签名或公钥无效、配对令牌被拒。除了"不认识"而 node 手里有配对令牌的情况，node 收到后退出，不重试。
@@ -360,8 +353,8 @@ node 上限定在一个根目录里的 Durable `NodeExecutionEnv`：Durable 的 
 管理员在管理界面里只读地看 Agent 工作区里的一个路径：管理模块的 `browseWorkspace` 调网关的 `browse`，网关发 `gateway.browse`，node 回 `node.browse.result`。回答是一个**浏览结果**（`WorkspaceListing`：目录的条目、文件开头的文字，或者不是文字的文件的大小，各有上限并标明截断），或者一个拒绝（`outside-workspace`、`not-found`、`unreadable`，网关再加上 `node-offline`）。不经过 runtime，暂停的 Agent 也能看。
 避免：把它当成工具调用（它不是 `runTool`，没有输出流，也没有停止）。
 
-**MEMORY.md**
-主工作区里的记忆入口约定，由 Agent 自己维护和选择读取。Palace 只在显式准备主工作区时创建缺失的空文件，执行工具不检查它，runtime 恢复也不自动读取它。远端工作区不预置这个文件。
+**memory/MEMORY.md 与 `PALACE_MEMORY_DIR`**
+主工作区 `./memory/` 目录中唯二约定位置。`memoryExtension` 在每次模型请求前调用主 node 的 `memory_read`（上限 64 KiB）只自动加载 `memory/MEMORY.md` 进系统提示；主 node 命令环境注入 `PALACE_MEMORY_DIR=<workspace>/memory`，模型可在 `./memory/` 下自由存放脚本与主题文件而不膨胀系统提示。远端工作区不初始化该目录。
 
 ## 共用基础
 

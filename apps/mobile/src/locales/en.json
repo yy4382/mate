@@ -377,7 +377,7 @@
     "home_node": "Home Node",
     "granted": "Granted",
     "not_granted": "Not granted",
-    "always_accessible_the_home_workspace_and_memorymd": "Always accessible. The home workspace and MEMORY.md are here.",
+    "always_accessible_the_home_workspace_and_memorymd": "Always accessible. The home workspace and memory/MEMORY.md are here.",
     "access_is_granted_the_workspace_will_be": "Access is granted. The workspace will be prepared when the Node is online.",
     "access_revoked_commands_already_running_continue_and": "Access revoked. Commands already running continue, and the workspace is kept.",
     "access_granted_it_applies_to_the_next": "Access granted. It applies to the next call.",
