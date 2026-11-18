@@ -1,5 +1,6 @@
 import {
   decodeMemoryReadOutcome,
+  decodeTerminalOutcome,
   decodeTerminalWaitOutcome,
   EXEC_YIELD_MS,
   MEMORY_MAX_BYTES,
@@ -464,6 +465,123 @@ describe("node commands (TESTS 1.1)", () => {
         consumed: false,
         outcome: { sessionId: second.sessionId, output: "only-0-watches\n" },
       },
+    });
+  });
+
+  it("suppresses terminal_wait wakeups for the conversation that issued kill: true while waking other waiting conversations", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const killedStart = await execCommand(
+      node,
+      agentId,
+      { command: longCommand("kill-watch"), yieldTimeMs: 0 },
+      undefined,
+      undefined,
+      1,
+    );
+    expect(killedStart.outcome?.running).toBe(true);
+    const pids = await pidsOf(workspace, "kill-watch");
+    expect(pids.every(running)).toBe(true);
+
+    const waitSameConversation = node.run(
+      agentId,
+      "terminal_wait",
+      { sessionId: killedStart.sessionId },
+      undefined,
+      undefined,
+      1,
+    );
+    const waitOtherConversation = node.run(
+      agentId,
+      "terminal_wait",
+      { sessionId: killedStart.sessionId },
+      undefined,
+      undefined,
+      2,
+    );
+
+    const killRaw = await node.run(
+      agentId,
+      "terminal_write",
+      { sessionId: killedStart.sessionId, kill: true },
+      undefined,
+      undefined,
+      1,
+    );
+    expect(decodeTerminalOutcome(killRaw)).toMatchObject({
+      ok: true,
+      outcome: {
+        running: false,
+        ending: { kind: "killed" },
+      },
+    });
+
+    const [resSame, resOther] = await Promise.all([waitSameConversation, waitOtherConversation]);
+    expect(decodeTerminalWaitOutcome(resSame)).toEqual({
+      ok: true,
+      outcome: { consumed: true },
+    });
+    expect(decodeTerminalWaitOutcome(resOther)).toMatchObject({
+      ok: true,
+      outcome: {
+        consumed: false,
+        outcome: {
+          running: false,
+          sessionId: killedStart.sessionId,
+          ending: { kind: "killed" },
+        },
+      },
+    });
+
+    // Repeated kill on the same finished session still returns a structured non-running outcome.
+    const repeatKill = await node.run(
+      agentId,
+      "terminal_write",
+      { sessionId: killedStart.sessionId, kill: true },
+      undefined,
+      undefined,
+      1,
+    );
+    expect(decodeTerminalOutcome(repeatKill)).toMatchObject({
+      ok: true,
+      outcome: { running: false, ending: { kind: "killed" } },
+    });
+    for (const pid of pids) await eventually(() => !running(pid), `killed pid ${pid}`);
+  });
+
+  it("returns consumed: true for observeOnly waits even after more than 256 short sessions finish", async () => {
+    const node = await connectedNode();
+    const { agentId, workspace } = await node.agent();
+    const fast = scriptCommand(workspace, "process.exit(0);", "fast-evict");
+    const sessionIds: string[] = [];
+
+    for (let batch = 0; batch < 14; batch++) {
+      const started = await Promise.all(
+        Array.from({ length: 20 }, () =>
+          execCommand(node, agentId, { command: fast, yieldTimeMs: 0 }),
+        ),
+      );
+      for (const entry of started) sessionIds.push(entry.sessionId);
+      // Reap each batch's exits before launching the next batch to keep concurrent processes bounded.
+      const observed = await Promise.all(
+        started.map((entry) =>
+          node.run(agentId, "terminal_wait", { sessionId: entry.sessionId, observeOnly: true }),
+        ),
+      );
+      for (const res of observed) {
+        expect(decodeTerminalWaitOutcome(res)).toEqual({ ok: true, outcome: { consumed: true } });
+      }
+    }
+
+    // Oldest session is now past MAX_SETTLED (256), yet observeOnly still confirms it is not active.
+    const oldest = sessionIds[0]!;
+    const afterEviction = await node.run(agentId, "terminal_wait", {
+      sessionId: oldest,
+      observeOnly: true,
+    });
+    expect(decodeTerminalWaitOutcome(afterEviction)).toEqual({
+      ok: true,
+      outcome: { consumed: true },
     });
   });
 

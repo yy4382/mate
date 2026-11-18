@@ -47,6 +47,7 @@ const refusals: Record<AdminErrorReason, string> & Record<string, string> = {
   "unknown-model": t("management.the_model_is_no_longer_in_the"),
   "unsupported-thinking-level": t("management.this_model_does_not_support_the_selected"),
   "agent-closed": t("management.the_agent_is_not_running_resume_it"),
+  "stop-unconfirmed": t("management.agent_paused_stop_unconfirmed"),
   "unknown-assistant": t("management.this_assistant_could_not_be_found_refresh"),
   "unknown-webhook": t("management.this_webhook_no_longer_exists"),
   "invalid-webhook": t("management.the_webhook_or_its_secret_is_not_valid"),

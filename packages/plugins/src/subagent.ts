@@ -1,4 +1,5 @@
 import type { Context } from "@earendil-works/chord";
+import { withAbortSignal } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
@@ -171,17 +172,8 @@ function defineRunTask(options: { readonly name: string; readonly background: bo
           return;
         }
 
-        await waitUntilChildSettled(child, childId, runtime, context);
-        if (await wasCancelled(runtime, context)) {
-          await clearActiveAndCommit(runtime, agentId, context, {
-            status: "terminal",
-            outcome: { status: "aborted" },
-          });
-          return;
-        }
-
-        const inspection = await inspectChildRun(runtime, childId, baselineTaskId, context);
-        if (inspection.kind === "aborted") {
+        const inspection = await waitForChildRun(child, childId, baselineTaskId, runtime, context);
+        if ((await wasCancelled(runtime, context)) || inspection.kind === "aborted") {
           await clearActiveAndCommit(runtime, agentId, context, {
             status: "terminal",
             outcome: { status: "aborted" },
@@ -319,30 +311,39 @@ type ChildRunInspection =
   | { readonly kind: "aborted" }
   | { readonly kind: "failed"; readonly message: string };
 
-/** Inspect every generation and background task created during this subagent run so follow-up failures propagate. */
-async function inspectChildRun(
+type ChildScanStep =
+  | { readonly done: true; readonly inspection: ChildRunInspection }
+  | { readonly done: false; readonly liveTaskIds: readonly TaskId[] };
+
+/** Scan live tasks and post-baseline outcomes so deterministic failures abort sibling work immediately. */
+async function inspectAndListLive(
   runtime: TaskRuntime<SubagentRunInput, { readonly phase: "run" }, SubagentRunResult, object>,
   childId: ConversationId,
   baselineTaskId: TaskId,
   context: Context,
-): Promise<ChildRunInspection> {
-  let inspection: ChildRunInspection = { kind: "ok" };
+): Promise<ChildScanStep> {
+  let aborted = false;
+  let immediateFailure: ChildRunInspection | undefined;
+  const liveTaskIds: TaskId[] = [];
   await runtime.commit(async (tx) => {
     let cursor: Cursor | undefined;
     do {
       const page = await tx.scanTasks({ conversationId: childId, order: "ascending" }, 100, cursor);
       for (const item of page.items) {
+        if (item.state.status !== "terminal") {
+          liveTaskIds.push(item.id);
+          continue;
+        }
         if (item.id <= baselineTaskId) continue;
         if (item.kind !== GenerationTask.definition.name && !item.background) continue;
-        if (item.state.status !== "terminal") continue;
         const { outcome } = item.state;
         if (outcome.status === "aborted") {
-          inspection = { kind: "aborted" };
+          aborted = true;
         } else if (outcome.status === "failed" || outcome.status === "faulted") {
-          inspection = { kind: "failed", message: outcome.error.message };
+          immediateFailure = { kind: "failed", message: outcome.error.message };
           return undefined;
         } else if (outcome.status === "orphaned") {
-          inspection = { kind: "failed", message: outcome.reason };
+          immediateFailure = { kind: "failed", message: outcome.reason };
           return undefined;
         }
       }
@@ -350,34 +351,66 @@ async function inspectChildRun(
     } while (cursor !== undefined);
     return undefined;
   }, context);
-  return inspection;
+  if (immediateFailure !== undefined) return { done: true, inspection: immediateFailure };
+  if (aborted) return { done: true, inspection: { kind: "aborted" } };
+  if (liveTaskIds.length > 0) return { done: false, liveTaskIds };
+  return { done: true, inspection: { kind: "ok" } };
+}
+
+async function raceAnyTask(
+  runtime: TaskRuntime<SubagentRunInput, { readonly phase: "run" }, SubagentRunResult, object>,
+  taskIds: readonly TaskId[],
+  context: Context,
+): Promise<void> {
+  if (taskIds.length === 1) {
+    await runtime.waitForTask(taskIds[0]!, context);
+    return;
+  }
+  const raceAbort = new AbortController();
+  const raceContext = withAbortSignal(raceAbort.signal, context);
+  try {
+    await Promise.race(
+      taskIds.map((id) =>
+        runtime.waitForTask(id, raceContext).catch((error) => {
+          if (
+            raceAbort.signal.aborted &&
+            !context.abortSignal?.aborted &&
+            !runtime.signal.aborted
+          ) {
+            return undefined;
+          }
+          throw error;
+        }),
+      ),
+    );
+  } finally {
+    raceAbort.abort();
+  }
 }
 
 /**
- * Wait until a subagent conversation's ordinary work AND any background tasks owned by that conversation (for example
- * `CommandWatchTask` armed by `notify_on_exit: true`) have finished and settled all triggered turns.
+ * Wait until all live work in the subagent conversation settles, or return early as soon as any post-baseline
+ * generation or background task ends with an unrecoverable failure.
  */
-async function waitUntilChildSettled(
+async function waitForChildRun(
   child: ConversationHandle,
   childId: ConversationId,
+  baselineTaskId: TaskId,
   runtime: TaskRuntime<SubagentRunInput, { readonly phase: "run" }, SubagentRunResult, object>,
   context: Context,
-): Promise<void> {
+): Promise<ChildRunInspection> {
   for (;;) {
-    await child.waitForIdle(context);
-    let liveTaskId: TaskId | undefined;
-    await runtime.commit(async (tx) => {
-      for (const status of ["pending", "running", "waiting", "completing"] as const) {
-        const page = await tx.scanTasks({ conversationId: childId, status }, 1);
-        if (page.items[0] !== undefined) {
-          liveTaskId = page.items[0].id;
-          return undefined;
-        }
-      }
-      return undefined;
-    }, context);
-    if (liveTaskId === undefined) break;
-    await runtime.waitForTask(liveTaskId, context);
+    if (await wasCancelled(runtime, context)) return { kind: "aborted" };
+    const step = await inspectAndListLive(runtime, childId, baselineTaskId, context);
+    if (step.done) {
+      if (step.inspection.kind !== "ok") return step.inspection;
+      await child.waitForIdle(context);
+      const recheck = await inspectAndListLive(runtime, childId, baselineTaskId, context);
+      if (recheck.done) return recheck.inspection;
+      await raceAnyTask(runtime, recheck.liveTaskIds, context);
+      continue;
+    }
+    await raceAnyTask(runtime, step.liveTaskIds, context);
   }
 }
 

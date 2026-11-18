@@ -7,6 +7,7 @@ import { createNodeGateway } from "@palace/gateway";
 import {
   encodeMemoryReadOutcome,
   encodeTerminalOutcome,
+  encodeTerminalWaitOutcome,
   type GatewayBrowse,
   type GatewayRunTool,
   type NodeBrowseOutcome,
@@ -49,6 +50,8 @@ export type TestNode = {
   readonly memoryReads: GatewayRunTool[];
   /** Cleanup `terminal_write({ kill: true })` calls sent when pausing or closing. */
   readonly kills: GatewayRunTool[];
+  /** Passive `terminal_wait({ observeOnly: true })` session watches attached by the workspace port. */
+  readonly sessionWatches: GatewayRunTool[];
   /** Request IDs of the calls the gateway told it to stop. */
   readonly stopped: string[];
   /** How the next tool calls are answered; by default at once with "ok". */
@@ -57,6 +60,8 @@ export type TestNode = {
   answerMemory: (call: GatewayRunTool) => Promise<Answer>;
   /** How cleanup kill calls are answered; by default immediately killed. */
   answerKill: (call: GatewayRunTool) => Promise<Answer>;
+  /** How `observeOnly` session watches are answered; by default held open while running. */
+  answerSessionWatch: (call: GatewayRunTool) => Promise<Answer>;
   readonly browses: GatewayBrowse[];
   /** How the next browses are answered; by default with an empty directory. */
   answerBrowse: (browse: GatewayBrowse) => Promise<NodeBrowseOutcome>;
@@ -149,6 +154,7 @@ export async function environment(data = temporaryDirectory()) {
       const calls: GatewayRunTool[] = [];
       const memoryReads: GatewayRunTool[] = [];
       const kills: GatewayRunTool[] = [];
+      const sessionWatches: GatewayRunTool[] = [];
       const stopped: string[] = [];
       const browses: GatewayBrowse[] = [];
       const node = new FakeNode({
@@ -165,6 +171,10 @@ export async function environment(data = temporaryDirectory()) {
           if (call.tool === "memory_read") {
             memoryReads.push(call);
             return test.answerMemory(call);
+          }
+          if (call.tool === "terminal_wait" && call.arguments.observeOnly === true) {
+            sessionWatches.push(call);
+            return test.answerSessionWatch(call);
           }
           if (call.tool === "terminal_write" && call.arguments.kill === true) {
             kills.push(call);
@@ -188,6 +198,7 @@ export async function environment(data = temporaryDirectory()) {
         calls,
         memoryReads,
         kills,
+        sessionWatches,
         stopped,
         answer: async () => ({ outputs: [], result: ok("ok") }),
         answerMemory: async () => ({
@@ -207,6 +218,7 @@ export async function environment(data = temporaryDirectory()) {
             backgroundRunning: false,
           }),
         }),
+        answerSessionWatch: () => new Promise(() => undefined),
         browses,
         answerBrowse: async ({ path }) => ({
           ok: true,

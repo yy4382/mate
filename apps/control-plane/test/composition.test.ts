@@ -1,5 +1,6 @@
-import { ScriptedProvider } from "@palace/testkit";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { createPrivateKey, generateKeyPairSync, randomUUID, sign } from "node:crypto";
+import { FakeNode, NetworkProxy, ScriptedProvider } from "@palace/testkit";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { environment, type Browser } from "./support.ts";
 
 const settings = { model: { provider: "openai", modelId: "gpt-4.1" } };
@@ -158,5 +159,151 @@ describe("the composed control plane", () => {
         credentials: expect.objectContaining({ apiKey: "…0001" }),
       }),
     );
+  });
+
+  it("returns 503 stop-unconfirmed when pausing an Agent whose node stop message times out over a blackholed socket, and confirms on retry", async () => {
+    const env = environment();
+    const site = await env.start();
+    const owner = site.browser();
+    await owner.logInAdmin();
+    const provider = await scriptedProvider(owner);
+
+    const serverUrl = new URL(site.url);
+    const proxy = new NetworkProxy({ host: serverUrl.hostname, port: Number(serverUrl.port) });
+    await proxy.start();
+    onTestFinished(() => proxy.close());
+
+    const pairingToken = (
+      (await owner.post("/api/admin/pairing-tokens")).json as { pairingToken: string }
+    ).pairingToken;
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519", {
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      publicKeyEncoding: { type: "spki", format: "pem" },
+    });
+    const nodeId = randomUUID();
+    const kills: string[] = [];
+    const watchStarted = Promise.withResolvers<void>();
+    const terminalJson = (outcome: Record<string, unknown>) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(outcome) }],
+      isError: false,
+    });
+    const node = new FakeNode({
+      gatewayUrl: `ws://127.0.0.1:${proxy.port}/api/nodes/connect`,
+      nodeId,
+      publicKey,
+      pairingToken,
+      sign: (nonce) =>
+        sign(null, Buffer.from(nonce), createPrivateKey(privateKey)).toString("base64url"),
+      onRunTool: async (call) => {
+        if (call.tool === "terminal_wait" && call.arguments.observeOnly === true) {
+          watchStarted.resolve();
+          return new Promise(() => undefined);
+        }
+        if (call.tool === "terminal_write" && call.arguments.kill === true) {
+          kills.push(String(call.arguments.sessionId ?? ""));
+          return {
+            outputs: [],
+            result: terminalJson({
+              running: false,
+              sessionId: String(call.arguments.sessionId ?? ""),
+              output: "",
+              droppedBytes: 0,
+              wallTimeMs: 0,
+              ending: { kind: "killed" },
+              pipesHeld: false,
+              backgroundRunning: false,
+            }),
+          };
+        }
+        if (call.tool === "terminal_exec") {
+          return {
+            outputs: [],
+            result: terminalJson({
+              running: true,
+              sessionId: String(call.arguments.sessionId),
+              output: "",
+              droppedBytes: 0,
+              wallTimeMs: 10,
+            }),
+          };
+        }
+        return { outputs: [], result: { content: [{ type: "text", text: "ok" }], isError: false } };
+      },
+    });
+    onTestFinished(() => node.terminate());
+    await node.connect();
+
+    const created = await owner.post("/api/admin/agents", {
+      nodeId,
+      displayName: "Lin",
+      handle: "lin",
+      settings,
+    });
+    expect(created.status, created.text).toBe(200);
+    const { agentId } = created.json as { agentId: string };
+    const snapshot = (await owner.get("/api/chat/snapshot")).json as Snapshot;
+    const lin = snapshot.accounts.find((account) => account.handle === "lin")!;
+    const dm = (await owner.post("/api/chat/dms", { requestId: "dm-lin", other: lin.accountId }))
+      .json as { conversationId: number };
+
+    provider
+      .step("read", (request) => {
+        request.call([
+          {
+            name: "chat_read_unread",
+            arguments: { timeline: { conversation: dm.conversationId } },
+          },
+        ]);
+      })
+      .step("start yielded cmd", (request) => {
+        request.call([
+          { name: "exec_command", arguments: { command: "sleep 60", yield_time_ms: 10 } },
+        ]);
+      })
+      .step("reply", (request) => request.text("Running."));
+    await owner.post("/api/chat/messages", {
+      timeline: { conversation: dm.conversationId },
+      requestId: "ask-lin",
+      body: "Start the job.",
+    });
+    await provider.received(3);
+    await watchStarted.promise;
+
+    const watch = await owner.stream(`/api/admin/agents/${agentId}/events`);
+    await watch.next();
+
+    // Pause while the socket silently drops frames.
+    proxy.setMode("blackhole");
+    let settled = false;
+    let first: Awaited<ReturnType<typeof owner.post>> | undefined;
+    const pausing = owner.post(`/api/admin/agents/${agentId}/pause`).then((res) => {
+      settled = true;
+      first = res;
+    });
+    await watch.ended;
+    let seenSleeps = env.clock.sleeps;
+    env.clock.advance(5_000);
+    await vi.waitFor(() => {
+      if (env.clock.sleeps > seenSleeps) {
+        seenSleeps = env.clock.sleeps;
+        env.clock.advance(5_000);
+      }
+      expect(settled).toBe(true);
+    });
+    await pausing;
+
+    expect(first!.status).toBe(503);
+    expect(first!.json).toMatchObject({ error: "stop-unconfirmed" });
+    expect((await owner.get("/api/admin/agents")).json).toEqual([
+      expect.objectContaining({ agentId, state: "paused" }),
+    ]);
+    expect(kills).toEqual([]);
+
+    // Restore forwarding and retry pause: now kill reaches the node and returns 204.
+    proxy.setMode("forward");
+    const retry = await owner.post(`/api/admin/agents/${agentId}/pause`);
+    expect(retry.status).toBe(204);
+    await vi.waitFor(() => expect(kills).toHaveLength(1));
+    provider.assertComplete();
   });
 });

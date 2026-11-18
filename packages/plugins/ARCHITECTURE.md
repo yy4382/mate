@@ -31,7 +31,7 @@
 ### 2. 子 Agent 与后台任务通用等待
 
 - `subagent` 默认前台等待结果，传 `run_in_background: true` 时立即返回 `{ status: "running", agent_id }` 并由后台任务在完成后向父对话 `steer` 投递 `<subagent_result>`。
-- 子 Agent 即使调用了 `notify_on_exit: true` 后提前结束自身 turn，也不需要在 `subagent` 里 import `terminal` 模块：`waitUntilChildSettled` 通过 Durable 原生的 `child.waitForIdle` 和 `tx.scanTasks({ conversationId: childId, status })` 等待子对话下的所有活跃任务进入终态并再次变为空闲后才继续；随后通过启动前记忆的 `baselineTaskId` 与 `inspectChildRun` 检查本次运行期间创建的所有 `GenerationTask` 和后台任务，只要后续轮次（如 `<command_notification>` 触发的续跑）失败、faulted 或 orphaned，就中止子对话并以失败结果或 `status="failed"` 汇报，不回落读取前一轮的"仍在等待"文本；成功时亦跳过后续 `UserEntry` 以提取最新一轮的回复。
+- 子 Agent 即使调用了 `notify_on_exit: true` 后提前结束自身 turn，也不需要在 `subagent` 里 import `terminal` 模块：`waitForChildRun` 结合 `inspectAndListLive` 与 `raceAnyTask` 同时竟等子对话下所有非终态任务及空闲状态，只要在运行期间启动（`item.id > baselineTaskId`）的任一 `GenerationTask` 或后台任务以 `failed`、`faulted` 或 `orphaned` 结束，就立刻中止子对话其余挂起的后台任务（`child.abort(context, { background: true })`）并向上层汇报失败，而不会死等另一个仍在挂起的 `CommandWatchTask`；成功时跳过后续 `UserEntry` 以提取最新一轮回复。
 - `subagent_stop` 在 `palace.subagent.control` 写取消标记后中止子对话并等待对应运行任务结束，不向父对话发送结果；子对话上下文仍保留以便后续 `resume`。
 
 ### 3. 记忆目录与系统提示

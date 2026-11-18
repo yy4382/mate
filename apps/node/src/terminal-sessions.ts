@@ -64,6 +64,8 @@ type Session = {
     write?: ((outcome: TerminalSettledOutcome) => void) | undefined;
     readonly wait: Set<(entry: SettledEntry) => void>;
   };
+  readonly killConsumers: Set<{ readonly conversationId: number | undefined }>;
+  readonly observers: Set<() => void>;
 };
 
 /**
@@ -206,6 +208,8 @@ export class TerminalSessions {
       settlePromise: undefined,
       settledEntry: undefined,
       waiters: { wait: new Set() },
+      killConsumers: new Set(),
+      observers: new Set(),
     };
     const recordExit = (ending: Ending) => {
       session.rawExit = ending;
@@ -322,30 +326,50 @@ export class TerminalSessions {
 
     if (call.arguments.kill === true) {
       if (alreadySettled !== undefined) {
+        alreadySettled.consumedConversations.add(call.conversationId);
         if (!alreadySettled.writeConsumed) {
           alreadySettled.writeConsumed = true;
-          alreadySettled.consumedConversations.add(call.conversationId);
           return encodeTerminalOutcome(alreadySettled.outcome);
         }
-        return failure(`Unknown or already finished terminal session: ${call.arguments.sessionId}`);
+        return encodeTerminalOutcome({
+          ...alreadySettled.outcome,
+          output: "",
+          droppedBytes: 0,
+        });
       }
       const session = this.#active.get(key);
       if (session === undefined) {
         this.#rememberKilledBeforeStart(key);
-        return failure(`Unknown or already finished terminal session: ${call.arguments.sessionId}`);
+        return stoppedOutcome(call.arguments.sessionId);
       }
-      session.updateRememberedDirectory = false;
-      const finish = this.#settleSession(session);
-      await this.#terminate(session, { kind: "killed" });
-      const outcome = await raceAbort(finish, signal);
-      if (outcome === "aborted") {
+      if (signal.aborted) {
         return failure("Command write was stopped by its caller");
       }
-      if (session.settledEntry !== undefined) {
-        session.settledEntry.writeConsumed = true;
-        session.settledEntry.consumedConversations.add(call.conversationId);
+      const consumer = { conversationId: call.conversationId };
+      session.killConsumers.add(consumer);
+      const onKillAbort = () => {
+        if (session.settledEntry === undefined) {
+          session.killConsumers.delete(consumer);
+        }
+      };
+      signal.addEventListener("abort", onKillAbort, { once: true });
+      try {
+        session.updateRememberedDirectory = false;
+        const finish = this.#settleSession(session);
+        await this.#terminate(session, { kind: "killed" });
+        const outcome = await raceAbort(finish, signal);
+        if (outcome === "aborted") {
+          return failure("Command write was stopped by its caller");
+        }
+        if (session.settledEntry !== undefined) {
+          session.settledEntry.writeConsumed = true;
+          session.settledEntry.consumedConversations.add(call.conversationId);
+        }
+        return encodeTerminalOutcome(outcome);
+      } finally {
+        signal.removeEventListener("abort", onKillAbort);
+        session.killConsumers.delete(consumer);
       }
-      return encodeTerminalOutcome(outcome);
     }
 
     if (alreadySettled !== undefined) {
@@ -430,6 +454,33 @@ export class TerminalSessions {
     signal: AbortSignal,
   ): Promise<ToolResult> {
     const key = sessionKey(call.agentId, call.arguments.sessionId);
+    if (call.arguments.observeOnly === true) {
+      const session = this.#active.get(key);
+      if (session === undefined) {
+        return encodeTerminalWaitOutcome({ consumed: true });
+      }
+      void this.#settleSession(session);
+      const observed = await new Promise<boolean>((resolveObserve) => {
+        const listener = () => {
+          signal.removeEventListener("abort", onAbort);
+          resolveObserve(true);
+        };
+        const onAbort = () => {
+          session.observers.delete(listener);
+          resolveObserve(false);
+        };
+        if (signal.aborted) {
+          resolveObserve(false);
+          return;
+        }
+        session.observers.add(listener);
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      return observed
+        ? encodeTerminalWaitOutcome({ consumed: true })
+        : failure("Session observation stopped");
+    }
+
     const alreadySettled = this.#settled.get(key);
     if (alreadySettled !== undefined) {
       const consumed =
@@ -668,6 +719,12 @@ export class TerminalSessions {
       consumedConversations: new Set(),
     };
     session.settledEntry = entry;
+    if (session.killConsumers.size > 0) {
+      entry.writeConsumed = true;
+      for (const consumer of session.killConsumers) {
+        entry.consumedConversations.add(consumer.conversationId);
+      }
+    }
     if (session.waiters.write !== undefined) {
       entry.writeConsumed = true;
       entry.consumedConversations.add(session.activeWriteConversationId);
@@ -678,6 +735,9 @@ export class TerminalSessions {
     if (!session.discardSettled) {
       rememberBounded(this.#settled, session.key, entry, MAX_SETTLED);
     }
+    const observers = [...session.observers];
+    session.observers.clear();
+    for (const notify of observers) notify();
     const waitListeners = [...session.waiters.wait];
     session.waiters.wait.clear();
     for (const listener of waitListeners) listener(entry);

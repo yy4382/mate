@@ -489,6 +489,7 @@
     "return_to_the_overview_to_see_the": "Return to the overview to see the problem details.",
     "it_may_have_been_deleted": "It may have been deleted.",
     "agent_paused": "Agent paused.",
+    "agent_paused_stop_unconfirmed": "The Agent was paused, but stopping its running commands on the node could not be confirmed.",
     "agent_resumed": "Agent resumed.",
     "overview": "Overview",
     "observe": "Observe",

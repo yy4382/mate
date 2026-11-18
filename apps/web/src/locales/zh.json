@@ -379,6 +379,7 @@
     "unknown-model": "找不到这个模型。",
     "unsupported-thinking-level": "这个模型不支持所选的思考级别。",
     "agent-closed": "Agent 已暂停或关闭，无法观察。",
+    "stop-unconfirmed": "Agent 已暂停，但未能确认 node 上的运行中命令已停止。",
     "unknown-assistant": "找不到这个工作助手。",
     "node-offline": "Node 离线，请在它重新连接后重试。",
     "outside-workspace": "无法访问工作区之外的路径。",

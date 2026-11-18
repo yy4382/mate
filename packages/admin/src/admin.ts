@@ -36,7 +36,13 @@ import { z } from "zod";
 import { AdminError, parseInput } from "./admin-error.ts";
 import { AdminStore } from "./store.ts";
 import { renderWebhookContent, webhookDocsDirectory, webhookExtension } from "./webhook-plugin.ts";
-import { gatewayAgentPorts, prepareGatewayWorkspace } from "./workspaces.ts";
+import {
+  gatewayAgentPorts,
+  killAgentSession,
+  prepareGatewayWorkspace,
+  stopUnconfirmedError,
+  type KillOutcome,
+} from "./workspaces.ts";
 
 /** The providers Palace offers. Their models come from pi-ai's catalog. */
 const Provider = z.enum(["openai", "deepseek"]);
@@ -139,13 +145,22 @@ export async function openAdmin(options: AdminOptions): Promise<Admin> {
   const store = new AdminStore(options.dataDirectory);
   try {
     const clock = options.clock ?? systemClock;
+    const unconfirmedSessions = new Map<string, Map<string, string>>();
     const manager = await openAgentManager({
       directory: join(options.dataDirectory, "agents"),
       chat: options.chat,
       prepareWorkspace: (nodeId, agentId) =>
         prepareGatewayWorkspace(options.gateway, nodeId, agentId),
       buildAgent: ({ agentId, nodeId, clock: agentClock, closing }) => {
-        const ports = gatewayAgentPorts(options.gateway, store, nodeId, agentId);
+        let agentUnconfirmed = unconfirmedSessions.get(agentId);
+        if (agentUnconfirmed === undefined) {
+          agentUnconfirmed = new Map<string, string>();
+          unconfirmedSessions.set(agentId, agentUnconfirmed);
+        }
+        const ports = gatewayAgentPorts(options.gateway, store, nodeId, agentId, {
+          clock: agentClock,
+          unconfirmedSessions: agentUnconfirmed,
+        });
         const terminal = terminalExtension(ports.terminal, { closing });
         const files = filesExtension(ports.files, { closing });
         const memory = memoryExtension(ports.memory, { closing });
@@ -175,7 +190,7 @@ export async function openAdmin(options: AdminOptions): Promise<Admin> {
       clock,
       ...(options.report === undefined ? {} : { report: options.report }),
     });
-    return new Admin(options, store, manager);
+    return new Admin(options, store, manager, unconfirmedSessions);
   } catch (error) {
     store.close();
     throw error;
@@ -193,14 +208,21 @@ export class Admin {
   readonly #store: AdminStore;
   readonly #manager: AgentManager;
   readonly #clock: Clock;
+  readonly #unconfirmedSessions: Map<string, Map<string, string>>;
   readonly #report: NonNullable<AdminOptions["report"]>;
 
-  constructor(options: AdminOptions, store: AdminStore, manager: AgentManager) {
+  constructor(
+    options: AdminOptions,
+    store: AdminStore,
+    manager: AgentManager,
+    unconfirmedSessions = new Map<string, Map<string, string>>(),
+  ) {
     this.#chat = options.chat;
     this.#gateway = options.gateway;
     this.#store = store;
     this.#manager = manager;
     this.#clock = options.clock ?? systemClock;
+    this.#unconfirmedSessions = unconfirmedSessions;
     this.#report =
       options.report ?? ((error, agentId) => console.error(`Agent ${agentId}:`, error));
   }
@@ -274,7 +296,10 @@ export class Admin {
 
   /** Close the Agent, aborting its work, and keep it closed until it is resumed, across restarts too. */
   async pauseAgent(agentId: string): Promise<void> {
-    await this.#existing(agentId, (id) => this.#manager.pause(id));
+    await this.#existing(agentId, async (id) => {
+      await this.#manager.pause(id);
+      await this.#confirmUnconfirmedSessions(id);
+    });
   }
 
   /** Open a paused or closed Agent; it continues where it stopped. */
@@ -285,6 +310,7 @@ export class Admin {
   /** Close the Agent, deactivate its chat account, delete its file, grants and webhooks. Its messages stay readable. */
   async deleteAgent(agentId: string): Promise<void> {
     await this.#existing(agentId, (id) => this.#manager.delete(id));
+    this.#unconfirmedSessions.delete(agentId);
     this.#store.deleteNodeGrants(agentId);
     this.#store.deleteWebhooks(agentId);
   }
@@ -500,6 +526,36 @@ export class Admin {
   async close(): Promise<void> {
     await this.#manager.close();
     this.#store.close();
+  }
+
+  async #confirmUnconfirmedSessions(agentId: string): Promise<void> {
+    const sessions = this.#unconfirmedSessions.get(agentId);
+    if (sessions === undefined || sessions.size === 0) return;
+    const { nodeId: homeNodeId } = await this.#manager.describe(agentId);
+    const entries = [...sessions.entries()];
+    const outcomes = await Promise.all(
+      entries.map(async ([sessionId, nodeId]) => ({
+        sessionId,
+        outcome: await killAgentSession(
+          this.#gateway,
+          this.#clock,
+          homeNodeId,
+          agentId,
+          sessionId,
+          nodeId,
+        ),
+      })),
+    );
+    const failures: Extract<KillOutcome, { readonly confirmed: false }>[] = [];
+    for (const { sessionId, outcome } of outcomes) {
+      if (outcome.confirmed) {
+        sessions.delete(sessionId);
+      } else {
+        failures.push(outcome);
+      }
+    }
+    if (sessions.size === 0) this.#unconfirmedSessions.delete(agentId);
+    if (failures.length > 0) throw stopUnconfirmedError(agentId, failures);
   }
 
   async #changeNodeGrant(

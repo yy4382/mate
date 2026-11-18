@@ -549,4 +549,130 @@ describe("subagent extension", () => {
     await runtime.idle();
     agent.provider.assertComplete();
   });
+
+  it("propagates a follow-up failure immediately without waiting on sibling hung background commands", async () => {
+    const waiters = new Map<
+      string,
+      { readonly signal: AbortSignal; readonly resolve: () => void }
+    >();
+    const termPort: TerminalPort = {
+      exec: async (call) =>
+        encodeTerminalOutcome({
+          running: true,
+          sessionId: call.sessionId,
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 10,
+        }),
+      write: async (call) =>
+        encodeTerminalOutcome({
+          running: true,
+          sessionId: call.sessionId,
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 10,
+        }),
+      wait: (call, signal) =>
+        new Promise((resolve) => {
+          waiters.set(call.sessionId, {
+            signal,
+            resolve: () =>
+              resolve(
+                encodeTerminalWaitOutcome({
+                  consumed: false,
+                  outcome: {
+                    running: false,
+                    sessionId: call.sessionId,
+                    output: "fast exit\n",
+                    droppedBytes: 0,
+                    wallTimeMs: 25,
+                    ending: { kind: "exited", code: 0 },
+                    pipesHeld: false,
+                    backgroundRunning: false,
+                  },
+                }),
+              ),
+          });
+        }),
+    };
+    const terminal = terminalExtension(termPort);
+    const subagent = subagentExtension({ extensions: [terminal] });
+    const agent = await testAgent();
+    const bgDelivered = Promise.withResolvers<string>();
+    const hungSignals: AbortSignal[] = [];
+
+    agent.provider
+      .step("root fg", (request) => {
+        request.call([{ name: "subagent", arguments: { prompt: "fg two cmds" } }]);
+      })
+      .step("root sees fg failure and starts bg", (request) => {
+        expect(request.toolOutputs().at(-1)).toContain("fg sibling 400");
+        request.call([
+          { name: "subagent", arguments: { prompt: "bg two cmds", run_in_background: true } },
+        ]);
+      })
+      .step("root acks bg", (request) => request.text("Running bg."))
+      .step("root sees bg failure", (request) => {
+        bgDelivered.resolve(request.userTexts().at(-1) ?? "");
+        request.text("Handled bg sibling failure.");
+      });
+
+    agent.provider
+      .lane("fg sibling", (request) => request.userTexts()[0] === "fg two cmds")
+      .step("fg starts two cmds", (request) => {
+        request.call([
+          { name: "exec_command", arguments: { command: "hung-cmd", notify_on_exit: true } },
+          { name: "exec_command", arguments: { command: "fast-cmd", notify_on_exit: true } },
+        ]);
+      })
+      .step("fg ends turn 1", (request) => {
+        const outputs = request.toolOutputs().slice(-2);
+        const hungId = /session_id:\s*(\S+?)\]/.exec(outputs[0] ?? "")?.[1] ?? "";
+        const fastId = /session_id:\s*(\S+?)\]/.exec(outputs[1] ?? "")?.[1] ?? "";
+        const hungWait = waiters.get(hungId);
+        expect(hungWait).toBeDefined();
+        hungSignals.push(hungWait!.signal);
+        setTimeout(() => waiters.get(fastId)?.resolve(), 0);
+        request.text("Waiting on both foreground commands.");
+      })
+      .step("fg fast follow-up 400", (request) => {
+        request.status(400, "fg sibling 400");
+      });
+
+    agent.provider
+      .lane("bg sibling", (request) => request.userTexts()[0] === "bg two cmds")
+      .step("bg starts two cmds", (request) => {
+        request.call([
+          { name: "exec_command", arguments: { command: "hung-bg", notify_on_exit: true } },
+          { name: "exec_command", arguments: { command: "fast-bg", notify_on_exit: true } },
+        ]);
+      })
+      .step("bg ends turn 1", (request) => {
+        const outputs = request.toolOutputs().slice(-2);
+        const hungId = /session_id:\s*(\S+?)\]/.exec(outputs[0] ?? "")?.[1] ?? "";
+        const fastId = /session_id:\s*(\S+?)\]/.exec(outputs[1] ?? "")?.[1] ?? "";
+        const hungWait = waiters.get(hungId);
+        expect(hungWait).toBeDefined();
+        hungSignals.push(hungWait!.signal);
+        setTimeout(() => waiters.get(fastId)?.resolve(), 0);
+        request.text("Waiting on both background commands.");
+      })
+      .step("bg fast follow-up 400", (request) => {
+        request.status(400, "bg sibling 400");
+      });
+
+    const { runtime } = await agent.open({ extensions: [terminal, subagent] });
+    await within(
+      5000,
+      "root run settles",
+      (await runtime.submit("go", { requestId: "m1" })).settled(),
+    );
+    const delivered = await within(5000, "background sibling failure", bgDelivered.promise);
+    expect(delivered).toContain('status="failed"');
+    expect(delivered).toContain("bg sibling 400");
+    expect(hungSignals).toHaveLength(2);
+    await vi.waitFor(() => expect(hungSignals.every((s) => s.aborted)).toBe(true));
+    await runtime.idle();
+    agent.provider.assertComplete();
+  });
 });

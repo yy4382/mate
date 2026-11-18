@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { encodeMemoryReadOutcome, encodeTerminalOutcome } from "@palace/node-protocol";
+import {
+  encodeMemoryReadOutcome,
+  encodeTerminalOutcome,
+  encodeTerminalWaitOutcome,
+} from "@palace/node-protocol";
 import { FakeNode } from "@palace/testkit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { AdminError } from "../src/index.ts";
@@ -447,4 +451,143 @@ describe("pausing, resuming and deleting", () => {
     await admin.pauseAgent(agentId);
     env.provider.assertComplete();
   });
+
+  it("fails pauseAgent with stop-unconfirmed on kill timeout or stop-failed while still pausing the Agent, and confirms cleanup on retry", async () => {
+    const env = await environment();
+    const admin = await env.open();
+    env.useScriptedProvider(admin);
+    const node = await env.pairNode(admin);
+    node.answer = async (call) => ({
+      outputs: [],
+      result: encodeTerminalOutcome({
+        running: true,
+        sessionId: String(call.arguments.sessionId),
+        output: "",
+        droppedBytes: 0,
+        wallTimeMs: 10,
+      }),
+    });
+
+    const killArrived = Promise.withResolvers<void>();
+    let killBehavior: "hang" | "stop-failed" | "killed" = "hang";
+    node.answerKill = async (call) => {
+      if (killBehavior === "hang") {
+        killArrived.resolve();
+        return new Promise(() => undefined);
+      }
+      if (killBehavior === "stop-failed") {
+        return {
+          outputs: [],
+          result: encodeTerminalOutcome({
+            running: false,
+            sessionId: String(call.arguments.sessionId ?? ""),
+            output: "",
+            droppedBytes: 0,
+            wallTimeMs: 5,
+            ending: { kind: "stop-failed", reason: "process group still alive" },
+            pipesHeld: false,
+            backgroundRunning: false,
+          }),
+        };
+      }
+      return {
+        outputs: [],
+        result: encodeTerminalOutcome({
+          running: false,
+          sessionId: String(call.arguments.sessionId ?? ""),
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 5,
+          ending: { kind: "killed" },
+          pipesHeld: false,
+          backgroundRunning: false,
+        }),
+      };
+    };
+
+    const { agentId, account } = await env.hire(admin, node.nodeId);
+    env.provider
+      .step("start yielded job", (request) => {
+        request.call([
+          { name: "exec_command", arguments: { command: "long-job", yield_time_ms: 10 } },
+        ]);
+      })
+      .step("answer after yield", (request) => request.text("Running in background."));
+    env.post("Start background work, @richard.", [account]);
+    await env.provider.received(2);
+    await vi.waitFor(() => expect(node.sessionWatches).toHaveLength(1));
+
+    // Attempt 1: kill hangs -> timeout after 5s yields stop-unconfirmed while Agent is paused locally.
+    const firstPause = admin.pauseAgent(agentId);
+    await killArrived.promise;
+    env.clock.advance(5_000);
+    await expect(firstPause).rejects.toMatchObject({ reason: "stop-unconfirmed" });
+    expect(await admin.agents()).toEqual([expect.objectContaining({ agentId, state: "paused" })]);
+
+    // Attempt 2: retry on already-paused Agent receives node stop-failed -> still stop-unconfirmed.
+    killBehavior = "stop-failed";
+    await expect(admin.pauseAgent(agentId)).rejects.toMatchObject({ reason: "stop-unconfirmed" });
+
+    // Attempt 3: node confirms kill -> pauseAgent succeeds and clears pending unconfirmed sessions.
+    killBehavior = "killed";
+    await admin.pauseAgent(agentId);
+    expect(node.kills).toHaveLength(3);
+    env.provider.assertComplete();
+  });
+
+  it(
+    "stops tracking 1,100 naturally exiting yielded sessions without sending pause kills",
+    { timeout: 60_000 },
+    async () => {
+      const env = await environment();
+      const admin = await env.open();
+      env.useScriptedProvider(admin);
+      const node = await env.pairNode(admin);
+      let resolvedWatches = 0;
+      node.answer = async (call) => ({
+        outputs: [],
+        result: encodeTerminalOutcome({
+          running: true,
+          sessionId: String(call.arguments.sessionId),
+          output: "",
+          droppedBytes: 0,
+          wallTimeMs: 10,
+        }),
+      });
+      node.answerSessionWatch = async () => {
+        resolvedWatches++;
+        return {
+          outputs: [],
+          result: encodeTerminalWaitOutcome({ consumed: true }),
+        };
+      };
+
+      const { agentId, account } = await env.hire(admin, node.nodeId);
+      const batches = 5;
+      const perBatch = 220;
+      for (let b = 0; b < batches; b++) {
+        env.provider.step(`yield batch ${b}`, (request) => {
+          request.call(
+            Array.from({ length: perBatch }, () => ({
+              name: "exec_command",
+              arguments: { command: "short-yielded", yield_time_ms: 10 },
+            })),
+          );
+        });
+      }
+      env.provider.step("done", (request) => request.text("All 1,100 started."));
+      env.post("Start 1,100 yielded commands, @richard.", [account]);
+      await env.provider.received(batches + 1);
+      await vi.waitFor(() => expect(resolvedWatches).toBe(batches * perBatch));
+      // Allow FakeNode to send the final watch result frames, then fence with a ping over the same WebSocket.
+      await Promise.resolve();
+      node.node.ping();
+      await vi.waitFor(() => expect(node.node.pongs).toBeGreaterThanOrEqual(1));
+      await Promise.resolve();
+
+      await admin.pauseAgent(agentId);
+      expect(node.kills).toEqual([]);
+      env.provider.assertComplete();
+    },
+  );
 });

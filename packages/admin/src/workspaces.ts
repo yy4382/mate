@@ -1,3 +1,4 @@
+import { systemClock, type Clock } from "@palace/clock";
 import type { NodeGateway } from "@palace/gateway";
 import {
   decodeMemoryReadOutcome,
@@ -7,9 +8,20 @@ import {
   type ToolResult,
 } from "@palace/node-protocol";
 import type { FilesPort, MemoryPort, TerminalPort } from "@palace/plugins";
+import { AdminError } from "./admin-error.ts";
 import type { AdminStore } from "./store.ts";
 
 const MAX_SETTLED_SESSION_ROUTES = 1024;
+const SESSION_KILL_TIMEOUT_MS = 5_000;
+
+export type KillOutcome =
+  | { readonly confirmed: true }
+  | {
+      readonly confirmed: false;
+      readonly nodeId: string;
+      readonly nodeName: string;
+      readonly reason: string;
+    };
 
 export type GatewayAgentPorts = {
   readonly terminal: TerminalPort;
@@ -17,6 +29,88 @@ export type GatewayAgentPorts = {
   readonly memory: MemoryPort;
   close(): Promise<void>;
 };
+
+export type GatewayAgentPortsOptions = {
+  readonly clock?: Clock;
+  readonly unconfirmedSessions?: Map<string, string>;
+};
+
+export async function killAgentSession(
+  gateway: Pick<NodeGateway, "nodes" | "runTool">,
+  clock: Clock,
+  homeNodeId: string,
+  agentId: string,
+  sessionId: string,
+  nodeId: string,
+): Promise<KillOutcome> {
+  const node = gateway.nodes().find((candidate) => candidate.nodeId === nodeId);
+  const nodeName = node?.name ?? nodeId;
+  if (node === undefined || !node.online) {
+    return { confirmed: false, nodeId, nodeName, reason: "node offline" };
+  }
+  const access: NodeAccess = nodeId === homeNodeId ? "home" : "visit";
+  const timerAbort = new AbortController();
+  const stopAbort = new AbortController();
+  let timedOut = false;
+  void clock.sleep(SESSION_KILL_TIMEOUT_MS, timerAbort.signal).then(() => {
+    if (!timerAbort.signal.aborted) {
+      timedOut = true;
+      stopAbort.abort();
+    }
+  });
+  try {
+    const result = await gateway.runTool(
+      nodeId,
+      agentId,
+      {
+        tool: "terminal_write",
+        arguments: { sessionId, yieldTimeMs: 0, kill: true },
+        access,
+      },
+      () => {},
+      stopAbort.signal,
+    );
+    if (timedOut) {
+      return {
+        confirmed: false,
+        nodeId,
+        nodeName,
+        reason: `stop timed out after ${SESSION_KILL_TIMEOUT_MS}ms`,
+      };
+    }
+    const decoded = decodeTerminalOutcome(result);
+    if (!decoded.ok) {
+      return { confirmed: false, nodeId, nodeName, reason: decoded.error };
+    }
+    if (decoded.outcome.running) {
+      return { confirmed: false, nodeId, nodeName, reason: "command is still running" };
+    }
+    if (decoded.outcome.ending.kind === "stop-failed") {
+      return { confirmed: false, nodeId, nodeName, reason: decoded.outcome.ending.reason };
+    }
+    return { confirmed: true };
+  } catch (error) {
+    return {
+      confirmed: false,
+      nodeId,
+      nodeName,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    timerAbort.abort();
+  }
+}
+
+export function stopUnconfirmedError(
+  agentId: string,
+  failures: readonly Extract<KillOutcome, { readonly confirmed: false }>[],
+): AdminError {
+  const detail = failures.map((failure) => `${failure.nodeName} (${failure.reason})`).join("; ");
+  return new AdminError(
+    "stop-unconfirmed",
+    `Agent ${agentId} was paused, but stopping ${failures.length} running command(s) could not be confirmed: ${detail}`,
+  );
+}
 
 export async function prepareGatewayWorkspace(
   gateway: Pick<NodeGateway, "prepareWorkspace">,
@@ -35,11 +129,15 @@ export function gatewayAgentPorts(
   store: AdminStore,
   homeNodeId: string,
   agentId: string,
+  options: GatewayAgentPortsOptions = {},
 ): GatewayAgentPorts {
+  const clock = options.clock ?? systemClock;
+  const unconfirmedSessions = options.unconfirmedSessions ?? new Map<string, string>();
   let closed = false;
   const activeSessionNodes = new Map<string, string>();
   const settledSessionNodes = new Map<string, string>();
-  const pendingKills = new Map<string, Promise<void>>();
+  const sessionWatches = new Map<string, AbortController>();
+  const pendingKills = new Map<string, Promise<KillOutcome>>();
 
   const accessibleNodes = () =>
     gateway.nodes().flatMap((node) => {
@@ -47,7 +145,15 @@ export function gatewayAgentPorts(
       return access === undefined ? [] : [{ node, access }];
     });
 
+  const stopWatching = (sessionId: string): void => {
+    const controller = sessionWatches.get(sessionId);
+    if (controller === undefined) return;
+    sessionWatches.delete(sessionId);
+    controller.abort();
+  };
+
   const rememberSettledSession = (sessionId: string, targetNodeId: string): void => {
+    stopWatching(sessionId);
     activeSessionNodes.delete(sessionId);
     settledSessionNodes.delete(sessionId);
     if (settledSessionNodes.size >= MAX_SETTLED_SESSION_ROUTES) {
@@ -57,32 +163,54 @@ export function gatewayAgentPorts(
     settledSessionNodes.set(sessionId, targetNodeId);
   };
 
-  const killSession = (sessionId: string, nodeId: string): Promise<void> => {
-    activeSessionNodes.delete(sessionId);
-    const existing = pendingKills.get(sessionId);
-    if (existing !== undefined) return existing;
-    const node = gateway.nodes().find((candidate) => candidate.nodeId === nodeId);
-    const access = store.nodeAccess(agentId, homeNodeId, nodeId);
-    if (node === undefined || !node.online || access === undefined) {
-      return Promise.resolve();
+  const watchActiveSession = (sessionId: string, nodeId: string, access: NodeAccess): void => {
+    if (closed || sessionWatches.has(sessionId) || activeSessionNodes.get(sessionId) !== nodeId) {
+      return;
     }
-    const promise = gateway
+    const controller = new AbortController();
+    sessionWatches.set(sessionId, controller);
+    void gateway
       .runTool(
         nodeId,
         agentId,
         {
-          tool: "terminal_write",
-          arguments: { sessionId, yieldTimeMs: 0, kill: true },
+          tool: "terminal_wait",
+          arguments: { sessionId, observeOnly: true },
           access,
-          conversationId: 0,
         },
         () => {},
-        AbortSignal.timeout(5_000),
+        controller.signal,
       )
-      .then(
-        () => undefined,
-        () => undefined,
-      )
+      .then((waitResult) => {
+        if (
+          !closed &&
+          !controller.signal.aborted &&
+          decodeTerminalWaitOutcome(waitResult).ok &&
+          activeSessionNodes.get(sessionId) === nodeId
+        ) {
+          rememberSettledSession(sessionId, nodeId);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (sessionWatches.get(sessionId) === controller) sessionWatches.delete(sessionId);
+      });
+  };
+
+  const killSession = (sessionId: string, nodeId: string): Promise<KillOutcome> => {
+    stopWatching(sessionId);
+    activeSessionNodes.delete(sessionId);
+    const existing = pendingKills.get(sessionId);
+    if (existing !== undefined) return existing;
+    const promise = killAgentSession(gateway, clock, homeNodeId, agentId, sessionId, nodeId)
+      .then((outcome) => {
+        if (outcome.confirmed) {
+          unconfirmedSessions.delete(sessionId);
+        } else {
+          unconfirmedSessions.set(sessionId, nodeId);
+        }
+        return outcome;
+      })
       .finally(() => {
         if (pendingKills.get(sessionId) === promise) pendingKills.delete(sessionId);
       });
@@ -177,10 +305,16 @@ export function gatewayAgentPorts(
         const decoded = decodeTerminalOutcome(result);
         if (!decoded.ok || !decoded.outcome.running) {
           activeSessionNodes.delete(execArgs.sessionId);
+        } else {
+          watchActiveSession(execArgs.sessionId, target.nodeId, target.access);
         }
         return result;
       } catch (error) {
-        activeSessionNodes.delete(execArgs.sessionId);
+        if (closed || signal.aborted) {
+          await killSession(execArgs.sessionId, target.nodeId);
+        } else {
+          activeSessionNodes.delete(execArgs.sessionId);
+        }
         throw error;
       }
     },
@@ -226,7 +360,10 @@ export function gatewayAgentPorts(
         agentId,
         {
           tool: "terminal_wait",
-          arguments: waitArgs,
+          arguments: {
+            sessionId: waitArgs.sessionId,
+            ...(waitArgs.observeOnly === undefined ? {} : { observeOnly: waitArgs.observeOnly }),
+          },
           access: target.access,
           conversationId,
         },
@@ -304,14 +441,31 @@ export function gatewayAgentPorts(
     memory,
     async close() {
       closed = true;
-      const active = [...activeSessionNodes.entries()];
+      for (const controller of sessionWatches.values()) controller.abort();
+      sessionWatches.clear();
+      const targets = new Map<string, string>([
+        ...unconfirmedSessions.entries(),
+        ...activeSessionNodes.entries(),
+      ]);
       activeSessionNodes.clear();
       settledSessionNodes.clear();
-      for (const [sessionId, nodeId] of active) {
-        void killSession(sessionId, nodeId);
+      const inFlight = new Set<Promise<KillOutcome>>(pendingKills.values());
+      for (const [sessionId, nodeId] of targets) {
+        inFlight.add(killSession(sessionId, nodeId));
       }
-      while (pendingKills.size > 0) {
-        await Promise.allSettled([...pendingKills.values()]);
+      const awaited = new Set<Promise<KillOutcome>>();
+      const failures: Extract<KillOutcome, { readonly confirmed: false }>[] = [];
+      for (;;) {
+        for (const promise of pendingKills.values()) inFlight.add(promise);
+        const next = [...inFlight].filter((promise) => !awaited.has(promise));
+        if (next.length === 0) break;
+        for (const promise of next) awaited.add(promise);
+        for (const outcome of await Promise.all(next)) {
+          if (!outcome.confirmed) failures.push(outcome);
+        }
+      }
+      if (failures.length > 0) {
+        throw stopUnconfirmedError(agentId, failures);
       }
     },
   };

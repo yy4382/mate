@@ -23,9 +23,10 @@ export function AgentActions({
     try {
       await work();
       onError(null);
-      await qc.invalidateQueries({ queryKey: adminKeys.agents });
     } catch (cause) {
       onError(cause);
+    } finally {
+      await qc.invalidateQueries({ queryKey: adminKeys.agents });
     }
   };
   const name = agent.displayName ?? agent.agentId;

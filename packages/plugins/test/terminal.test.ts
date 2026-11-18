@@ -392,4 +392,71 @@ describe("terminal extension", () => {
     expect(port.writeCalls).toHaveLength(1);
     agent.provider.assertComplete();
   });
+
+  it("suppresses command_notification when the same conversation kills its watched session via write_stdin", async () => {
+    const port = new StubTerminalPort();
+    let yieldedSession = "";
+    port.execHandler = async (call) => {
+      yieldedSession = call.sessionId;
+      return encodeTerminalOutcome({
+        running: true,
+        sessionId: call.sessionId,
+        output: "",
+        droppedBytes: 0,
+        wallTimeMs: 10,
+      });
+    };
+    port.writeHandler = async (call) => {
+      // Mirrors TerminalSessions recording killConsumers before resolving waiters in the same conversation.
+      if (port.waitCalls.some((w) => w.sessionId === call.sessionId)) {
+        port.resolveWait(call.sessionId, { consumed: true });
+      }
+      return encodeTerminalOutcome({
+        running: false,
+        sessionId: call.sessionId,
+        output: "",
+        droppedBytes: 0,
+        wallTimeMs: 25,
+        ending: { kind: "killed" },
+        pipesHeld: false,
+        backgroundRunning: false,
+      });
+    };
+
+    const agent = await testAgent();
+    agent.provider
+      .step("start", (request) => {
+        request.call([
+          {
+            name: "exec_command",
+            arguments: { command: "sleep 60", yield_time_ms: 10, notify_on_exit: true },
+          },
+        ]);
+      })
+      .step("end turn 1", (request) => request.text("Watching sleep."))
+      .step("kill watched", (request) => {
+        request.call([
+          { name: "write_stdin", arguments: { session_id: yieldedSession, kill: true } },
+        ]);
+      })
+      .step("confirm stopped", (request) => {
+        expect(request.toolOutputs().at(-1)).toContain("killed");
+        request.text("Killed cleanly.");
+      });
+
+    const { runtime } = await agent.open({ extensions: [terminalExtension(port)] });
+    await (await runtime.submit("start watching", { requestId: "m1" })).settled();
+    await within(
+      2000,
+      "wait registered",
+      new Promise<void>((resolve) => {
+        const check = () => (port.waitCalls.length > 0 ? resolve() : setTimeout(check, 5));
+        check();
+      }),
+    );
+    await (await runtime.submit("kill it", { requestId: "m2" })).settled();
+    await runtime.idle();
+    expect(agent.provider.requests).toHaveLength(4);
+    agent.provider.assertComplete();
+  });
 });

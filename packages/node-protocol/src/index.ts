@@ -94,6 +94,7 @@ export function parseTerminalWriteArgs(
 
 export const TerminalWaitArgsSchema = z.object({
   sessionId: z.string().min(1).max(128),
+  observeOnly: z.boolean().optional(),
 });
 export type TerminalWaitArgs = z.output<typeof TerminalWaitArgsSchema>;
 

@@ -379,6 +379,7 @@
     "unknown-model": "Model not found.",
     "unsupported-thinking-level": "This model does not support the selected thinking level.",
     "agent-closed": "The Agent is paused or closed and cannot be observed.",
+    "stop-unconfirmed": "Agent was paused, but stopping its running commands on the node could not be confirmed.",
     "unknown-assistant": "Work assistant not found.",
     "node-offline": "Node is offline. Try again when it reconnects.",
     "outside-workspace": "Paths outside the workspace cannot be accessed.",

@@ -174,8 +174,8 @@ export function AgentDetail({ agentId }: { agentId: string }) {
           ),
         agent.state === "open" ? t("management.agent_paused") : t("management.agent_resumed"),
       )
-      .then((ok) => {
-        if (ok) agents.refresh();
+      .then(() => {
+        agents.refresh();
       });
   };
   const destination = (page: Destination) => {

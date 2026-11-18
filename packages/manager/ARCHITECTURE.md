@@ -22,7 +22,7 @@
 1. **一个 Agent 存在，当且仅当 `data/agents/<id>.sqlite` 存在。** 启动时扫描目录，打开所有没暂停的 Agent，只认 `<UUID>.sqlite`。
 2. **每个 Agent 拥有独立的持久文档 `ManagerAgentStateDoc`（`kind: "mate.agent-state"` v1，存储 `{ paused, nodeId }`）。** 该文档身份由 Manager 持有，保持原有 `kind` 与结构以兼容既有 Agent 存储文件。
 3. **同一个 Agent 的生命周期操作串行执行**，确保任一时刻最多一个打开的 runtime。
-4. **暂停就是立刻关闭。** `#stop` 先触发传给 `buildAgent` 的 `closing` 信号，再停止连接器、关闭 runtime、调用 `built.close()`，最后只在关闭状态下把 `paused: true` 写进 `ManagerAgentStateDoc`。
+4. **暂停就是立刻关闭。** `#stop` 先触发传给 `buildAgent` 的 `closing` 信号，再停止连接器、关闭 runtime、调用 `built.close()` 并捕获其错误。`pause` 在 runtime 关闭后始终先把 `paused: true` 写进 `ManagerAgentStateDoc`，然后再抛出捕获到的 `closeError`（例如远端停止未确认的 `stop-unconfirmed`）；而 `delete`、`close` 与 `onFatal` 则把 `closeError` 交给 `report` 上报，不中断清理流程。
 5. **创建顺序：** 分配 ID -> `chat.ensureAccount` -> `prepareWorkspace` -> `createAgentStore`（写入 `nodeId`）-> 原子改名 -> 打开 runtime。`prepareWorkspace` 或建库失败抛出 `AgentCreationFailed`，可用原 ID 幂等重做。
 
 ## 聊天扩展（`chatExtension`）

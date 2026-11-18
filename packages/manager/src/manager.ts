@@ -250,8 +250,10 @@ export class AgentManager {
   /** Close the Agent's runtime, aborting its model requests and tool calls, and record it as paused. */
   pause(agentId: string): Promise<void> {
     return this.#lifecycle(agentId, async (state) => {
-      const closed = state.kind === "open" ? await this.#stop(agentId, state) : state;
-      await closed.setPaused(true);
+      const { closed: closedState, closeError } =
+        state.kind === "open" ? await this.#stop(agentId, state) : { closed: state };
+      await closedState.setPaused(true);
+      if (closeError !== undefined) throw closeError;
     });
   }
 
@@ -267,7 +269,10 @@ export class AgentManager {
   /** Close the Agent, deactivate its chat account, and remove its file. Its messages stay readable. */
   delete(agentId: string): Promise<void> {
     return this.#lifecycle(agentId, async (state) => {
-      if (state.kind === "open") await this.#stop(agentId, state);
+      if (state.kind === "open") {
+        const { closeError } = await this.#stop(agentId, state);
+        if (closeError !== undefined) this.#report(closeError, agentId);
+      }
       const { chat } = this.#options;
       const account = chat.findAccount(agentId);
       // Deactivate before removing, so a delete that dies in between leaves an Agent to delete again.
@@ -285,7 +290,10 @@ export class AgentManager {
       [...agentIds].map((agentId) =>
         this.#serial(agentId, async () => {
           const state = this.#open.get(agentId);
-          if (state !== undefined) await this.#stop(agentId, state);
+          if (state !== undefined) {
+            const { closeError } = await this.#stop(agentId, state);
+            if (closeError !== undefined) this.#report(closeError, agentId);
+          }
         }),
       ),
     );
@@ -347,8 +355,10 @@ export class AgentManager {
           report(error);
           // A dead runtime does nothing more; close it in its turn so the Agent is closed, not falsely open.
           void this.#serial(agentId, async () => {
-            if (opened !== undefined && this.#open.get(agentId) === opened)
-              await this.#stop(agentId, opened);
+            if (opened !== undefined && this.#open.get(agentId) === opened) {
+              const { closeError } = await this.#stop(agentId, opened);
+              if (closeError !== undefined) report(closeError);
+            }
           });
         },
       });
@@ -371,13 +381,24 @@ export class AgentManager {
   }
 
   /** Stop the connector, close the runtime, and release built agent resources. Runs in the Agent's queue. */
-  async #stop(agentId: string, state: Open): Promise<Closed> {
+  async #stop(
+    agentId: string,
+    state: Open,
+  ): Promise<{ readonly closed: Closed; readonly closeError?: unknown }> {
     this.#open.delete(agentId);
     state.closing.abort();
     await state.inbox.stop();
     await state.runtime.close();
-    await state.closeAgent?.();
-    return closed(this.#files.file(agentId));
+    let closeError: unknown;
+    try {
+      await state.closeAgent?.();
+    } catch (error) {
+      closeError = error;
+    }
+    return {
+      closed: closed(this.#files.file(agentId)),
+      ...(closeError === undefined ? {} : { closeError }),
+    };
   }
 
   #report(error: unknown, agentId: string): void {

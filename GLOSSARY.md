@@ -188,7 +188,7 @@ Durable 在上下文快满时，向对话自己的模型发一次**摘要请求*
 主对话空闲到提示缓存快过期、上一次请求的输入又很大时，runtime 不用 Durable 的摘要请求，而是提交一条普通输入，请 Agent 自己写**检查点摘要**（checkpoint summary）。这条请求延续对话的前缀，读热缓存。回答合格时，runtime 写一个以这条回答为起点的压缩标记，之后的上下文从它开始。所有模型用同一条规则：空闲到缓存寿命的 5/6 时压缩，阈值是 Durable 后台压缩线的 2/3 与 200k 中较小的一个；缓存寿命等参数按默认值、提供商、模型三层数据给出；只在主对话做。
 
 **终端会话**（terminal session）
-`exec_command` 在 node 端 `TerminalSessions` 中建立的命令进程会话，由 UUID `session_id` 标识。`yield_time_ms` 到期未退出时返回 `running: true` 与 `session_id`，此后可通过 `write_stdin` 发送标准输入、传 `eof: true`、传 `kill: true` 或继续拉取增量输出，并由管理模块区分运行中与已结束会话的路由表（运行中路由不因大量短命令而驱逐）按 `session_id` 自动路由到当初启动该会话的 node。启用 `notify_on_exit: true` 时在当前对话创建 `palace.terminal.watch` 后台任务调用 `terminal_wait`：多对话可各自独立监视同一会话，node 端按 `conversationId` 追踪 `write_stdin` 是否已消费本次退出，所属对话未消费则以 `steer` 提交 `<command_notification>` 自动唤醒。
+`exec_command` 在 node 端 `TerminalSessions` 中建立的命令进程会话，由 UUID `session_id` 标识。`yield_time_ms` 到期未退出时返回 `running: true` 与 `session_id`，此后可通过 `write_stdin` 发送标准输入、传 `eof: true`、传 `kill: true` 或继续拉取增量输出，并由管理模块区分运行中与已结束会话的路由表（运行中路由不因大量短命令而驱逐，并通过被动 `observeOnly` 监视在自然退出后即时移入有界已结束路由）按 `session_id` 自动路由到当初启动该会话的 node。启用 `notify_on_exit: true` 时在当前对话创建 `palace.terminal.watch` 后台任务调用 `terminal_wait`：多对话可各自独立监视同一会话，node 端在唤醒等待前先记录 `write_stdin`（含 `kill: true`）按 `conversationId` 的消费状态，所属对话未消费则以 `steer` 提交 `<command_notification>` 自动唤醒。
 避免：后台进程（命令自己放到后台的进程，比如 `cmd &`，仍归命令进程组管）；守护进程（Agent 用 `setsid` 等方式自己脱离进程组的进程，Palace 不跟踪）。
 
 ## 环境与控制面
@@ -258,7 +258,7 @@ Durable 从一个对话的提交推出来的观察事件：快照、流式文字
 唯一能打开和关闭 runtime 的模块。一个 Agent 存在，当且仅当它的存储文件存在。
 
 **暂停**（pause）
-关闭一个 Agent 的 runtime，并在它的存储文件里记下"已暂停"。恢复就是清除这个记录，重新打开 runtime。Agent 只有打开和关闭两种状态；"已暂停"只是关闭的 Agent 留在文件里的记录，让它重启后仍然关闭，只在 Agent 关闭时读写。runtime 因存储出错死掉时，Agent 变为关闭，但没有这条记录。
+关闭一个 Agent 的 runtime，并在它的存储文件里记下"已暂停"。若暂停时无法确认远端 node 上的运行中命令已停止，本地 runtime 仍已完成关闭并写入"已暂停"，同时向调用方返回 `stop-unconfirmed`（HTTP `503`），再次调用暂停会重试确认这些未确认会话。恢复就是清除这个记录，重新打开 runtime。Agent 只有打开和关闭两种状态；"已暂停"只是关闭的 Agent 留在文件里的记录，让它重启后仍然关闭，只在 Agent 关闭时读写。runtime 因存储出错死掉时，Agent 变为关闭，但没有这条记录。
 避免：把"已暂停"当成和打开的 runtime 并存的标记。
 
 **连接器**（connector）
